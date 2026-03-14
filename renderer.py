@@ -4,6 +4,7 @@ renderer.py — FFmpeg rendering logic
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -13,11 +14,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 def check_ffmpeg() -> bool:
-    try:
-        r = subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=10)
-        return r.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
+    return shutil.which("ffmpeg") is not None
 
 
 def get_video_info(file_path: str) -> dict:
@@ -194,6 +191,206 @@ def _render_vertical(segments: list[dict], speakers_dict: dict, output_path: str
         raise ValueError("No kept segments to render")
 
     input_args, filter_complex, _ = _build_concat_filter(kept, speakers_dict, vertical=True)
+
+    cmd = ["ffmpeg", "-y"]
+    cmd.extend(input_args)
+    cmd.extend([
+        "-filter_complex", filter_complex,
+        "-map", "[outv]",
+        "-map", "[outa]",
+        "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "23",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-movflags", "+faststart",
+        output_path,
+    ])
+    _run_ffmpeg(cmd)
+
+
+# ---------------------------------------------------------------------------
+# Subtitle generation (ASS format, Submagic-style)
+# ---------------------------------------------------------------------------
+
+_ASS_HEADER = """\
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: word,Arial,95,&H00FFFFFF,&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,1,5,0,2,60,60,200,1
+Style: chunk,Arial,78,&H00FFFFFF,&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,1,4,0,2,60,60,200,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+
+def _ass_time(seconds: float) -> str:
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = seconds % 60
+    return f"{h}:{m:02d}:{int(s):02d}.{int((s % 1) * 100):02d}"
+
+
+def _esc_ass(text: str) -> str:
+    return text.replace("{", "\\{").replace("}", "\\}").replace("\n", "\\N")
+
+
+def generate_ass(
+    merged_transcript: list[dict],
+    clips: list[dict],
+    edl_segments: list[dict],
+    style: str = "chunk",
+) -> str:
+    """
+    Generate ASS subtitle content for a short composed of one or more clips.
+
+    Handles cuts within clip windows — the output timestamps match what
+    FFmpeg will actually render after removing cut segments.
+    """
+    if style == "none":
+        return ""
+
+    # Build ordered list of (src_start, src_end) pieces that will be rendered
+    rendered_pieces = []
+    for clip in clips:
+        for seg in edl_segments:
+            if not seg.get("keep", True):
+                continue
+            s = max(seg["start"], clip["start"])
+            e = min(seg["end"], clip["end"])
+            if e > s:
+                rendered_pieces.append({"src_start": s, "src_end": e})
+
+    if not rendered_pieces:
+        return ""
+
+    # Collect word-level events mapped to output timestamps
+    all_words = []
+    output_offset = 0.0
+    for piece in rendered_pieces:
+        for seg in merged_transcript:
+            for w in seg.get("words", []):
+                ws, we = w["start"], w["end"]
+                if we > piece["src_start"] and ws < piece["src_end"]:
+                    cs = max(ws, piece["src_start"])
+                    ce = min(we, piece["src_end"])
+                    word_text = w["word"].strip()
+                    if word_text:
+                        all_words.append({
+                            "word": word_text,
+                            "start": (cs - piece["src_start"]) + output_offset,
+                            "end":   (ce - piece["src_start"]) + output_offset,
+                        })
+        output_offset += piece["src_end"] - piece["src_start"]
+
+    if not all_words:
+        return ""
+
+    # Fallback: if no word timestamps, build words from segment text
+    events = []
+    pos = r"{\an2\pos(540,1650)}"  # bottom-center, inside lower third
+
+    if style == "word":
+        for w in all_words:
+            events.append(
+                f"Dialogue: 0,{_ass_time(w['start'])},{_ass_time(w['end'])},"
+                f"word,,0,0,0,,{pos}{_esc_ass(w['word'].upper())}"
+            )
+
+    elif style == "chunk":
+        chunk_size = 4
+        for i in range(0, len(all_words), chunk_size):
+            chunk = all_words[i:i + chunk_size]
+            text = " ".join(w["word"].upper() for w in chunk)
+            events.append(
+                f"Dialogue: 0,{_ass_time(chunk[0]['start'])},{_ass_time(chunk[-1]['end'])},"
+                f"chunk,,0,0,0,,{pos}{_esc_ass(text)}"
+            )
+
+    elif style == "karaoke":
+        chunk_size = 4
+        for i in range(0, len(all_words), chunk_size):
+            chunk = all_words[i:i + chunk_size]
+            # One event per word: show full group, highlight active word in yellow
+            for j, active_w in enumerate(chunk):
+                parts = []
+                for k, w in enumerate(chunk):
+                    word_up = _esc_ass(w["word"].upper())
+                    if k == j:
+                        parts.append(f"{{\\c&H0000FFFF&}}{word_up}{{\\c&H00FFFFFF&}}")
+                    else:
+                        parts.append(f"{{\\c&H80FFFFFF&}}{word_up}{{\\c&H00FFFFFF&}}")
+                line = "  ".join(parts)
+                events.append(
+                    f"Dialogue: 0,{_ass_time(active_w['start'])},{_ass_time(active_w['end'])},"
+                    f"chunk,,0,0,0,,{pos}{line}"
+                )
+
+    return _ASS_HEADER + "\n".join(events) + "\n"
+
+
+def _ffmpeg_escape_path(path: str) -> str:
+    """Escape a file path for use inside an FFmpeg filter string."""
+    p = path.replace("\\", "/")
+    # Escape drive-letter colon: C:/... → C\:/...
+    if len(p) >= 2 and p[1] == ":":
+        p = p[0] + "\\:" + p[2:]
+    return p
+
+
+# ---------------------------------------------------------------------------
+# Custom short renderer (multi-clip + subtitle burn-in)
+# ---------------------------------------------------------------------------
+
+def render_short_custom(
+    clips: list[dict],
+    edl_segments: list[dict],
+    speakers_dict: dict,
+    subtitle_style: str,
+    merged_transcript: list[dict],
+    output_path: str,
+    output_dir,
+) -> None:
+    """
+    Render a short from one or more user-defined clip windows.
+
+    clips          — [{start, end, label?}, ...]  (original-timeline timestamps)
+    edl_segments   — full EDL segment list (kept + cut)
+    subtitle_style — 'word' | 'chunk' | 'karaoke' | 'none'
+    """
+    # Resolve kept sub-segments within each clip window
+    all_clip_segs = []
+    for clip in clips:
+        for seg in edl_segments:
+            if not seg.get("keep", True):
+                continue
+            s = max(seg["start"], clip["start"])
+            e = min(seg["end"], clip["end"])
+            if e > s:
+                all_clip_segs.append({**seg, "start": s, "end": e})
+
+    if not all_clip_segs:
+        raise ValueError("No kept segments found within the specified clip range(s).")
+
+    input_args, filter_complex, _ = _build_concat_filter(all_clip_segs, speakers_dict, vertical=True)
+
+    # Subtitle burn-in
+    if subtitle_style and subtitle_style != "none":
+        ass_content = generate_ass(merged_transcript, clips, edl_segments, subtitle_style)
+        if ass_content:
+            from pathlib import Path as _Path
+            ass_path = str(_Path(output_dir) / "subtitles.ass")
+            with open(ass_path, "w", encoding="utf-8") as f:
+                f.write(ass_content)
+            # Reroute the final video output through the ass filter
+            filter_complex = filter_complex.replace("[outv][outa]", "[outv_presub][outa]")
+            escaped = _ffmpeg_escape_path(ass_path)
+            filter_complex += f";[outv_presub]ass=filename='{escaped}'[outv]"
 
     cmd = ["ffmpeg", "-y"]
     cmd.extend(input_args)

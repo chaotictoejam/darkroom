@@ -5,6 +5,7 @@ app.py — Flask server + API routes for Darkroom
 import json
 import os
 import threading
+import traceback
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,7 +15,7 @@ from flask import Flask, jsonify, request, send_from_directory
 
 from editor import build_prompt, generate_edl, generate_skip_edl
 from processor import merge_transcripts, transcribe_all
-from renderer import check_ffmpeg, render_project
+from renderer import check_ffmpeg, render_project, render_short_custom
 
 load_dotenv()
 
@@ -214,7 +215,7 @@ def start_transcription(project_id):
             q = get_project(project_id)
             if q:
                 q["status"] = "error"
-                q["progress"] = {"step": "error", "percent": 0, "message": str(exc)}
+                q["progress"] = {"step": "error", "percent": 0, "message": traceback.format_exc()}
                 save_project(q)
 
     threading.Thread(target=_run, daemon=True).start()
@@ -250,7 +251,7 @@ def analyze_project(project_id):
             q = get_project(project_id)
             if q:
                 q["status"] = "error"
-                q["progress"] = {"step": "error", "percent": 0, "message": str(exc)}
+                q["progress"] = {"step": "error", "percent": 0, "message": traceback.format_exc()}
                 save_project(q)
 
     threading.Thread(target=_run, daemon=True).start()
@@ -363,11 +364,85 @@ def start_render(project_id):
             q = get_project(project_id)
             if q:
                 q["status"] = "error"
-                q["progress"] = {"step": "error", "percent": 0, "message": str(exc)}
+                q["progress"] = {"step": "error", "percent": 0, "message": traceback.format_exc()}
                 save_project(q)
 
     threading.Thread(target=_run, daemon=True).start()
     return jsonify({"message": "Render started"})
+
+
+# ---------------------------------------------------------------------------
+# Custom short rendering (Shorts Builder)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/projects/<project_id>/render-short", methods=["POST"])
+def start_render_short(project_id):
+    proj = get_project(project_id)
+    if not proj:
+        return jsonify({"error": "Project not found"}), 404
+    if not ffmpeg_available:
+        return jsonify({"error": "FFmpeg not found — install it and restart Darkroom"}), 503
+    if not proj.get("edl"):
+        return jsonify({"error": "No EDL — run analysis first"}), 400
+
+    data = request.get_json(force=True) or {}
+    clips = data.get("clips", [])
+    subtitle_style = data.get("subtitle_style", "chunk")
+    output_name = data.get("output_name", "short_01")
+
+    if not clips:
+        return jsonify({"error": "No clips provided"}), 400
+
+    # Sanitise output name
+    import re as _re
+    output_name = _re.sub(r"[^a-z0-9_\-]", "_", output_name.lower()) or "short_01"
+
+    def _run():
+        try:
+            p = get_project(project_id)
+            p["status"] = "rendering"
+            p["progress"] = {
+                "step": "rendering",
+                "percent": 5,
+                "message": f"Rendering short '{output_name}' ({subtitle_style} subtitles)…",
+            }
+            save_project(p)
+
+            project_dir = PROJECTS_DIR / project_id
+            output_dir = project_dir / "output"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            out_path = str(output_dir / f"{output_name}.mp4")
+            speakers_dict = {s["id"]: s for s in p["speakers"]}
+
+            render_short_custom(
+                clips=clips,
+                edl_segments=p["edl"]["segments"],
+                speakers_dict=speakers_dict,
+                subtitle_style=subtitle_style,
+                merged_transcript=p["merged_transcript"],
+                output_path=out_path,
+                output_dir=output_dir,
+            )
+
+            p = get_project(project_id)
+            p["renders"][output_name] = {
+                "status": "done",
+                "url": f"/projects/{project_id}/files/output/{output_name}.mp4",
+                "filename": f"{output_name}.mp4",
+            }
+            p["status"] = "ready"
+            p["progress"] = {"step": "done", "percent": 100, "message": f"Short '{output_name}' rendered ✓"}
+            save_project(p)
+
+        except Exception as exc:
+            q = get_project(project_id)
+            if q:
+                q["status"] = "error"
+                q["progress"] = {"step": "error", "percent": 0, "message": traceback.format_exc()}
+                save_project(q)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"message": "Short render started"})
 
 
 # ---------------------------------------------------------------------------

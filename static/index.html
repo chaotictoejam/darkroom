@@ -830,13 +830,86 @@ a:hover { text-decoration: underline; }
   border: 1px solid #1a4a3a;
   border-radius: var(--radius-sm);
   padding: 8px 10px;
-  cursor: pointer;
   transition: background 0.12s;
 }
 .clip-item:hover { background: #0d2420; }
 .clip-item-label { font-size: 11px; font-weight: 700; color: #4db890; }
 .clip-item-reason { font-size: 10px; color: var(--text-muted); margin-top: 3px; }
 .clip-item-time { font-size: 10px; font-family: var(--mono); color: #2a8a60; margin-top: 2px; }
+.clip-item-actions { display: flex; gap: 5px; margin-top: 7px; }
+.btn-clip-build {
+  flex: 1; padding: 4px 0; font-size: 10px; font-weight: 700;
+  background: #0d2a1e; border: 1px solid #1a5a3a; border-radius: var(--radius-sm);
+  color: #4db890; cursor: pointer;
+}
+.btn-clip-build:hover { background: #0f3224; border-color: #2a7a50; }
+.btn-clip-add-custom {
+  width: 100%; padding: 7px; font-size: 11px; margin-top: 4px;
+  background: var(--bg-elevated); border: 1px dashed var(--border);
+  border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; text-align: center;
+}
+.btn-clip-add-custom:hover { border-color: #444; color: var(--text); }
+.clips-empty { font-size: 11px; color: var(--text-dim); padding: 4px 0; }
+
+/* Shorts Builder modal */
+.sb-clip-list { display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto; }
+.sb-clip-row {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;
+}
+.sb-clip-header { display: flex; align-items: center; gap: 8px; }
+.sb-clip-label-input {
+  flex: 1; background: transparent; border: none; border-bottom: 1px solid var(--border);
+  color: var(--text); font-size: 11px; font-weight: 600; padding: 2px 0; outline: none;
+}
+.sb-clip-label-input:focus { border-bottom-color: var(--red); }
+.sb-clip-remove {
+  background: none; border: none; color: var(--text-dim); font-size: 16px;
+  cursor: pointer; padding: 0 4px; line-height: 1;
+}
+.sb-clip-remove:hover { color: #c05050; }
+.sb-clip-times { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sb-clip-time-input {
+  width: 68px; background: var(--bg-elevated); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text); font-size: 10px;
+  font-family: var(--mono); padding: 3px 6px; outline: none; text-align: center;
+}
+.sb-clip-time-input:focus { border-color: var(--red); }
+.sb-clip-dur { font-size: 10px; color: var(--text-muted); font-family: var(--mono); min-width: 44px; }
+.sb-add-clip-btn {
+  width: 100%; padding: 7px; font-size: 11px; margin-top: 4px;
+  background: var(--bg-elevated); border: 1px dashed var(--border);
+  border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; text-align: center;
+}
+.sb-add-clip-btn:hover { border-color: #444; color: var(--text); }
+
+/* Subtitle style picker */
+.sub-style-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.sub-style-opt {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 10px 6px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--bg-elevated);
+  cursor: pointer; transition: all 0.12s;
+}
+.sub-style-opt:hover { border-color: #444; }
+.sub-style-opt.active { background: #130a0a; border-color: var(--red); }
+.sub-style-opt input[type=radio] { display: none; }
+.sub-style-preview {
+  font-size: 12px; font-weight: 900; letter-spacing: 0.5px; color: #fff;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.9); line-height: 1.3; text-align: center;
+  min-height: 30px; display: flex; align-items: center; justify-content: center; flex-direction: column;
+}
+.sub-style-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-muted); }
+.sub-style-opt.active .sub-style-label { color: var(--text); }
+
+.sb-output-row { display: flex; align-items: center; gap: 8px; }
+.sb-output-label { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
+.sb-output-input {
+  flex: 1; background: var(--bg-elevated); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text); font-size: 11px;
+  font-family: var(--mono); padding: 4px 8px; outline: none;
+}
+.sb-output-input:focus { border-color: var(--red); }
 
 /* Segment editor panel */
 .segment-editor {
@@ -1330,10 +1403,11 @@ a:hover { text-decoration: underline; }
           <div class="cut-list" id="cut-list"></div>
         </div>
 
-        <!-- Recommended clips -->
+        <!-- Shorts / Reels -->
         <div class="sidebar-section">
           <div class="sidebar-section-title">Shorts / Reels</div>
           <div class="clips-list" id="clips-list"></div>
+          <button class="btn-clip-add-custom" id="btn-add-custom-clip">+ Custom clip</button>
         </div>
 
         <!-- Export options -->
@@ -1348,10 +1422,6 @@ a:hover { text-decoration: underline; }
               <input type="checkbox" id="export-vertical" />
               <span class="export-check-label">9:16 Vertical Crop</span>
             </label>
-            <label class="export-check">
-              <input type="checkbox" id="export-short" />
-              <span class="export-check-label">Best 60–90s Short</span>
-            </label>
           </div>
         </div>
 
@@ -1365,6 +1435,56 @@ a:hover { text-decoration: underline; }
     </div><!-- /workspace -->
   </div><!-- /editor-body -->
 </div><!-- /view-editor -->
+
+<!-- ============================================================
+     SHORTS BUILDER MODAL
+     ============================================================ -->
+<div class="modal-overlay hidden" id="shorts-modal">
+  <div class="modal" style="width:460px;max-width:96vw">
+    <div class="modal-title">Build a Short</div>
+
+    <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-dim);margin-bottom:8px">Clips in this short</div>
+    <div class="sb-clip-list" id="sb-clip-list"></div>
+    <button class="sb-add-clip-btn" id="sb-add-clip">+ Add another clip</button>
+
+    <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-dim);margin:14px 0 8px">Subtitle style</div>
+    <div class="sub-style-grid" id="sb-style-grid">
+      <label class="sub-style-opt active" data-style="word">
+        <input type="radio" name="sub_style" value="word" checked />
+        <div class="sub-style-preview">WORD<br/>BY WORD</div>
+        <div class="sub-style-label">Word</div>
+      </label>
+      <label class="sub-style-opt" data-style="chunk">
+        <input type="radio" name="sub_style" value="chunk" />
+        <div class="sub-style-preview">FOUR WORDS<br/>AT ONCE</div>
+        <div class="sub-style-label">Chunk</div>
+      </label>
+      <label class="sub-style-opt" data-style="karaoke">
+        <input type="radio" name="sub_style" value="karaoke" />
+        <div class="sub-style-preview">WORD <span style="color:#ffff44">WORD</span><br/>WORD WORD</div>
+        <div class="sub-style-label">Karaoke</div>
+      </label>
+      <label class="sub-style-opt" data-style="none">
+        <input type="radio" name="sub_style" value="none" />
+        <div class="sub-style-preview" style="color:var(--text-dim)">No<br/>subtitles</div>
+        <div class="sub-style-label">None</div>
+      </label>
+    </div>
+
+    <div class="sb-output-row mt-8">
+      <div class="sb-output-label">Output name</div>
+      <input class="sb-output-input" id="sb-output-name" type="text" value="short_01" placeholder="short_01" />
+      <div style="font-size:10px;color:var(--text-dim)">.mp4</div>
+    </div>
+
+    <div class="processing-error hidden mt-4" id="sb-error"></div>
+
+    <div class="modal-actions">
+      <button class="btn-ghost" id="sb-cancel">Cancel</button>
+      <button class="btn-topbar-red" id="sb-render-btn">Render Short ▶</button>
+    </div>
+  </div>
+</div>
 
 <!-- ============================================================
      RENDER MODAL
@@ -2207,21 +2327,142 @@ function buildClipsList() {
   const list = el('clips-list');
   const clips = S.edl?.clips || [];
   if (!clips.length) {
-    list.innerHTML = '<div class="cut-item-empty">No clips identified.</div>';
+    list.innerHTML = '<div class="clips-empty">No clips identified by AI yet.</div>';
     return;
   }
   list.innerHTML = clips.map(c => `
-    <div class="clip-item" data-start="${c.start}" data-end="${c.end}">
+    <div class="clip-item">
       <div class="clip-item-label">${esc(c.label || c.id)}</div>
       <div class="clip-item-reason">${esc(c.reason || '')}</div>
       <div class="clip-item-time">${fmtSec(c.start)} – ${fmtSec(c.end)} (${fmtDur(c.end - c.start)})</div>
+      <div class="clip-item-actions">
+        <button class="btn-small" data-seek="${c.start}">Seek</button>
+        <button class="btn-clip-build"
+          data-clip='${JSON.stringify({start:c.start, end:c.end, label:c.label||c.id})}'>
+          Build Short ▶
+        </button>
+      </div>
     </div>
   `).join('');
 
-  list.querySelectorAll('.clip-item').forEach(item => {
-    item.addEventListener('click', () => seekTo(+item.dataset.start));
-  });
+  list.querySelectorAll('[data-seek]').forEach(btn =>
+    btn.addEventListener('click', () => seekTo(+btn.dataset.seek))
+  );
+  list.querySelectorAll('[data-clip]').forEach(btn =>
+    btn.addEventListener('click', () => openShortsBuilder(JSON.parse(btn.dataset.clip)))
+  );
 }
+
+/* ================================================================
+   SHORTS BUILDER
+   ================================================================ */
+
+// Clips queued in the builder
+S.shortsClips = [];
+
+function openShortsBuilder(initialClip) {
+  if (initialClip) {
+    S.shortsClips = [{ ...initialClip }];
+  } else if (!S.shortsClips.length) {
+    const dur = S.totalDuration || 90;
+    S.shortsClips = [{ start: 0, end: Math.min(90, dur), label: 'Custom Clip' }];
+  }
+  renderSbClipList();
+  // Reset subtitle style
+  document.querySelectorAll('#sb-style-grid .sub-style-opt').forEach(o => o.classList.remove('active'));
+  el('sb-style-grid').querySelector('[data-style="word"]').classList.add('active');
+  el('sb-style-grid').querySelector('[data-style="word"] input').checked = true;
+  el('sb-error').classList.add('hidden');
+  el('sb-render-btn').disabled = false;
+  el('shorts-modal').classList.remove('hidden');
+}
+
+function renderSbClipList() {
+  const list = el('sb-clip-list');
+  list.innerHTML = S.shortsClips.map((clip, i) => `
+    <div class="sb-clip-row">
+      <div class="sb-clip-header">
+        <input class="sb-clip-label-input" type="text" value="${esc(clip.label || 'Clip')}"
+               data-idx="${i}" placeholder="Clip label" />
+        <button class="sb-clip-remove" data-remove="${i}" title="Remove">✕</button>
+      </div>
+      <div class="sb-clip-times">
+        <span style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px">Start</span>
+        <input class="sb-clip-time-input" type="number" step="0.1" min="0"
+               value="${clip.start.toFixed(1)}" data-idx="${i}" data-field="start" />
+        <span style="color:var(--text-dim)">→</span>
+        <span style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px">End</span>
+        <input class="sb-clip-time-input" type="number" step="0.1" min="0"
+               value="${clip.end.toFixed(1)}" data-idx="${i}" data-field="end" />
+        <span class="sb-clip-dur">${fmtDur(clip.end - clip.start)}</span>
+      </div>
+    </div>
+  `).join('');
+
+  list.querySelectorAll('.sb-clip-label-input').forEach(inp =>
+    inp.addEventListener('change', () => { S.shortsClips[+inp.dataset.idx].label = inp.value; })
+  );
+  list.querySelectorAll('.sb-clip-time-input').forEach(inp =>
+    inp.addEventListener('change', () => {
+      S.shortsClips[+inp.dataset.idx][inp.dataset.field] = +inp.value;
+      renderSbClipList();
+    })
+  );
+  list.querySelectorAll('[data-remove]').forEach(btn =>
+    btn.addEventListener('click', () => {
+      S.shortsClips.splice(+btn.dataset.remove, 1);
+      renderSbClipList();
+    })
+  );
+}
+
+// Subtitle style pick
+document.querySelectorAll('#sb-style-grid .sub-style-opt').forEach(opt => {
+  opt.addEventListener('click', () => {
+    document.querySelectorAll('#sb-style-grid .sub-style-opt').forEach(o => o.classList.remove('active'));
+    opt.classList.add('active');
+    opt.querySelector('input').checked = true;
+  });
+});
+
+el('sb-add-clip').addEventListener('click', () => {
+  const last = S.shortsClips[S.shortsClips.length - 1];
+  const newStart = last ? last.end + 5 : 0;
+  S.shortsClips.push({ start: newStart, end: newStart + 60, label: 'Clip' });
+  renderSbClipList();
+});
+
+el('sb-cancel').addEventListener('click', () => el('shorts-modal').classList.add('hidden'));
+
+el('sb-render-btn').addEventListener('click', async () => {
+  if (!S.shortsClips.length) { alert('Add at least one clip.'); return; }
+
+  const style = document.querySelector('#sb-style-grid input[name=sub_style]:checked')?.value || 'chunk';
+  const rawName = el('sb-output-name').value.trim();
+  const outputName = (rawName.replace(/[^a-z0-9_\-]/gi, '_') || 'short_01');
+
+  el('sb-render-btn').disabled = true;
+  el('sb-error').classList.add('hidden');
+
+  try {
+    await API.post(`/api/projects/${S.project.id}/render-short`, {
+      clips: S.shortsClips,
+      subtitle_style: style,
+      output_name: outputName,
+    });
+    el('shorts-modal').classList.add('hidden');
+    startRenderPoll();
+  } catch (e) {
+    el('sb-error').textContent = e.message;
+    el('sb-error').classList.remove('hidden');
+    el('sb-render-btn').disabled = false;
+  }
+});
+
+el('btn-add-custom-clip').addEventListener('click', () => {
+  S.shortsClips = [];
+  openShortsBuilder();
+});
 
 /* ---- Stats ---- */
 function updateStats() {
@@ -2394,7 +2635,6 @@ el('btn-render-confirm').addEventListener('click', async () => {
   const targets = [];
   if (el('export-fullEdit').checked) targets.push('fullEdit');
   if (el('export-vertical').checked) targets.push('vertical');
-  if (el('export-short').checked) targets.push('short');
   if (!targets.length) { alert('Select at least one export target.'); return; }
 
   el('btn-render-confirm').disabled = true;
