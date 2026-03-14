@@ -1,0 +1,2464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Darkroom</title>
+<style>
+/* ============================================================
+   TOKENS
+   ============================================================ */
+:root {
+  --bg:          #0a0a0a;
+  --bg-surface:  #111111;
+  --bg-card:     #171717;
+  --bg-elevated: #1e1e1e;
+  --bg-hover:    #242424;
+  --border:      #2a2a2a;
+  --border-sub:  #1d1d1d;
+
+  --text:        #e2e2e2;
+  --text-muted:  #888888;
+  --text-dim:    #555555;
+
+  --red:         #b83232;
+  --red-glow:    #c03030;
+  --amber:       #c8820a;
+  --green:       #2e8b4a;
+
+  --cam-a:       #3d7ab5;
+  --cam-b:       #8a4db5;
+  --cam-c:       #b58a28;
+  --cam-d:       #3db58a;
+
+  --keep-bg:     #0e2318;
+  --keep-border: #1e5c34;
+  --cut-bg:      #230e0e;
+  --cut-border:  #5c1e1e;
+
+  --radius:      6px;
+  --radius-sm:   3px;
+  --font:        -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --mono:        'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+}
+
+/* ============================================================
+   RESET & BASE
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow: hidden;
+}
+button {
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+  border: none;
+  border-radius: var(--radius-sm);
+  transition: background 0.15s, opacity 0.15s;
+}
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+input, select {
+  font-family: inherit;
+  font-size: inherit;
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+input:focus, select:focus { border-color: var(--red); }
+a { color: var(--red); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.hidden { display: none !important; }
+.mono { font-family: var(--mono); }
+
+/* ============================================================
+   SCROLLBARS
+   ============================================================ */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #444; }
+
+/* ============================================================
+   VIEWS — full viewport switching
+   ============================================================ */
+.view {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ============================================================
+   VIEW: WELCOME
+   ============================================================ */
+#view-welcome {
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  background: var(--bg);
+}
+.welcome-logo {
+  font-size: 42px;
+  font-weight: 800;
+  letter-spacing: -2px;
+  color: var(--text);
+}
+.welcome-logo span { color: var(--red); }
+.welcome-tag {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin-top: 8px;
+  font-style: italic;
+  letter-spacing: 0.3px;
+}
+.welcome-actions {
+  margin-top: 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.btn-primary {
+  background: var(--red);
+  color: #fff;
+  padding: 10px 24px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+.btn-primary:hover:not(:disabled) { background: var(--red-glow); }
+.btn-ghost {
+  background: transparent;
+  color: var(--text-muted);
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.btn-ghost:hover:not(:disabled) { background: var(--bg-elevated); color: var(--text); }
+.btn-small {
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+}
+.btn-small:hover:not(:disabled) { color: var(--text); background: var(--bg-hover); }
+.btn-danger {
+  background: var(--cut-bg);
+  color: #c05050;
+  padding: 4px 10px;
+  border: 1px solid var(--cut-border);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+}
+.btn-danger:hover:not(:disabled) { background: #3a1414; }
+
+.project-list {
+  margin-top: 32px;
+  width: 420px;
+  max-height: 280px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.project-list-empty {
+  color: var(--text-dim);
+  font-size: 12px;
+  text-align: center;
+  padding: 16px;
+}
+.project-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.project-item:hover { background: var(--bg-elevated); }
+.project-item-name { font-weight: 600; font-size: 13px; }
+.project-item-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.project-item-right { display: flex; align-items: center; gap: 8px; }
+.status-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.status-ready    { background: #0e2318; color: #3cb86a; border: 1px solid #1e5c34; }
+.status-created  { background: #1a1a1a; color: #888; border: 1px solid #333; }
+.status-uploaded { background: #1a1a0a; color: #999944; border: 1px solid #444422; }
+.status-transcribing,
+.status-analyzing,
+.status-rendering { background: #0a1630; color: #4488cc; border: 1px solid #1a3a6a; }
+.status-transcribed { background: #1a1a2a; color: #7788cc; border: 1px solid #334488; }
+.status-error    { background: #230e0e; color: #cc4444; border: 1px solid #5c1e1e; }
+
+/* ============================================================
+   VIEW: SETUP (new project + upload)
+   ============================================================ */
+#view-setup {
+  align-items: center;
+  justify-content: flex-start;
+  padding-top: 60px;
+  overflow-y: auto;
+}
+.setup-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  width: 520px;
+  padding: 28px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.setup-title {
+  font-size: 18px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.setup-title .back-btn {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+.setup-title .back-btn:hover { color: var(--text); }
+.form-field { display: flex; flex-direction: column; gap: 6px; }
+.form-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.7px; font-weight: 600; }
+.form-field input { width: 100%; }
+
+.speaker-slots { display: flex; flex-direction: column; gap: 8px; }
+.speaker-slot {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.speaker-slot-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.cam-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+}
+.cam-dot-A { background: var(--cam-a); }
+.cam-dot-B { background: var(--cam-b); }
+.cam-dot-C { background: var(--cam-c); }
+.cam-dot-D { background: var(--cam-d); }
+
+.speaker-slot-inputs {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 8px;
+  align-items: center;
+}
+.file-drop-zone {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  text-align: center;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-muted);
+  transition: border-color 0.15s, background 0.15s;
+  position: relative;
+}
+.file-drop-zone:hover { border-color: var(--red); background: var(--cut-bg); }
+.file-drop-zone.has-file { border-color: var(--keep-border); color: var(--text); background: var(--keep-bg); }
+.file-drop-zone input[type=file] {
+  position: absolute; inset: 0; opacity: 0; cursor: pointer;
+  padding: 0; border: none; background: transparent;
+}
+.add-speaker-btn {
+  align-self: flex-start;
+  background: none;
+  border: 1px dashed var(--border);
+  color: var(--text-muted);
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+}
+.add-speaker-btn:hover { border-color: var(--red); color: var(--red); background: var(--cut-bg); }
+.remove-speaker-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 14px;
+  padding: 0 4px;
+  line-height: 1;
+}
+.remove-speaker-btn:hover { color: var(--red); }
+
+/* ============================================================
+   VIEW: PROCESSING
+   ============================================================ */
+#view-processing {
+  align-items: center;
+  justify-content: center;
+}
+.processing-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  width: 440px;
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+.processing-icon {
+  width: 52px; height: 52px;
+  border-radius: 50%;
+  border: 3px solid var(--border);
+  border-top-color: var(--red);
+  animation: spin 1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.processing-step {
+  font-size: 16px;
+  font-weight: 600;
+  text-align: center;
+}
+.processing-msg {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+  min-height: 18px;
+}
+.progress-bar-outer {
+  width: 100%;
+  height: 4px;
+  background: var(--bg-elevated);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.progress-bar-inner {
+  height: 100%;
+  background: var(--red);
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+.processing-steps-list {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+}
+.step-pill {
+  padding: 3px 10px;
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  position: relative;
+}
+.step-pill.active { background: #0a1630; border-color: #1a3a6a; color: #6699cc; }
+.step-pill.done { background: var(--keep-bg); border-color: var(--keep-border); color: #4db870; }
+.step-divider { color: var(--text-dim); }
+.processing-error {
+  background: var(--cut-bg);
+  border: 1px solid var(--cut-border);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  color: #cc4444;
+  font-size: 12px;
+  width: 100%;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* ============================================================
+   TOP BAR
+   ============================================================ */
+.topbar {
+  height: 46px;
+  min-height: 46px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-sub);
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  gap: 14px;
+  flex-shrink: 0;
+  z-index: 10;
+}
+.topbar-logo {
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  color: var(--text);
+  flex-shrink: 0;
+}
+.topbar-logo span { color: var(--red); }
+.topbar-sep { width: 1px; height: 20px; background: var(--border); flex-shrink: 0; }
+.topbar-project-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.topbar-status-badge { font-size: 10px; padding: 2px 8px; }
+.btn-topbar {
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.btn-topbar:hover:not(:disabled) { color: var(--text); background: var(--bg-hover); }
+.btn-topbar-red {
+  background: var(--red);
+  color: #fff;
+  padding: 5px 14px;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+.btn-topbar-red:hover:not(:disabled) { background: var(--red-glow); }
+.btn-topbar-home {
+  background: none;
+  color: var(--text-muted);
+  padding: 4px 8px;
+  border: none;
+  font-size: 13px;
+}
+.btn-topbar-home:hover { color: var(--text); }
+
+/* ============================================================
+   EDITOR LAYOUT
+   ============================================================ */
+#view-editor {
+  overflow: hidden;
+}
+.editor-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* Camera preview row */
+.preview-row {
+  height: 130px;
+  min-height: 130px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-sub);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.cam-card {
+  flex-shrink: 0;
+  width: 185px;
+  height: 108px;
+  border-radius: var(--radius);
+  border: 2px solid var(--border);
+  background: #000;
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.cam-card:hover { border-color: #444; }
+.cam-card.active-cam { border-color: var(--red) !important; box-shadow: 0 0 0 1px var(--red); }
+.cam-card video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.cam-card-label {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: linear-gradient(transparent, rgba(0,0,0,0.85));
+  padding: 16px 8px 5px;
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.cam-card-label .cam-dot { flex-shrink: 0; }
+.cam-card-speaking {
+  position: absolute;
+  top: 6px; right: 6px;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--red);
+  animation: pulse-dot 1s ease infinite;
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.7); }
+}
+
+/* Timeline */
+.timeline-container {
+  height: 100px;
+  min-height: 100px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-sub);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
+}
+.timeline-ruler {
+  height: 20px;
+  min-height: 20px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border-sub);
+  position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.ruler-tick {
+  position: absolute;
+  top: 0; bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.ruler-tick-line {
+  width: 1px;
+  background: var(--border);
+  flex: 1;
+}
+.ruler-tick-label {
+  position: absolute;
+  bottom: 2px;
+  font-size: 9px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+.timeline-tracks {
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  position: relative;
+}
+.timeline-tracks-inner {
+  height: 100%;
+  position: relative;
+  min-width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.timeline-track {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.track-row {
+  flex: 1;
+  position: relative;
+  border-bottom: 1px solid var(--border-sub);
+}
+.track-label-overlay {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 80px;
+  background: linear-gradient(90deg, var(--bg-surface) 70%, transparent);
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-weight: 600;
+  z-index: 2;
+  pointer-events: none;
+  gap: 4px;
+}
+.timeline-segment {
+  position: absolute;
+  top: 4px; bottom: 4px;
+  border-radius: 2px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: opacity 0.12s, border-color 0.12s;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+}
+.timeline-segment.keep {
+  background: var(--keep-bg);
+  border-color: var(--keep-border);
+}
+.timeline-segment.cut {
+  background: var(--cut-bg);
+  border-color: var(--cut-border);
+  opacity: 0.55;
+}
+.timeline-segment:hover { opacity: 1 !important; }
+.timeline-segment.selected { border-color: var(--red) !important; opacity: 1 !important; box-shadow: 0 0 0 1px var(--red); }
+.playhead {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 1px;
+  background: var(--red);
+  z-index: 5;
+  pointer-events: none;
+}
+.playhead::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -3px;
+  width: 7px; height: 7px;
+  background: var(--red);
+  border-radius: 0 0 50% 50%;
+}
+
+/* Main workspace: transcript + sidebar */
+.workspace {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Transcript */
+.transcript-panel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0;
+  min-width: 0;
+}
+.transcript-header {
+  padding: 10px 14px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-dim);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-sub);
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 1;
+}
+.transcript-line {
+  padding: 7px 14px;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-sub);
+  transition: background 0.1s;
+}
+.transcript-line:hover { background: var(--bg-surface); }
+.transcript-line.selected { background: #1a1010; }
+.transcript-line.cut {
+  opacity: 0.35;
+}
+.transcript-line.cut .transcript-text {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+.speaker-badge {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 1px;
+}
+.badge-A { background: #0d1f33; color: var(--cam-a); border: 1px solid #1a3d66; }
+.badge-B { background: #1f0d33; color: var(--cam-b); border: 1px solid #3d1a66; }
+.badge-C { background: #332a0d; color: var(--cam-c); border: 1px solid #66521a; }
+.badge-D { background: #0d2d22; color: var(--cam-d); border: 1px solid #1a5c44; }
+
+.transcript-time {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  padding-top: 1px;
+  min-width: 50px;
+}
+.transcript-text {
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+/* Sidebar */
+.sidebar {
+  width: 260px;
+  min-width: 260px;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.sidebar-section {
+  border-bottom: 1px solid var(--border-sub);
+  padding: 12px 14px;
+}
+.sidebar-section-title {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.9px;
+  color: var(--text-dim);
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+.stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.stat-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+.stat-value {
+  font-size: 18px;
+  font-weight: 700;
+  font-family: var(--mono);
+  color: var(--text);
+  line-height: 1;
+}
+.stat-value.green { color: var(--green); }
+.stat-value.red   { color: var(--red); }
+.stat-label {
+  font-size: 9px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 3px;
+}
+
+/* Cut list */
+.cut-list { display: flex; flex-direction: column; gap: 6px; }
+.cut-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cut-item-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.cut-item-reason {
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+.cut-item-time {
+  font-size: 10px;
+  font-family: var(--mono);
+  color: var(--text-dim);
+}
+.cut-item-empty { font-size: 11px; color: var(--text-dim); padding: 4px 0; }
+
+/* Clips list */
+.clips-list { display: flex; flex-direction: column; gap: 6px; }
+.clip-item {
+  background: #0a1e1a;
+  border: 1px solid #1a4a3a;
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.clip-item:hover { background: #0d2420; }
+.clip-item-label { font-size: 11px; font-weight: 700; color: #4db890; }
+.clip-item-reason { font-size: 10px; color: var(--text-muted); margin-top: 3px; }
+.clip-item-time { font-size: 10px; font-family: var(--mono); color: #2a8a60; margin-top: 2px; }
+
+/* Segment editor panel */
+.segment-editor {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.segment-editor-empty {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-align: center;
+  padding: 12px 0;
+}
+.seg-field { display: flex; flex-direction: column; gap: 4px; }
+.seg-field-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.seg-toggle-row { display: flex; gap: 6px; }
+.seg-toggle-btn {
+  flex: 1;
+  padding: 5px 0;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+}
+.seg-toggle-btn.active-keep {
+  background: var(--keep-bg);
+  border-color: var(--keep-border);
+  color: #4db870;
+}
+.seg-toggle-btn.active-cut {
+  background: var(--cut-bg);
+  border-color: var(--cut-border);
+  color: #c05050;
+}
+.cam-picker { display: flex; gap: 5px; flex-wrap: wrap; }
+.cam-pick-btn {
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  letter-spacing: 0.3px;
+}
+.cam-pick-btn.active { color: #fff; }
+.cam-pick-A.active { background: #0d2a4a; border-color: var(--cam-a); color: var(--cam-a); }
+.cam-pick-B.active { background: #2a0d4a; border-color: var(--cam-b); color: var(--cam-b); }
+.cam-pick-C.active { background: #4a3a0d; border-color: var(--cam-c); color: var(--cam-c); }
+.cam-pick-D.active { background: #0d4a32; border-color: var(--cam-d); color: var(--cam-d); }
+.layout-picker { display: flex; gap: 5px; flex-wrap: wrap; }
+.layout-pick-btn {
+  padding: 4px 8px;
+  font-size: 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+}
+.layout-pick-btn.active {
+  background: #0a1630;
+  border-color: #1a3a6a;
+  color: #6699cc;
+}
+
+/* Export panel */
+.export-checks { display: flex; flex-direction: column; gap: 8px; }
+.export-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.export-check input[type=checkbox] {
+  width: 14px; height: 14px;
+  accent-color: var(--red);
+  cursor: pointer;
+}
+.export-check-label { font-size: 12px; color: var(--text-muted); }
+.export-check input:checked + .export-check-label { color: var(--text); }
+
+/* Renders list */
+.render-list { display: flex; flex-direction: column; gap: 6px; }
+.render-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.render-item-name { font-size: 11px; font-weight: 600; color: var(--text); }
+.render-item-error { font-size: 10px; color: #cc4444; margin-top: 2px; }
+
+/* Modal overlay */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  backdrop-filter: blur(2px);
+}
+.modal {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.modal-title { font-size: 16px; font-weight: 700; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* Analysis option cards */
+.analysis-options {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.analysis-options-title {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  margin-bottom: 2px;
+}
+.option-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.option-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.option-card:hover { background: var(--bg-hover); border-color: #3a3a3a; }
+.option-card-body { flex: 1; min-width: 0; }
+.option-card-title { font-size: 13px; font-weight: 700; color: var(--text); }
+.option-card-desc  { font-size: 11px; color: var(--text-muted); margin-top: 2px; line-height: 1.4; }
+.option-card-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+.badge-recommended { background: #0e2318; color: #4db870; border: 1px solid #1e5c34; }
+.badge-manual      { background: #0a1630; color: #6699cc; border: 1px solid #1a3a6a; }
+.badge-skip        { background: #1a1a1a; color: #888; border: 1px solid #333; }
+
+/* Claude Code prompt modal */
+.prompt-modal-body { display: flex; flex-direction: column; gap: 12px; }
+.prompt-textarea {
+  width: 100%;
+  height: 180px;
+  resize: vertical;
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  line-height: 1.5;
+}
+.prompt-textarea:focus { border-color: var(--red); outline: none; }
+.import-zone {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.import-zone-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.import-textarea {
+  width: 100%;
+  height: 100px;
+  resize: vertical;
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+}
+.import-textarea:focus { border-color: var(--red); outline: none; }
+.import-or {
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-dim);
+  position: relative;
+}
+.import-or::before, .import-or::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 35%;
+  height: 1px;
+  background: var(--border);
+}
+.import-or::before { left: 0; }
+.import-or::after  { right: 0; }
+.import-error {
+  font-size: 11px;
+  color: #cc4444;
+  background: var(--cut-bg);
+  border: 1px solid var(--cut-border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+}
+
+/* System warning banner */
+.system-banner {
+  background: #1a1200;
+  border-bottom: 1px solid #3a2a00;
+  color: var(--amber);
+  font-size: 11px;
+  padding: 6px 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ============================================================
+   UTILITY
+   ============================================================ */
+.flex-1 { flex: 1; }
+.mt-4 { margin-top: 4px; }
+.mt-8 { margin-top: 8px; }
+.text-muted { color: var(--text-muted); }
+.text-dim { color: var(--text-dim); }
+.text-red { color: var(--red); }
+.text-green { color: var(--green); }
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     VIEW: WELCOME
+     ============================================================ -->
+<div id="view-welcome" class="view hidden">
+  <div class="welcome-logo">Dark<span>room</span></div>
+  <p class="welcome-tag">"Your footage, developed locally."</p>
+  <div class="welcome-actions">
+    <button class="btn-primary" id="btn-new-project">+ New Project</button>
+    <div class="project-list" id="project-list">
+      <div class="project-list-empty">Loading projects…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     VIEW: SETUP
+     ============================================================ -->
+<div id="view-setup" class="view hidden">
+  <div class="setup-card">
+    <div class="setup-title">
+      <button class="back-btn" id="btn-back-to-welcome">← Back</button>
+      <span id="setup-title-text">New Project</span>
+    </div>
+
+    <div class="form-field">
+      <label class="form-label">Project name</label>
+      <input type="text" id="project-name-input" placeholder="Episode 42 — Interview with Alex" />
+    </div>
+
+    <div class="form-field">
+      <label class="form-label">Camera files &amp; speakers</label>
+      <div class="speaker-slots" id="speaker-slots"></div>
+      <button class="add-speaker-btn" id="btn-add-speaker">+ Add camera</button>
+    </div>
+
+    <button class="btn-primary" id="btn-upload-start" disabled>Upload &amp; Transcribe</button>
+  </div>
+</div>
+
+<!-- ============================================================
+     VIEW: PROCESSING
+     ============================================================ -->
+<div id="view-processing" class="view hidden">
+  <div class="processing-card">
+    <div class="processing-icon" id="proc-spinner"></div>
+    <div class="processing-step" id="proc-step">Initialising…</div>
+    <div class="processing-steps-list">
+      <div class="step-pill" id="spill-upload">Upload</div>
+      <div class="step-divider">›</div>
+      <div class="step-pill" id="spill-transcribe">Transcribe</div>
+      <div class="step-divider">›</div>
+      <div class="step-pill" id="spill-analyze">Analyse</div>
+      <div class="step-divider">›</div>
+      <div class="step-pill" id="spill-ready">Ready</div>
+    </div>
+    <div class="progress-bar-outer">
+      <div class="progress-bar-inner" id="proc-bar" style="width:0%"></div>
+    </div>
+    <div class="processing-msg" id="proc-msg"></div>
+    <div class="processing-error hidden" id="proc-error"></div>
+    <button class="btn-ghost hidden" id="btn-proc-retry">Retry analysis</button>
+    <button class="btn-ghost hidden" id="btn-proc-retranscribe">Re-transcribe</button>
+
+    <!-- Analysis method picker — shown when transcription completes -->
+    <div class="analysis-options hidden" id="analysis-options">
+      <div class="analysis-options-title">Transcription complete. How should Darkroom generate the edit?</div>
+      <div class="option-cards">
+
+        <div class="option-card" id="opt-api">
+          <div class="option-card-body">
+            <div class="option-card-title">Claude API</div>
+            <div class="option-card-desc">Call <code>claude-sonnet-4-6</code> directly via the Anthropic API. Requires a key in <code>.env</code>.</div>
+          </div>
+          <span class="option-card-badge badge-recommended">Recommended</span>
+        </div>
+
+        <div class="option-card" id="opt-claude-code">
+          <div class="option-card-body">
+            <div class="option-card-title">Claude Code</div>
+            <div class="option-card-desc">Copy the prompt, paste it into Claude Code, then import the JSON response back here.</div>
+          </div>
+          <span class="option-card-badge badge-manual">Manual</span>
+        </div>
+
+        <div class="option-card" id="opt-skip">
+          <div class="option-card-body">
+            <div class="option-card-title">Skip — keep everything</div>
+            <div class="option-card-desc">Go straight to the editor with all segments marked as keep. You can make cuts manually.</div>
+          </div>
+          <span class="option-card-badge badge-skip">No AI</span>
+        </div>
+
+      </div>
+    </div>
+
+    <button class="btn-ghost" id="btn-proc-cancel">Cancel</button>
+  </div>
+</div>
+
+<!-- ============================================================
+     CLAUDE CODE PROMPT MODAL
+     ============================================================ -->
+<div class="modal-overlay hidden" id="prompt-modal">
+  <div class="modal" style="width:500px">
+    <div class="modal-title">Use Claude Code to generate the EDL</div>
+    <div class="prompt-modal-body">
+      <div style="font-size:12px;color:var(--text-muted);line-height:1.6">
+        Copy the prompt below and paste it into a Claude Code conversation.
+        Claude will reply with a JSON object — paste or import that JSON in the section below.
+      </div>
+
+      <div>
+        <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px;font-weight:600">Prompt to copy</div>
+        <textarea class="prompt-textarea" id="prompt-text" readonly></textarea>
+        <button class="btn-small" id="btn-copy-prompt" style="margin-top:6px">Copy to clipboard</button>
+        <span id="copy-confirm" style="font-size:11px;color:var(--green);margin-left:8px;opacity:0;transition:opacity .3s"></span>
+      </div>
+
+      <div class="import-zone">
+        <div class="import-zone-label">Paste Claude's JSON response</div>
+        <textarea class="import-textarea" id="edl-paste" placeholder='{ "segments": [...], "clips": [...] }'></textarea>
+        <div class="import-or">or</div>
+        <input type="file" id="edl-file-input" accept=".json" style="font-size:11px;color:var(--text-muted)" />
+        <div class="import-error hidden" id="import-error"></div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-ghost" id="btn-prompt-modal-cancel">Cancel</button>
+      <button class="btn-topbar-red" id="btn-import-edl">Import EDL</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     VIEW: EDITOR
+     ============================================================ -->
+<div id="view-editor" class="view hidden">
+
+  <!-- System warning -->
+  <div class="system-banner hidden" id="ffmpeg-banner">
+    ⚠ FFmpeg not found — rendering is unavailable. Install FFmpeg and restart.
+  </div>
+
+  <!-- Top bar -->
+  <div class="topbar">
+    <div class="topbar-logo">Dark<span>room</span></div>
+    <button class="btn-topbar-home" id="btn-editor-home" title="Back to projects">⌂</button>
+    <div class="topbar-sep"></div>
+    <div class="topbar-project-name" id="topbar-project-name">Project</div>
+    <div id="topbar-status" class="status-badge topbar-status-badge"></div>
+    <div class="topbar-right">
+      <button class="btn-topbar" id="btn-export-edl">Export EDL</button>
+      <button class="btn-topbar-red" id="btn-render" disabled>Render</button>
+    </div>
+  </div>
+
+  <div class="editor-body">
+
+    <!-- Camera preview row -->
+    <div class="preview-row" id="preview-row"></div>
+
+    <!-- Timeline -->
+    <div class="timeline-container" id="timeline-container">
+      <div class="timeline-ruler" id="timeline-ruler"></div>
+      <div class="timeline-tracks" id="timeline-tracks">
+        <div class="timeline-tracks-inner" id="timeline-tracks-inner">
+          <div class="playhead" id="playhead" style="left:0"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Workspace -->
+    <div class="workspace">
+
+      <!-- Transcript -->
+      <div class="transcript-panel" id="transcript-panel">
+        <div class="transcript-header">Transcript</div>
+        <div id="transcript-lines"></div>
+      </div>
+
+      <!-- Sidebar -->
+      <div class="sidebar">
+
+        <!-- Session stats -->
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">Session</div>
+          <div class="stat-grid">
+            <div class="stat-item">
+              <div class="stat-value" id="stat-raw">—</div>
+              <div class="stat-label">Raw</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-value green" id="stat-out">—</div>
+              <div class="stat-label">Output</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-value red" id="stat-cuts">—</div>
+              <div class="stat-label">Cuts</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-value" id="stat-saved">—</div>
+              <div class="stat-label">Saved</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Selected segment editor -->
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">Selected Segment</div>
+          <div id="segment-editor-content">
+            <div class="segment-editor-empty">Click a segment on the timeline</div>
+          </div>
+        </div>
+
+        <!-- AI cut list -->
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">AI Cuts</div>
+          <div class="cut-list" id="cut-list"></div>
+        </div>
+
+        <!-- Recommended clips -->
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">Shorts / Reels</div>
+          <div class="clips-list" id="clips-list"></div>
+        </div>
+
+        <!-- Export options -->
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">Export</div>
+          <div class="export-checks">
+            <label class="export-check">
+              <input type="checkbox" id="export-fullEdit" checked />
+              <span class="export-check-label">16:9 Full Edit</span>
+            </label>
+            <label class="export-check">
+              <input type="checkbox" id="export-vertical" />
+              <span class="export-check-label">9:16 Vertical Crop</span>
+            </label>
+            <label class="export-check">
+              <input type="checkbox" id="export-short" />
+              <span class="export-check-label">Best 60–90s Short</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Rendered outputs -->
+        <div class="sidebar-section" id="renders-section" style="display:none">
+          <div class="sidebar-section-title">Downloads</div>
+          <div class="render-list" id="render-list"></div>
+        </div>
+
+      </div><!-- /sidebar -->
+    </div><!-- /workspace -->
+  </div><!-- /editor-body -->
+</div><!-- /view-editor -->
+
+<!-- ============================================================
+     RENDER MODAL
+     ============================================================ -->
+<div class="modal-overlay hidden" id="render-modal">
+  <div class="modal">
+    <div class="modal-title">Render</div>
+    <div id="render-modal-body">
+      <p style="font-size:12px;color:var(--text-muted);line-height:1.6">
+        Selected export targets will be rendered by FFmpeg.<br/>
+        This may take a few minutes for long recordings.
+      </p>
+      <div class="progress-bar-outer mt-8" style="display:none" id="render-prog-outer">
+        <div class="progress-bar-inner" id="render-prog-bar" style="width:5%"></div>
+      </div>
+      <div class="processing-msg mt-4" id="render-prog-msg"></div>
+      <div class="processing-error hidden mt-4" id="render-error"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-ghost" id="btn-render-cancel">Cancel</button>
+      <button class="btn-topbar-red" id="btn-render-confirm">Start Render</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   STATE
+   ============================================================ */
+const S = {
+  projects: [],
+  project: null,       // full project object
+  edl: null,           // local copy of edl (may differ from server)
+  selectedSeg: null,   // selected segment id
+  pollTimer: null,
+  renderPollTimer: null,
+  currentTime: 0,
+  totalDuration: 0,
+  sysStatus: { ffmpeg_available: true, whisper_model: 'base' },
+};
+
+/* ============================================================
+   UTILITIES
+   ============================================================ */
+function fmtSec(s) {
+  if (s === null || s === undefined || isNaN(s)) return '—';
+  const m = Math.floor(s / 60);
+  const ss = (s % 60).toFixed(1).padStart(4, '0');
+  return `${m}:${ss}`;
+}
+function fmtDur(s) {
+  if (!s || isNaN(s)) return '—';
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${m}m ${sec}s`;
+}
+function camColor(id) {
+  return { A: 'var(--cam-a)', B: 'var(--cam-b)', C: 'var(--cam-c)', D: 'var(--cam-d)' }[id] || '#888';
+}
+function statusClass(status) {
+  const map = {
+    ready: 'status-ready', created: 'status-created', uploaded: 'status-uploaded',
+    transcribing: 'status-transcribing', analyzing: 'status-analyzing',
+    transcribed: 'status-transcribed', rendering: 'status-rendering', error: 'status-error',
+  };
+  return map[status] || 'status-created';
+}
+function el(id) { return document.getElementById(id); }
+function showView(id) {
+  ['view-welcome','view-setup','view-processing','view-editor'].forEach(v => {
+    el(v).classList.toggle('hidden', v !== id);
+  });
+}
+
+/* ============================================================
+   API
+   ============================================================ */
+const API = {
+  async get(path) {
+    const r = await fetch(path);
+    if (!r.ok) throw new Error(`GET ${path} → ${r.status}`);
+    return r.json();
+  },
+  async post(path, body) {
+    const r = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      throw new Error(e.error || `POST ${path} → ${r.status}`);
+    }
+    return r.json();
+  },
+  async put(path, body) {
+    const r = await fetch(path, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(`PUT ${path} → ${r.status}`);
+    return r.json();
+  },
+  async del(path) {
+    await fetch(path, { method: 'DELETE' });
+  },
+  async uploadFiles(projectId, files, names) {
+    const fd = new FormData();
+    files.forEach(f => fd.append('files', f));
+    names.forEach(n => fd.append('names', n));
+    const r = await fetch(`/api/projects/${projectId}/upload`, { method: 'POST', body: fd });
+    if (!r.ok) throw new Error(`Upload failed: ${r.status}`);
+    return r.json();
+  },
+};
+
+/* ============================================================
+   VIEWS — WELCOME
+   ============================================================ */
+async function loadWelcome() {
+  showView('view-welcome');
+  clearPolling();
+  try {
+    S.sysStatus = await API.get('/api/status');
+    S.projects = await API.get('/api/projects');
+    renderProjectList();
+  } catch (e) {
+    el('project-list').innerHTML = `<div class="project-list-empty text-red">Could not load projects: ${e.message}</div>`;
+  }
+}
+
+function renderProjectList() {
+  const list = el('project-list');
+  if (!S.projects.length) {
+    list.innerHTML = '<div class="project-list-empty">No projects yet — create one above.</div>';
+    return;
+  }
+  list.innerHTML = S.projects.map(p => `
+    <div class="project-item" data-id="${p.id}">
+      <div>
+        <div class="project-item-name">${esc(p.name)}</div>
+        <div class="project-item-meta">${p.id} · ${new Date(p.created_at + 'Z').toLocaleDateString()}</div>
+      </div>
+      <div class="project-item-right">
+        <span class="status-badge ${statusClass(p.status)}">${p.status}</span>
+        <button class="btn-danger" data-del="${p.id}" title="Delete project">✕</button>
+      </div>
+    </div>
+  `).join('');
+
+  list.querySelectorAll('.project-item').forEach(item => {
+    item.addEventListener('click', e => {
+      if (e.target.dataset.del) return;
+      openProject(item.dataset.id);
+    });
+  });
+  list.querySelectorAll('[data-del]').forEach(btn => {
+    btn.addEventListener('click', async e => {
+      e.stopPropagation();
+      if (!confirm('Delete this project?')) return;
+      await API.del(`/api/projects/${btn.dataset.del}`);
+      await loadWelcome();
+    });
+  });
+}
+
+async function openProject(id) {
+  try {
+    S.project = await API.get(`/api/projects/${id}`);
+    routeProject();
+  } catch (e) {
+    alert('Could not open project: ' + e.message);
+  }
+}
+
+function routeProject() {
+  const p = S.project;
+  if (!p) { loadWelcome(); return; }
+
+  if (p.status === 'ready') {
+    loadEditor();
+  } else if (['transcribing','analyzing','rendering','uploaded','transcribed','created'].includes(p.status)) {
+    loadProcessing();
+  } else if (p.status === 'error') {
+    loadProcessing();
+  } else {
+    loadWelcome();
+  }
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ============================================================
+   VIEWS — SETUP
+   ============================================================ */
+let setupSpeakers = []; // [{name, file}]
+
+function loadSetup() {
+  showView('view-setup');
+  el('setup-title-text').textContent = 'New Project';
+  el('project-name-input').value = '';
+  setupSpeakers = [null, null]; // start with 2 slots
+  renderSpeakerSlots();
+  el('btn-upload-start').disabled = true;
+  el('project-name-input').focus();
+}
+
+function renderSpeakerSlots() {
+  const camIds = ['A','B','C','D'];
+  const container = el('speaker-slots');
+  container.innerHTML = '';
+
+  setupSpeakers.forEach((sp, i) => {
+    const camId = camIds[i];
+    const div = document.createElement('div');
+    div.className = 'speaker-slot';
+    div.dataset.index = i;
+    div.innerHTML = `
+      <div class="speaker-slot-header">
+        <span><span class="cam-dot cam-dot-${camId}"></span>Camera ${camId}</span>
+        ${i >= 2 ? `<button class="remove-speaker-btn" data-remove="${i}">✕</button>` : ''}
+      </div>
+      <div class="speaker-slot-inputs">
+        <div class="file-drop-zone" id="drop-${i}">
+          <span id="drop-label-${i}">${sp ? sp.file.name : 'Choose file'}</span>
+          <input type="file" accept="video/*,audio/*" data-slot="${i}" />
+        </div>
+        <input type="text" placeholder="Speaker name" value="${sp ? sp.name : ''}" data-name="${i}" />
+      </div>
+    `;
+    container.appendChild(div);
+  });
+
+  // File input change
+  container.querySelectorAll('input[type=file]').forEach(inp => {
+    inp.addEventListener('change', e => {
+      const i = +e.target.dataset.slot;
+      const file = e.target.files[0];
+      if (!file) return;
+      if (!setupSpeakers[i]) setupSpeakers[i] = {};
+      setupSpeakers[i].file = file;
+      el(`drop-label-${i}`).textContent = file.name;
+      el(`drop-${i}`).classList.add('has-file');
+      validateSetup();
+    });
+  });
+
+  // Name input change
+  container.querySelectorAll('input[type=text]').forEach(inp => {
+    inp.addEventListener('input', e => {
+      const i = +e.target.dataset.name;
+      if (!setupSpeakers[i]) setupSpeakers[i] = {};
+      setupSpeakers[i].name = e.target.value;
+      validateSetup();
+    });
+  });
+
+  // Update add-speaker button visibility
+  el('btn-add-speaker').classList.toggle('hidden', setupSpeakers.length >= 4);
+
+  // Remove
+  container.querySelectorAll('[data-remove]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      const i = +e.target.dataset.remove;
+      setupSpeakers.splice(i, 1);
+      renderSpeakerSlots();
+      validateSetup();
+    });
+  });
+}
+
+function validateSetup() {
+  const hasAll = setupSpeakers.every(sp => sp && sp.file && sp.name && sp.name.trim());
+  const hasName = el('project-name-input').value.trim().length > 0;
+  el('btn-upload-start').disabled = !(hasAll && hasName);
+}
+
+el('project-name-input').addEventListener('input', validateSetup);
+
+el('btn-add-speaker').addEventListener('click', () => {
+  if (setupSpeakers.length >= 4) return;
+  setupSpeakers.push(null);
+  renderSpeakerSlots();
+  // show/hide add button
+  el('btn-add-speaker').classList.toggle('hidden', setupSpeakers.length >= 4);
+});
+
+el('btn-back-to-welcome').addEventListener('click', loadWelcome);
+el('btn-new-project').addEventListener('click', loadSetup);
+
+el('btn-upload-start').addEventListener('click', async () => {
+  const name = el('project-name-input').value.trim();
+  if (!name) return;
+
+  el('btn-upload-start').disabled = true;
+  el('btn-upload-start').textContent = 'Creating project…';
+
+  try {
+    const proj = await API.post('/api/projects', { name });
+    S.project = proj;
+
+    // Upload files
+    const files = setupSpeakers.map(sp => sp.file);
+    const names = setupSpeakers.map(sp => sp.name.trim());
+    await API.uploadFiles(proj.id, files, names);
+
+    // Start transcription
+    await API.post(`/api/projects/${proj.id}/transcribe`, {});
+
+    S.project = await API.get(`/api/projects/${proj.id}`);
+    loadProcessing();
+  } catch (e) {
+    el('btn-upload-start').disabled = false;
+    el('btn-upload-start').textContent = 'Upload & Transcribe';
+    alert('Error: ' + e.message);
+  }
+});
+
+/* ============================================================
+   VIEWS — PROCESSING
+   ============================================================ */
+function loadProcessing() {
+  showView('view-processing');
+  el('proc-error').classList.add('hidden');
+  el('btn-proc-retry').classList.add('hidden');
+  el('btn-proc-retranscribe').classList.add('hidden');
+  el('analysis-options').classList.add('hidden');
+  el('proc-spinner').style.animation = 'spin 1s linear infinite';
+  updateProcessingUI(S.project);
+
+  // Already transcribed but waiting for analysis choice
+  if (S.project.status === 'transcribed') {
+    showAnalysisOptions();
+    return;
+  }
+
+  // Uploaded but no transcripts yet — show re-transcribe button
+  if (S.project.status === 'uploaded' && !S.project.merged_transcript?.length) {
+    el('proc-spinner').style.animation = 'none';
+    el('proc-step').textContent = 'Ready to transcribe';
+    el('proc-msg').textContent = 'Files are uploaded. Start transcription when ready.';
+    el('btn-proc-retranscribe').classList.remove('hidden');
+    return;
+  }
+
+  clearPolling();
+  S.pollTimer = setInterval(async () => {
+    try {
+      S.project = await API.get(`/api/projects/${S.project.id}`);
+      updateProcessingUI(S.project);
+
+      if (S.project.status === 'transcribed') {
+        clearPolling();
+        showAnalysisOptions();
+      } else if (S.project.status === 'ready') {
+        clearPolling();
+        setTimeout(loadEditor, 500);
+      } else if (S.project.status === 'error') {
+        clearPolling();
+        showProcessingError(S.project.progress?.message || 'Unknown error');
+      }
+    } catch (e) {
+      console.error('Poll error:', e);
+    }
+  }, 1500);
+}
+
+function updateProcessingUI(p) {
+  const prog = p.progress || {};
+  const pct = prog.percent || 0;
+
+  el('proc-bar').style.width = pct + '%';
+  el('proc-msg').textContent = prog.message || '';
+
+  const step = prog.step || '';
+  const status = p.status;
+
+  const pillMap = {
+    'spill-upload': ['uploaded','transcribing','analyzing','transcribed','ready'],
+    'spill-transcribe': ['transcribing','analyzing','transcribed','ready'],
+    'spill-analyze': ['analyzing','ready'],
+    'spill-ready': ['ready'],
+  };
+  const doneMap = {
+    'spill-upload': ['transcribing','analyzing','transcribed','ready'],
+    'spill-transcribe': ['analyzing','transcribed','ready'],
+    'spill-analyze': ['ready'],
+    'spill-ready': [],
+  };
+
+  ['spill-upload','spill-transcribe','spill-analyze','spill-ready'].forEach(id => {
+    const pill = el(id);
+    pill.classList.remove('active','done');
+    if (doneMap[id].includes(status)) pill.classList.add('done');
+    else if (pillMap[id].includes(status)) pill.classList.add('active');
+  });
+
+  const labels = {
+    uploaded: 'Uploading…', transcribing: 'Transcribing…',
+    merging: 'Merging transcripts…', analyzing: 'Analysing with Claude…',
+    transcribed: 'Queuing analysis…', ready: 'Ready!',
+    error: 'Error',
+  };
+  el('proc-step').textContent = labels[status] || labels[step] || 'Processing…';
+}
+
+function showProcessingError(msg) {
+  el('proc-error').textContent = msg;
+  el('proc-error').classList.remove('hidden');
+  el('proc-spinner').style.animation = 'none';
+  el('proc-step').textContent = 'Error';
+  // If no transcripts yet, offer re-transcribe; otherwise retry analysis
+  const hasTranscript = S.project?.merged_transcript?.length > 0;
+  el('btn-proc-retry').classList.toggle('hidden', !hasTranscript);
+  el('btn-proc-retranscribe').classList.toggle('hidden', hasTranscript);
+}
+
+el('btn-proc-retry').addEventListener('click', async () => {
+  el('btn-proc-retry').classList.add('hidden');
+  el('proc-error').classList.add('hidden');
+  el('proc-spinner').style.animation = 'spin 1s linear infinite';
+  try {
+    await API.post(`/api/projects/${S.project.id}/analyze`, {});
+    S.project.status = 'analyzing';
+    loadProcessing();
+  } catch (e) {
+    showProcessingError(e.message);
+  }
+});
+
+el('btn-proc-retranscribe').addEventListener('click', async () => {
+  el('btn-proc-retranscribe').classList.add('hidden');
+  el('proc-error').classList.add('hidden');
+  el('proc-spinner').style.animation = 'spin 1s linear infinite';
+  el('proc-step').textContent = 'Starting transcription…';
+  el('proc-msg').textContent = '';
+  try {
+    await API.post(`/api/projects/${S.project.id}/transcribe`, {});
+    S.project.status = 'transcribing';
+    loadProcessing();
+  } catch (e) {
+    showProcessingError(e.message);
+  }
+});
+
+el('btn-proc-cancel').addEventListener('click', loadWelcome);
+
+/* ---- Analysis options ---- */
+function showAnalysisOptions() {
+  el('proc-spinner').style.animation = 'none';
+  el('proc-step').textContent = 'Transcription complete';
+  el('proc-bar').style.width = '100%';
+  el('proc-msg').textContent = '';
+  el('analysis-options').classList.remove('hidden');
+  el('spill-transcribe').classList.remove('active');
+  el('spill-transcribe').classList.add('done');
+}
+
+function hideAnalysisOptions() {
+  el('analysis-options').classList.add('hidden');
+  el('proc-spinner').style.animation = 'spin 1s linear infinite';
+}
+
+// Option 1 — Claude API
+el('opt-api').addEventListener('click', async () => {
+  hideAnalysisOptions();
+  try {
+    await API.post(`/api/projects/${S.project.id}/analyze`, {});
+    S.project.status = 'analyzing';
+    loadProcessing();
+  } catch (e) {
+    showProcessingError(e.message);
+  }
+});
+
+// Option 2 — Claude Code (prompt modal)
+el('opt-claude-code').addEventListener('click', async () => {
+  try {
+    const data = await API.get(`/api/projects/${S.project.id}/prompt`);
+    el('prompt-text').value = data.prompt;
+    el('edl-paste').value = '';
+    el('edl-file-input').value = '';
+    el('import-error').classList.add('hidden');
+    el('prompt-modal').classList.remove('hidden');
+  } catch (e) {
+    showProcessingError(e.message);
+  }
+});
+
+// Option 3 — Skip
+el('opt-skip').addEventListener('click', async () => {
+  hideAnalysisOptions();
+  el('proc-step').textContent = 'Skipping analysis…';
+  el('proc-spinner').style.animation = 'spin 1s linear infinite';
+  try {
+    S.project = await API.post(`/api/projects/${S.project.id}/skip-analysis`, {});
+    setTimeout(loadEditor, 400);
+  } catch (e) {
+    showProcessingError(e.message);
+  }
+});
+
+/* ---- Prompt modal ---- */
+el('btn-copy-prompt').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(el('prompt-text').value);
+    const c = el('copy-confirm');
+    c.textContent = '✓ Copied!';
+    c.style.opacity = '1';
+    setTimeout(() => { c.style.opacity = '0'; }, 2000);
+  } catch {
+    el('prompt-text').select();
+    document.execCommand('copy');
+  }
+});
+
+el('edl-file-input').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => { el('edl-paste').value = ev.target.result; };
+  reader.readAsText(file);
+});
+
+el('btn-import-edl').addEventListener('click', async () => {
+  const raw = el('edl-paste').value.trim();
+  if (!raw) {
+    el('import-error').textContent = 'Paste the JSON from Claude first.';
+    el('import-error').classList.remove('hidden');
+    return;
+  }
+
+  let edl;
+  try {
+    edl = JSON.parse(raw);
+  } catch (e) {
+    el('import-error').textContent = 'Invalid JSON: ' + e.message;
+    el('import-error').classList.remove('hidden');
+    return;
+  }
+
+  if (!edl.segments || !edl.clips) {
+    el('import-error').textContent = 'JSON must have "segments" and "clips" keys.';
+    el('import-error').classList.remove('hidden');
+    return;
+  }
+
+  try {
+    S.project = await API.post(`/api/projects/${S.project.id}/import-edl`, { edl });
+    el('prompt-modal').classList.add('hidden');
+    setTimeout(loadEditor, 300);
+  } catch (e) {
+    el('import-error').textContent = e.message;
+    el('import-error').classList.remove('hidden');
+  }
+});
+
+el('btn-prompt-modal-cancel').addEventListener('click', () => {
+  el('prompt-modal').classList.add('hidden');
+});
+
+function clearPolling() {
+  if (S.pollTimer) { clearInterval(S.pollTimer); S.pollTimer = null; }
+}
+
+/* ============================================================
+   VIEWS — EDITOR
+   ============================================================ */
+function loadEditor() {
+  showView('view-editor');
+  clearPolling();
+
+  const p = S.project;
+  S.edl = JSON.parse(JSON.stringify(p.edl)); // deep copy
+  S.selectedSeg = null;
+
+  // Compute total duration
+  const segs = S.edl?.segments || [];
+  S.totalDuration = segs.length ? segs[segs.length - 1].end : 0;
+
+  // System banner
+  if (!S.sysStatus.ffmpeg_available) {
+    el('ffmpeg-banner').classList.remove('hidden');
+  }
+
+  // Top bar
+  el('topbar-project-name').textContent = p.name;
+  el('topbar-status').textContent = p.status;
+  el('topbar-status').className = `status-badge topbar-status-badge ${statusClass(p.status)}`;
+  el('btn-render').disabled = !S.sysStatus.ffmpeg_available || !S.edl;
+
+  // Renders
+  renderDownloads(p.renders || {});
+
+  buildPreviewRow();
+  buildTimeline();
+  buildTranscript();
+  buildCutList();
+  buildClipsList();
+  updateStats();
+
+  // Poll for render status while rendering
+  if (p.status === 'rendering') {
+    startRenderPoll();
+  }
+}
+
+/* ---- Preview row ---- */
+function buildPreviewRow() {
+  const row = el('preview-row');
+  row.innerHTML = '';
+  (S.project.speakers || []).forEach(sp => {
+    const card = document.createElement('div');
+    card.className = 'cam-card';
+    card.dataset.camId = sp.id;
+    const fileUrl = `/projects/${S.project.id}/files/${encodeURIComponent(sp.file)}`;
+    card.innerHTML = `
+      <video src="${fileUrl}" preload="metadata" muted playsinline></video>
+      <div class="cam-card-label">
+        <span class="cam-dot cam-dot-${sp.id}"></span>
+        <span>${esc(sp.name)}</span>
+      </div>
+    `;
+    card.addEventListener('click', () => {
+      // If a segment is selected, change its camera
+      if (S.selectedSeg) {
+        updateSegField(S.selectedSeg, 'camera', sp.id);
+      }
+      // Highlight active cam
+      document.querySelectorAll('.cam-card').forEach(c => c.classList.remove('active-cam'));
+      card.classList.add('active-cam');
+      // Seek video to current time
+      const vid = card.querySelector('video');
+      if (vid) vid.currentTime = S.currentTime;
+    });
+    row.appendChild(card);
+  });
+}
+
+function setActiveCam(camId) {
+  document.querySelectorAll('.cam-card').forEach(c => {
+    c.classList.toggle('active-cam', c.dataset.camId === camId);
+  });
+}
+
+/* ---- Timeline ---- */
+function buildTimeline() {
+  const inner = el('timeline-tracks-inner');
+  const ruler = el('timeline-ruler');
+  inner.innerHTML = '<div class="playhead" id="playhead" style="left:0"></div>';
+  ruler.innerHTML = '';
+
+  if (!S.edl) return;
+
+  const segs = S.edl.segments;
+  const dur = S.totalDuration;
+  if (!dur) return;
+
+  // Group by camera (speaker)
+  const speakers = S.project.speakers || [];
+  const tracks = {};
+  speakers.forEach(sp => { tracks[sp.id] = []; });
+  segs.forEach(seg => {
+    const cam = seg.camera || speakers[0]?.id;
+    if (tracks[cam]) tracks[cam].push(seg);
+    else tracks[speakers[0]?.id]?.push(seg);
+  });
+
+  // Time scale — we'll use percentage-based positioning
+  // Build ruler ticks
+  const tickInterval = chooseTick(dur);
+  for (let t = 0; t <= dur; t += tickInterval) {
+    const pct = (t / dur) * 100;
+    const tick = document.createElement('div');
+    tick.className = 'ruler-tick';
+    tick.style.cssText = `left:${pct}%;position:absolute;top:0;bottom:0;`;
+    tick.innerHTML = `
+      <div class="ruler-tick-line"></div>
+      <div class="ruler-tick-label" style="left:0">${fmtSec(t)}</div>
+    `;
+    ruler.appendChild(tick);
+  }
+
+  // Build track rows
+  speakers.forEach(sp => {
+    const row = document.createElement('div');
+    row.className = 'track-row';
+    row.style.flex = '1';  // equal share of timeline height
+
+    const label = document.createElement('div');
+    label.className = 'track-label-overlay';
+    label.innerHTML = `<span class="cam-dot cam-dot-${sp.id}"></span>${esc(sp.name)}`;
+    row.appendChild(label);
+
+    (tracks[sp.id] || []).forEach(seg => {
+      const leftPct = (seg.start / dur) * 100;
+      const widthPct = ((seg.end - seg.start) / dur) * 100;
+      const segEl = document.createElement('div');
+      segEl.className = `timeline-segment ${seg.keep ? 'keep' : 'cut'}`;
+      segEl.style.cssText = `left:${leftPct}%;width:${Math.max(widthPct, 0.1)}%;`;
+      segEl.dataset.segId = seg.id;
+      segEl.title = `${seg.id} · ${fmtSec(seg.start)}–${fmtSec(seg.end)} · ${seg.keep ? 'KEEP' : 'CUT'}${seg.reason ? ' · ' + seg.reason : ''}`;
+      segEl.addEventListener('click', () => selectSegment(seg.id));
+      row.appendChild(segEl);
+    });
+
+    inner.appendChild(row);
+  });
+
+  // Click on timeline to move playhead
+  inner.addEventListener('click', e => {
+    if (e.target.classList.contains('timeline-segment')) return;
+    const rect = inner.getBoundingClientRect();
+    const pct = (e.clientX - rect.left) / rect.width;
+    seekTo(pct * dur);
+  });
+}
+
+function chooseTick(dur) {
+  if (dur < 60) return 5;
+  if (dur < 300) return 15;
+  if (dur < 900) return 60;
+  if (dur < 3600) return 120;
+  return 300;
+}
+
+function selectSegment(segId) {
+  S.selectedSeg = segId;
+
+  // Highlight in timeline
+  document.querySelectorAll('.timeline-segment').forEach(el => {
+    el.classList.toggle('selected', el.dataset.segId === segId);
+  });
+
+  // Highlight in transcript
+  const seg = S.edl.segments.find(s => s.id === segId);
+  if (seg) {
+    seekTo(seg.start);
+    setActiveCam(seg.camera);
+  }
+
+  renderSegmentEditor();
+}
+
+function seekTo(t) {
+  S.currentTime = t;
+  const pct = S.totalDuration ? (t / S.totalDuration) * 100 : 0;
+  const ph = el('playhead');
+  if (ph) ph.style.left = pct + '%';
+
+  // Seek all videos
+  document.querySelectorAll('.cam-card video').forEach(vid => {
+    vid.currentTime = t;
+  });
+
+  // Scroll transcript to line
+  const lines = document.querySelectorAll('.transcript-line');
+  let best = null;
+  lines.forEach(line => {
+    const lineStart = +line.dataset.start;
+    if (lineStart <= t) best = line;
+  });
+  if (best) {
+    best.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    document.querySelectorAll('.transcript-line').forEach(l => l.classList.remove('selected'));
+    best.classList.add('selected');
+  }
+}
+
+/* ---- Transcript ---- */
+function buildTranscript() {
+  const container = el('transcript-lines');
+  container.innerHTML = '';
+  if (!S.project.merged_transcript?.length) {
+    container.innerHTML = '<div style="padding:14px;color:var(--text-dim)">No transcript available.</div>';
+    return;
+  }
+
+  S.project.merged_transcript.forEach(seg => {
+    const cut = isSegCut(seg.start, seg.end);
+    const line = document.createElement('div');
+    line.className = `transcript-line${cut ? ' cut' : ''}`;
+    line.dataset.start = seg.start;
+    line.dataset.end = seg.end;
+    line.innerHTML = `
+      <span class="speaker-badge badge-${seg.speaker_id}">${esc(seg.speaker_id)}</span>
+      <span class="transcript-time mono">${fmtSec(seg.start)}</span>
+      <span class="transcript-text">${esc(seg.text)}</span>
+    `;
+    line.addEventListener('click', () => seekTo(seg.start));
+    container.appendChild(line);
+  });
+}
+
+function isSegCut(start, end) {
+  if (!S.edl) return false;
+  const mid = (start + end) / 2;
+  const edlSeg = S.edl.segments.find(s => s.start <= mid && s.end > mid);
+  return edlSeg ? !edlSeg.keep : false;
+}
+
+function refreshTranscriptCutState() {
+  document.querySelectorAll('.transcript-line').forEach(line => {
+    const start = +line.dataset.start;
+    const end = +line.dataset.end;
+    const cut = isSegCut(start, end);
+    line.classList.toggle('cut', cut);
+  });
+}
+
+/* ---- Cut list ---- */
+function buildCutList() {
+  const list = el('cut-list');
+  const cuts = (S.edl?.segments || []).filter(s => !s.keep && s.reason);
+  if (!cuts.length) {
+    list.innerHTML = '<div class="cut-item-empty">No cuts yet.</div>';
+    return;
+  }
+  list.innerHTML = cuts.map(s => `
+    <div class="cut-item">
+      <div class="cut-item-label">
+        <span>${esc(s.id)}</span>
+        <button class="btn-small" data-restore="${s.id}">Restore</button>
+      </div>
+      <div class="cut-item-reason">${esc(s.reason || '')}</div>
+      <div class="cut-item-time">${fmtSec(s.start)} – ${fmtSec(s.end)}</div>
+    </div>
+  `).join('');
+
+  list.querySelectorAll('[data-restore]').forEach(btn => {
+    btn.addEventListener('click', () => updateSegField(btn.dataset.restore, 'keep', true));
+  });
+}
+
+/* ---- Clips list ---- */
+function buildClipsList() {
+  const list = el('clips-list');
+  const clips = S.edl?.clips || [];
+  if (!clips.length) {
+    list.innerHTML = '<div class="cut-item-empty">No clips identified.</div>';
+    return;
+  }
+  list.innerHTML = clips.map(c => `
+    <div class="clip-item" data-start="${c.start}" data-end="${c.end}">
+      <div class="clip-item-label">${esc(c.label || c.id)}</div>
+      <div class="clip-item-reason">${esc(c.reason || '')}</div>
+      <div class="clip-item-time">${fmtSec(c.start)} – ${fmtSec(c.end)} (${fmtDur(c.end - c.start)})</div>
+    </div>
+  `).join('');
+
+  list.querySelectorAll('.clip-item').forEach(item => {
+    item.addEventListener('click', () => seekTo(+item.dataset.start));
+  });
+}
+
+/* ---- Stats ---- */
+function updateStats() {
+  const segs = S.edl?.segments || [];
+  const rawDur = S.totalDuration;
+  const outDur = segs.filter(s => s.keep).reduce((acc, s) => acc + (s.end - s.start), 0);
+  const cuts = segs.filter(s => !s.keep).length;
+  const saved = rawDur - outDur;
+
+  el('stat-raw').textContent = fmtDur(rawDur);
+  el('stat-out').textContent = fmtDur(outDur);
+  el('stat-cuts').textContent = cuts;
+  el('stat-saved').textContent = fmtDur(saved);
+}
+
+/* ---- Segment editor ---- */
+function renderSegmentEditor() {
+  const container = el('segment-editor-content');
+  if (!S.selectedSeg || !S.edl) {
+    container.innerHTML = '<div class="segment-editor-empty">Click a segment on the timeline</div>';
+    return;
+  }
+  const seg = S.edl.segments.find(s => s.id === S.selectedSeg);
+  if (!seg) {
+    container.innerHTML = '<div class="segment-editor-empty">Segment not found</div>';
+    return;
+  }
+
+  const speakers = S.project.speakers || [];
+  const camBtns = speakers.map(sp => `
+    <button class="cam-pick-btn cam-pick-${sp.id} ${seg.camera === sp.id ? 'active' : ''}"
+            data-cam="${sp.id}">${sp.id} – ${esc(sp.name)}</button>
+  `).join('');
+
+  const layouts = ['single','split','pip'];
+  const layoutBtns = layouts.map(l => `
+    <button class="layout-pick-btn ${seg.layout === l ? 'active' : ''}" data-layout="${l}">${l}</button>
+  `).join('');
+
+  container.innerHTML = `
+    <div class="segment-editor">
+      <div class="seg-field">
+        <div class="seg-field-label">Segment</div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--text-muted)">
+          ${seg.id} · ${fmtSec(seg.start)} – ${fmtSec(seg.end)}
+        </div>
+      </div>
+      <div class="seg-field">
+        <div class="seg-field-label">Keep / Cut</div>
+        <div class="seg-toggle-row">
+          <button class="seg-toggle-btn ${seg.keep ? 'active-keep' : ''}" data-toggle="true">Keep</button>
+          <button class="seg-toggle-btn ${!seg.keep ? 'active-cut' : ''}" data-toggle="false">Cut</button>
+        </div>
+      </div>
+      <div class="seg-field">
+        <div class="seg-field-label">Camera</div>
+        <div class="cam-picker">${camBtns}</div>
+      </div>
+      <div class="seg-field">
+        <div class="seg-field-label">Layout</div>
+        <div class="layout-picker">${layoutBtns}</div>
+      </div>
+      ${seg.reason ? `<div class="seg-field">
+        <div class="seg-field-label">AI Reason</div>
+        <div style="font-size:11px;color:var(--text-muted)">${esc(seg.reason)}</div>
+      </div>` : ''}
+    </div>
+  `;
+
+  container.querySelectorAll('[data-toggle]').forEach(btn => {
+    btn.addEventListener('click', () => updateSegField(S.selectedSeg, 'keep', btn.dataset.toggle === 'true'));
+  });
+  container.querySelectorAll('[data-cam]').forEach(btn => {
+    btn.addEventListener('click', () => updateSegField(S.selectedSeg, 'camera', btn.dataset.cam));
+  });
+  container.querySelectorAll('[data-layout]').forEach(btn => {
+    btn.addEventListener('click', () => updateSegField(S.selectedSeg, 'layout', btn.dataset.layout));
+  });
+}
+
+/* ---- Segment field update ---- */
+async function updateSegField(segId, field, value) {
+  const seg = S.edl.segments.find(s => s.id === segId);
+  if (!seg) return;
+
+  seg[field] = value;
+
+  // Optimistic UI update
+  refreshTimeline();
+  refreshTranscriptCutState();
+  renderSegmentEditor();
+  buildCutList();
+  updateStats();
+
+  // Persist to server
+  try {
+    await API.put(`/api/projects/${S.project.id}/edl`, S.edl);
+  } catch (e) {
+    console.error('Failed to save EDL:', e);
+  }
+}
+
+function refreshTimeline() {
+  document.querySelectorAll('.timeline-segment').forEach(el => {
+    const seg = S.edl.segments.find(s => s.id === el.dataset.segId);
+    if (!seg) return;
+    el.className = `timeline-segment ${seg.keep ? 'keep' : 'cut'}${el.dataset.segId === S.selectedSeg ? ' selected' : ''}`;
+  });
+}
+
+/* ---- Downloads ---- */
+function renderDownloads(renders) {
+  const section = el('renders-section');
+  const list = el('render-list');
+  const keys = Object.keys(renders);
+  if (!keys.length) { section.style.display = 'none'; return; }
+  section.style.display = '';
+
+  list.innerHTML = keys.map(k => {
+    const r = renders[k];
+    if (r.status === 'done') {
+      return `
+        <div class="render-item">
+          <div class="render-item-name">${k}</div>
+          <a class="btn-small" href="${r.url}" download="${r.filename}">↓ Download</a>
+        </div>
+      `;
+    } else {
+      return `
+        <div class="render-item" style="flex-direction:column;align-items:flex-start">
+          <div class="render-item-name">${k} — <span style="color:#cc4444">Error</span></div>
+          <div class="render-item-error">${esc(r.error || 'Unknown error')}</div>
+        </div>
+      `;
+    }
+  }).join('');
+}
+
+/* ---- Top bar buttons ---- */
+el('btn-editor-home').addEventListener('click', () => {
+  clearPolling();
+  loadWelcome();
+});
+
+el('btn-export-edl').addEventListener('click', () => {
+  if (!S.edl) return;
+  const blob = new Blob([JSON.stringify(S.edl, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${S.project.name.replace(/[^a-z0-9]/gi,'_')}_edl.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+el('btn-render').addEventListener('click', () => {
+  el('render-modal').classList.remove('hidden');
+  el('render-prog-outer').style.display = 'none';
+  el('render-prog-msg').textContent = '';
+  el('render-error').classList.add('hidden');
+  el('btn-render-confirm').disabled = false;
+  el('btn-render-cancel').textContent = 'Cancel';
+});
+
+el('btn-render-cancel').addEventListener('click', () => {
+  el('render-modal').classList.add('hidden');
+});
+
+el('btn-render-confirm').addEventListener('click', async () => {
+  const targets = [];
+  if (el('export-fullEdit').checked) targets.push('fullEdit');
+  if (el('export-vertical').checked) targets.push('vertical');
+  if (el('export-short').checked) targets.push('short');
+  if (!targets.length) { alert('Select at least one export target.'); return; }
+
+  el('btn-render-confirm').disabled = true;
+  el('render-prog-outer').style.display = '';
+  el('render-prog-bar').style.width = '5%';
+  el('render-prog-msg').textContent = 'Queuing render…';
+  el('render-error').classList.add('hidden');
+
+  try {
+    await API.post(`/api/projects/${S.project.id}/render`, { targets });
+    el('btn-render-cancel').textContent = 'Close';
+    el('render-prog-msg').textContent = 'Rendering… this may take a few minutes.';
+    startRenderPoll();
+  } catch (e) {
+    el('render-error').textContent = e.message;
+    el('render-error').classList.remove('hidden');
+    el('btn-render-confirm').disabled = false;
+  }
+});
+
+function startRenderPoll() {
+  if (S.renderPollTimer) return;
+  S.renderPollTimer = setInterval(async () => {
+    try {
+      S.project = await API.get(`/api/projects/${S.project.id}`);
+      const p = S.project;
+
+      el('render-prog-bar').style.width = (p.progress?.percent || 10) + '%';
+      el('render-prog-msg').textContent = p.progress?.message || 'Rendering…';
+
+      if (p.status === 'ready' || p.status === 'error') {
+        clearInterval(S.renderPollTimer);
+        S.renderPollTimer = null;
+
+        if (p.status === 'error') {
+          el('render-error').textContent = p.progress?.message || 'Render failed';
+          el('render-error').classList.remove('hidden');
+        } else {
+          el('render-modal').classList.add('hidden');
+        }
+
+        renderDownloads(p.renders || {});
+
+        // Update topbar status
+        el('topbar-status').textContent = p.status;
+        el('topbar-status').className = `status-badge topbar-status-badge ${statusClass(p.status)}`;
+      }
+    } catch (e) {
+      console.error('Render poll error:', e);
+    }
+  }, 2000);
+}
+
+/* ============================================================
+   BOOT
+   ============================================================ */
+(async function init() {
+  try {
+    S.sysStatus = await API.get('/api/status');
+  } catch (e) {
+    console.warn('Could not fetch system status');
+  }
+  await loadWelcome();
+})();
+</script>
+</body>
+</html>
