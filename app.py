@@ -422,6 +422,7 @@ def start_render_short(project_id):
     camera_layout = data.get("camera_layout", "active")
     selected_cams = data.get("selected_cams", None)
     accent_color = data.get("accent_color", "#FFFF00")
+    sub_position = data.get("sub_position", "auto")
     output_name = data.get("output_name", "short_01")
 
     if not clips:
@@ -466,6 +467,7 @@ def start_render_short(project_id):
                 subtitle_style=subtitle_style,
                 camera_layout=camera_layout,
                 accent_color=accent_color,
+                sub_position=sub_position,
                 merged_transcript=p["merged_transcript"],
                 output_path=out_path,
                 output_dir=output_dir,

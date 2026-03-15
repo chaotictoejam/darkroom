@@ -902,6 +902,15 @@ a:hover { text-decoration: underline; }
 }
 .sb-cam-reorder button:hover { color: var(--text); }
 
+/* Subtitle position buttons */
+.sb-pos-btn {
+  font-size: 10px; padding: 3px 10px;
+  background: var(--bg-elevated); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer;
+}
+.sb-pos-btn:hover { border-color: #444; color: var(--text); }
+.sb-pos-btn.active { border-color: var(--red); color: var(--text); background: #130a0a; }
+
 /* Accent colour swatches */
 .sb-swatch {
   width: 24px; height: 24px; border-radius: 50%;
@@ -1602,6 +1611,17 @@ a:hover { text-decoration: underline; }
         <button class="sb-swatch" data-color="#FFFFFF" style="background:#fff;border-color:#444" title="White"></button>
         <input type="color" id="sb-accent-custom" value="#FFFF00" style="width:24px;height:24px;border-radius:50%;border:2px solid var(--border);background:none;cursor:pointer;padding:0" title="Custom colour" />
       </div>
+    </div>
+
+    <div id="sb-position-row" style="margin:12px 0 0;display:flex;align-items:center;gap:8px">
+      <span style="font-size:9px;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-dim);white-space:nowrap">Subtitle position</span>
+      <div style="display:flex;gap:5px">
+        <button class="sb-pos-btn" data-pos="top">Top</button>
+        <button class="sb-pos-btn" data-pos="middle">Middle</button>
+        <button class="sb-pos-btn" data-pos="bottom">Bottom</button>
+        <button class="sb-pos-btn active" data-pos="auto">Auto</button>
+      </div>
+      <span style="font-size:10px;color:var(--text-dim)" id="sb-pos-hint">Face-aware</span>
     </div>
 
     <div class="sb-output-row mt-8">
@@ -2622,6 +2642,11 @@ function openShortsBuilder(initialClip) {
   el('sb-swatches').querySelector('[data-color="#FFFF00"]').classList.add('active');
   updateAccentPreviews('#FFFF00');
   updateAccentVisibility();
+  // Reset position
+  S.subPosition = 'auto';
+  document.querySelectorAll('.sb-pos-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector('.sb-pos-btn[data-pos="auto"]').classList.add('active');
+  el('sb-pos-hint').textContent = 'Face-aware';
   // Reset camera layout
   document.querySelectorAll('#sb-layout-grid .sub-style-opt').forEach(o => o.classList.remove('active'));
   el('sb-layout-grid').querySelector('[data-cam-layout="active"]').classList.add('active');
@@ -2722,6 +2747,18 @@ el('sb-accent-custom').addEventListener('input', e => {
   S.accentColor = e.target.value;
   document.querySelectorAll('#sb-swatches .sb-swatch').forEach(b => b.classList.remove('active'));
   updateAccentPreviews(S.accentColor);
+});
+
+// Subtitle position picker
+S.subPosition = 'auto';
+const POS_HINTS = { top: 'Always at top', middle: 'Centre of frame', bottom: 'Always at bottom', auto: 'Face-aware' };
+document.querySelectorAll('.sb-pos-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.sb-pos-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    S.subPosition = btn.dataset.pos;
+    el('sb-pos-hint').textContent = POS_HINTS[S.subPosition] || '';
+  });
 });
 
 // Camera layout pick — show/hide camera selector for split-screen
@@ -2847,6 +2884,7 @@ el('sb-render-btn').addEventListener('click', async () => {
       camera_layout: camLayout,
       selected_cams: selectedCams,
       accent_color: S.accentColor,
+      sub_position: S.subPosition,
       output_name: outputName,
     });
     el('shorts-modal').classList.add('hidden');

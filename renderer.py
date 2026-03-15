@@ -628,12 +628,44 @@ def _clamp_chunks(all_words: list[dict], chunk_size: int = 4):
     return clamped
 
 
+def _sub_position_tag(position: str, speakers_dict: dict | None = None) -> str:
+    """
+    Return an ASS override tag string that positions the subtitle line.
+
+    position values
+    ───────────────
+    bottom  – \an2  near the bottom edge (default)
+    top     – \an8  near the top edge
+    auto    – uses face detection on the first camera: if the face sits in the
+              bottom half of the frame, subs go to the top, and vice-versa.
+              Falls back to bottom if detection fails.
+    """
+    if position == "top":
+        return r"{\an8\pos(540,200)}"
+
+    if position == "middle":
+        return r"{\an5\pos(540,960)}"
+
+    if position == "auto" and speakers_dict:
+        # Sample the first camera in the dict
+        first_cam = next(iter(speakers_dict.values()), None)
+        if first_cam:
+            _, cy = _detect_face_center_ratio(first_cam["file_path"])
+            # Face in bottom 55% → put subs at top
+            return r"{\an8\pos(540,200)}" if cy > 0.45 else r"{\an2\pos(540,1730)}"
+
+    # default: bottom
+    return r"{\an2\pos(540,1730)}"
+
+
 def generate_ass(
     merged_transcript: list[dict],
     clips: list[dict],
     edl_segments: list[dict],
     style: str = "chunk",
     accent_color: str = "#FFFF00",
+    sub_position: str = "bottom",
+    speakers_dict: dict | None = None,
 ) -> str:
     """
     Generate ASS subtitle content for a short.
@@ -697,7 +729,7 @@ def generate_ass(
 
     # ── Build ASS events ──────────────────────────────────────────────────────
     events = []
-    pos = r"{\an2\pos(540,1680)}"   # bottom-centre lower-third
+    pos = _sub_position_tag(sub_position, speakers_dict)
 
     ac_ass = _hex_to_ass(accent_color, alpha=0)  # inline colour override
 
@@ -797,6 +829,7 @@ def render_short_custom(
     output_dir,
     camera_layout: str = "active",
     accent_color: str = "#FFFF00",
+    sub_position: str = "auto",
 ) -> None:
     """
     Render a short from one or more user-defined clip windows.
@@ -831,7 +864,12 @@ def render_short_custom(
 
     # Subtitle burn-in
     if subtitle_style and subtitle_style != "none":
-        ass_content = generate_ass(merged_transcript, clips, edl_segments, subtitle_style, accent_color)
+        ass_content = generate_ass(
+            merged_transcript, clips, edl_segments,
+            subtitle_style, accent_color,
+            sub_position=sub_position,
+            speakers_dict=speakers_dict,
+        )
         if ass_content:
             from pathlib import Path as _Path
             ass_path = str(_Path(output_dir) / "subtitles.ass")
