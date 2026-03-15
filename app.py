@@ -420,7 +420,8 @@ def start_render_short(project_id):
     clips = data.get("clips", [])
     subtitle_style = data.get("subtitle_style", "chunk")
     camera_layout = data.get("camera_layout", "active")
-    selected_cams = data.get("selected_cams", None)  # None = all cameras
+    selected_cams = data.get("selected_cams", None)
+    accent_color = data.get("accent_color", "#FFFF00")
     output_name = data.get("output_name", "short_01")
 
     if not clips:
@@ -464,6 +465,7 @@ def start_render_short(project_id):
                 speakers_dict=filtered_speakers,
                 subtitle_style=subtitle_style,
                 camera_layout=camera_layout,
+                accent_color=accent_color,
                 merged_transcript=p["merged_transcript"],
                 output_path=out_path,
                 output_dir=output_dir,

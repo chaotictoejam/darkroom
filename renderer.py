@@ -531,24 +531,8 @@ def _render_vertical(segments: list[dict], speakers_dict: dict, output_path: str
 
 
 # ---------------------------------------------------------------------------
-# Subtitle generation (ASS format, Submagic-style)
+# Subtitle generation (ASS format, Submagic/Instagram-style)
 # ---------------------------------------------------------------------------
-
-_ASS_HEADER = """\
-[Script Info]
-ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
-WrapStyle: 0
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: word,Arial,95,&H00FFFFFF,&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,1,5,0,2,60,60,200,1
-Style: chunk,Arial,78,&H00FFFFFF,&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,1,4,0,2,60,60,200,1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
 
 def _ass_time(seconds: float) -> str:
     h = int(seconds // 3600)
@@ -561,22 +545,113 @@ def _esc_ass(text: str) -> str:
     return text.replace("{", "\\{").replace("}", "\\}").replace("\n", "\\N")
 
 
+def _hex_to_ass(hex_color: str, alpha: int = 0) -> str:
+    """Convert #RRGGBB to ASS &HAABBGGRR& color string."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"&H{alpha:02X}{b:02X}{g:02X}{r:02X}&"
+
+
+def _ass_header(accent: str = "#FFFF00") -> str:
+    """
+    Build the ASS [Script Info] + [V4+ Styles] header dynamically so the accent
+    colour is baked into the named styles used by each render mode.
+
+    Styles defined
+    ──────────────
+    plain   – white text, thick black outline (classic)
+    box     – white text on solid accent-coloured background box
+    neon    – accent-coloured text, thick black outline, bold
+    active  – for karaoke: accent box behind the active word
+    inactive– for karaoke: dimmed white text for non-active words
+    """
+    ac      = _hex_to_ass(accent, alpha=0)     # opaque accent
+    ac_box  = _hex_to_ass(accent, alpha=0x20)  # slightly transparent box fill
+    ac_dim  = _hex_to_ass(accent, alpha=0x99)  # dim accent for inactive words
+
+    # Format: Name, Font, Size, Primary, Secondary, Outline, Back, Bold, Italic,
+    #         Underline, Strike, ScaleX, ScaleY, Spacing, Angle,
+    #         BorderStyle, Outline, Shadow, Align, MarginL, MarginR, MarginV, Encoding
+    styles = [
+        # plain: white, black outline, BorderStyle=1
+        f"Style: plain,Arial,82,&H00FFFFFF,&H000000FF,&H00000000,&HA0000000,"
+        f"-1,0,0,0,100,100,2,0,1,5,2,2,60,60,180,1",
+
+        # box: white text on accent-coloured opaque box, BorderStyle=3
+        f"Style: box,Arial,82,&H00FFFFFF,&H000000FF,{ac},{ac_box},"
+        f"-1,0,0,0,100,100,2,0,3,10,0,2,60,60,180,1",
+
+        # neon: accent text, bold, thick black outline
+        f"Style: neon,Arial,88,{ac},&H000000FF,&H00000000,&HA0000000,"
+        f"-1,0,0,0,100,100,2,0,1,7,3,2,60,60,180,1",
+
+        # active word in karaoke: black text on accent box
+        f"Style: active,Arial,82,&H00000000,&H000000FF,{ac},{ac},"
+        f"-1,0,0,0,100,100,2,0,3,10,0,2,60,60,180,1",
+
+        # inactive words in karaoke: dimmed white, thin outline
+        f"Style: inactive,Arial,82,&H80FFFFFF,&H000000FF,&H40000000,&HA0000000,"
+        f"0,0,0,0,100,100,2,0,1,2,1,2,60,60,180,1",
+    ]
+
+    return (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        "PlayResX: 1080\n"
+        "PlayResY: 1920\n"
+        "WrapStyle: 0\n\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        + "\n".join(styles)
+        + "\n\n[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
+
+
+def _clamp_chunks(all_words: list[dict], chunk_size: int = 4):
+    """Split words into chunks and clamp each chunk's end to the next chunk's start."""
+    chunks = [all_words[i:i + chunk_size] for i in range(0, len(all_words), chunk_size)]
+    clamped = []
+    for ci, chunk in enumerate(chunks):
+        t_start = chunk[0]["start"]
+        t_end = (
+            min(chunk[-1]["end"], chunks[ci + 1][0]["start"] - 0.001)
+            if ci + 1 < len(chunks)
+            else chunk[-1]["end"]
+        )
+        if t_end <= t_start:
+            t_end = t_start + 0.1
+        clamped.append((chunk, t_start, t_end))
+    return clamped
+
+
 def generate_ass(
     merged_transcript: list[dict],
     clips: list[dict],
     edl_segments: list[dict],
     style: str = "chunk",
+    accent_color: str = "#FFFF00",
 ) -> str:
     """
-    Generate ASS subtitle content for a short composed of one or more clips.
+    Generate ASS subtitle content for a short.
 
-    Handles cuts within clip windows — the output timestamps match what
-    FFmpeg will actually render after removing cut segments.
+    Styles
+    ──────
+    word        – one word at a time, plain white
+    chunk       – 4 words at a time, plain white
+    box         – 4 words on a coloured background box
+    box_word    – one word at a time on a coloured background box
+    karaoke     – 4-word group; active word highlighted in accent box
+    neon        – 4-word chunk in bold accent colour
+    none        – no subtitles
     """
     if style == "none":
         return ""
 
-    # Build ordered list of (src_start, src_end) pieces that will be rendered
+    # ── Collect rendered source pieces (EDL cuts applied) ────────────────────
     rendered_pieces = []
     for clip in clips:
         for seg in edl_segments:
@@ -590,7 +665,7 @@ def generate_ass(
     if not rendered_pieces:
         return ""
 
-    # Collect word-level events mapped to output timestamps
+    # ── Build word list with output-timeline timestamps ───────────────────────
     all_words = []
     output_offset = 0.0
     for piece in rendered_pieces:
@@ -612,76 +687,91 @@ def generate_ass(
     if not all_words:
         return ""
 
-    # Sort by start and clamp each word's end to the next word's start
-    # to prevent Whisper timestamp overlap from causing visual stacking
+    # ── Fix timestamp overlaps ────────────────────────────────────────────────
     all_words.sort(key=lambda w: w["start"])
     for i in range(len(all_words) - 1):
-        gap = all_words[i + 1]["start"] - all_words[i]["start"]
         if all_words[i]["end"] > all_words[i + 1]["start"]:
             all_words[i]["end"] = all_words[i + 1]["start"] - 0.001
-        # Ensure minimum visible duration
         if all_words[i]["end"] - all_words[i]["start"] < 0.05:
             all_words[i]["end"] = all_words[i]["start"] + 0.05
 
+    # ── Build ASS events ──────────────────────────────────────────────────────
     events = []
-    pos = r"{\an2\pos(540,1650)}"  # bottom-center, inside lower third
+    pos = r"{\an2\pos(540,1680)}"   # bottom-centre lower-third
+
+    ac_ass = _hex_to_ass(accent_color, alpha=0)  # inline colour override
 
     if style == "word":
         for w in all_words:
             if w["end"] > w["start"]:
                 events.append(
                     f"Dialogue: 0,{_ass_time(w['start'])},{_ass_time(w['end'])},"
-                    f"word,,0,0,0,,{pos}{_esc_ass(w['word'].upper())}"
+                    f"plain,,0,0,0,,{pos}{_esc_ass(w['word'].upper())}"
                 )
 
     elif style == "chunk":
-        chunk_size = 4
-        chunks = [all_words[i:i + chunk_size] for i in range(0, len(all_words), chunk_size)]
-        for ci, chunk in enumerate(chunks):
-            t_start = chunk[0]["start"]
-            # Clamp end to next chunk's start to prevent overlap
-            if ci + 1 < len(chunks):
-                t_end = min(chunk[-1]["end"], chunks[ci + 1][0]["start"] - 0.001)
-            else:
-                t_end = chunk[-1]["end"]
-            if t_end <= t_start:
-                t_end = t_start + 0.1
+        for chunk, t_start, t_end in _clamp_chunks(all_words):
             text = " ".join(w["word"].upper() for w in chunk)
             events.append(
                 f"Dialogue: 0,{_ass_time(t_start)},{_ass_time(t_end)},"
-                f"chunk,,0,0,0,,{pos}{_esc_ass(text)}"
+                f"plain,,0,0,0,,{pos}{_esc_ass(text)}"
             )
 
-    elif style == "karaoke":
-        chunk_size = 4
-        chunks = [all_words[i:i + chunk_size] for i in range(0, len(all_words), chunk_size)]
-        for ci, chunk in enumerate(chunks):
-            # Clamp group end to next chunk start
-            if ci + 1 < len(chunks):
-                group_end = min(chunk[-1]["end"], chunks[ci + 1][0]["start"] - 0.001)
-            else:
-                group_end = chunk[-1]["end"]
+    elif style == "box":
+        for chunk, t_start, t_end in _clamp_chunks(all_words):
+            text = " ".join(w["word"].upper() for w in chunk)
+            events.append(
+                f"Dialogue: 0,{_ass_time(t_start)},{_ass_time(t_end)},"
+                f"box,,0,0,0,,{pos}{_esc_ass(text)}"
+            )
 
+    elif style == "box_word":
+        for w in all_words:
+            if w["end"] > w["start"]:
+                events.append(
+                    f"Dialogue: 0,{_ass_time(w['start'])},{_ass_time(w['end'])},"
+                    f"box,,0,0,0,,{pos}{_esc_ass(w['word'].upper())}"
+                )
+
+    elif style == "karaoke":
+        for chunk, _, group_end in _clamp_chunks(all_words):
             for j, active_w in enumerate(chunk):
                 w_start = active_w["start"]
-                # Each word slot ends at next word's start (or group end for last)
                 w_end = chunk[j + 1]["start"] if j + 1 < len(chunk) else group_end
                 if w_end <= w_start:
                     w_end = w_start + 0.05
+
                 parts = []
                 for k, w in enumerate(chunk):
                     word_up = _esc_ass(w["word"].upper())
                     if k == j:
-                        parts.append(f"{{\\c&H0000FFFF&}}{word_up}{{\\c&H00FFFFFF&}}")
+                        # Active word: accent box style via inline override
+                        parts.append(f"{{\\r active}}{word_up}{{\\r inactive}}")
                     else:
-                        parts.append(f"{{\\c&H80FFFFFF&}}{word_up}{{\\c&H00FFFFFF&}}")
-                line = "  ".join(parts)
+                        parts.append(word_up)
+                # Emit inactive base + one active overlay
+                inactive_line = "  ".join(
+                    _esc_ass(w["word"].upper()) for w in chunk
+                )
                 events.append(
                     f"Dialogue: 0,{_ass_time(w_start)},{_ass_time(w_end)},"
-                    f"chunk,,0,0,0,,{pos}{line}"
+                    f"inactive,,0,0,0,,{pos}{_esc_ass(inactive_line)}"
+                )
+                active_word = _esc_ass(active_w["word"].upper())
+                events.append(
+                    f"Dialogue: 1,{_ass_time(w_start)},{_ass_time(w_end)},"
+                    f"active,,0,0,0,,{pos}{active_word}"
                 )
 
-    return _ASS_HEADER + "\n".join(events) + "\n"
+    elif style == "neon":
+        for chunk, t_start, t_end in _clamp_chunks(all_words):
+            text = " ".join(w["word"].upper() for w in chunk)
+            events.append(
+                f"Dialogue: 0,{_ass_time(t_start)},{_ass_time(t_end)},"
+                f"neon,,0,0,0,,{pos}{_esc_ass(text)}"
+            )
+
+    return _ass_header(accent_color) + "\n".join(events) + "\n"
 
 
 def _ffmpeg_escape_path(path: str) -> str:
@@ -706,14 +796,16 @@ def render_short_custom(
     output_path: str,
     output_dir,
     camera_layout: str = "active",
+    accent_color: str = "#FFFF00",
 ) -> None:
     """
     Render a short from one or more user-defined clip windows.
 
     clips          — [{start, end, label?}, ...]  (original-timeline timestamps)
     edl_segments   — full EDL segment list (kept + cut)
-    subtitle_style — 'word' | 'chunk' | 'karaoke' | 'none'
+    subtitle_style — 'word'|'chunk'|'box'|'box_word'|'karaoke'|'neon'|'none'
     camera_layout  — 'active' (EDL-driven single cam) | 'all' (split-screen all cams)
+    accent_color   — hex colour string e.g. '#FFFF00'
     """
     if camera_layout == "all":
         # Show all cameras simultaneously stacked/tiled — use full clip windows, no EDL cuts
@@ -739,7 +831,7 @@ def render_short_custom(
 
     # Subtitle burn-in
     if subtitle_style and subtitle_style != "none":
-        ass_content = generate_ass(merged_transcript, clips, edl_segments, subtitle_style)
+        ass_content = generate_ass(merged_transcript, clips, edl_segments, subtitle_style, accent_color)
         if ass_content:
             from pathlib import Path as _Path
             ass_path = str(_Path(output_dir) / "subtitles.ass")
