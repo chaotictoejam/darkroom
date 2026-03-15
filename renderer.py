@@ -41,21 +41,42 @@ def get_video_info(file_path: str) -> dict:
 # Core render dispatch
 # ---------------------------------------------------------------------------
 
-def render_project(project: dict, targets: list[str], projects_dir: Path) -> dict:
+def render_project(project: dict, targets: list[str], projects_dir: Path,
+                   camera_layout: str = "edl", cam_order: list = None) -> dict:
     """Render a project to the requested targets. Returns {target: result_dict}."""
     project_dir = Path(projects_dir) / project["id"]
     output_dir = project_dir / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     edl = project["edl"]
-    speakers_dict = {s["id"]: s for s in project["speakers"]}
+
+    # Build speakers dict, respecting user-specified camera order for split layouts
+    all_speakers = {s["id"]: s for s in project["speakers"]}
+    if camera_layout == "split" and cam_order:
+        speakers_dict = {cid: all_speakers[cid] for cid in cam_order if cid in all_speakers}
+    else:
+        speakers_dict = all_speakers
+
     results = {}
 
     for target in targets:
         try:
             if target == "fullEdit":
                 out = str(output_dir / "fullEdit.mp4")
-                _render_fulledit(edl["segments"], speakers_dict, out)
+                if camera_layout == "split":
+                    input_args, filter_complex = _build_splitscreen_filter_landscape(
+                        speakers_dict, edl["segments"]
+                    )
+                    cmd = ["ffmpeg", "-y"] + input_args + [
+                        "-filter_complex", filter_complex,
+                        "-map", "[outv]", "-map", "[outa]",
+                        "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                        "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
+                        out,
+                    ]
+                    _run_ffmpeg(cmd)
+                else:
+                    _render_fulledit(edl["segments"], speakers_dict, out)
                 results["fullEdit"] = {
                     "status": "done",
                     "url": f"/projects/{project['id']}/files/output/fullEdit.mp4",
@@ -153,6 +174,84 @@ def _build_concat_filter(kept_segments: list[dict], speakers_dict: dict, vertica
     filter_complex = ";".join(filter_parts) + ";" + concat_str
 
     return input_args, filter_complex, n
+
+
+def _build_splitscreen_filter_landscape(speakers_dict: dict, segments: list[dict]):
+    """
+    Build a 16:9 split-screen filter showing all cameras side-by-side for the
+    full duration of all kept segments (EDL cuts still applied to timing, but all
+    cams visible simultaneously).
+
+    Layout for 1920×1080:
+      2 cams → side by side, each 960×1080
+      3 cams → three columns,  each 640×1080
+      4 cams → 2×2 grid,       each 960×540
+    """
+    cam_ids = list(speakers_dict.keys())
+    n_cams = len(cam_ids)
+    if n_cams == 0:
+        raise ValueError("No cameras in project")
+
+    kept = [s for s in segments if s.get("keep", True)]
+    if not kept:
+        raise ValueError("No kept segments to render")
+
+    input_args = []
+    for cam_id in cam_ids:
+        input_args.extend(["-i", speakers_dict[cam_id]["file_path"]])
+
+    # Tile dimensions (total canvas 1920×1080)
+    if n_cams == 1:
+        per_w, per_h = 1920, 1080
+    elif n_cams == 2:
+        per_w, per_h = 960, 1080
+    elif n_cams == 3:
+        per_w, per_h = 640, 1080
+    else:  # 4
+        per_w, per_h = 960, 540
+
+    filter_parts = []
+    concat_v_labels = []
+    concat_a_labels = []
+
+    for si, seg in enumerate(kept):
+        cs, ce = seg["start"], seg["end"]
+
+        for ki, cam_id in enumerate(cam_ids):
+            filter_parts.append(
+                f"[{ki}:v]trim=start={cs}:end={ce},setpts=PTS-STARTPTS,"
+                f"scale={per_w}:{per_h}:force_original_aspect_ratio=increase,"
+                f"crop={per_w}:{per_h}[sv{si}_{ki}]"
+            )
+
+        tile_labels = "".join(f"[sv{si}_{ki}]" for ki in range(n_cams))
+        if n_cams == 1:
+            filter_parts.append(f"[sv{si}_0]copy[sv{si}]")
+        elif n_cams == 2:
+            filter_parts.append(f"{tile_labels}hstack=inputs=2[sv{si}]")
+        elif n_cams == 3:
+            filter_parts.append(f"{tile_labels}hstack=inputs=3[sv{si}]")
+        else:
+            filter_parts.append(
+                f"{tile_labels}xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0[sv{si}]"
+            )
+
+        # Mix audio from all cams
+        for ki in range(n_cams):
+            filter_parts.append(
+                f"[{ki}:a]atrim=start={cs}:end={ce},asetpts=PTS-STARTPTS[sa{si}_{ki}]"
+            )
+        amix_in = "".join(f"[sa{si}_{ki}]" for ki in range(n_cams))
+        filter_parts.append(f"{amix_in}amix=inputs={n_cams}:normalize=0[sa{si}]")
+
+        concat_v_labels.append(f"[sv{si}]")
+        concat_a_labels.append(f"[sa{si}]")
+
+    n = len(kept)
+    all_labels = "".join(concat_v_labels[i] + concat_a_labels[i] for i in range(n))
+    filter_parts.append(f"{all_labels}concat=n={n}:v=1:a=1[outv][outa]")
+
+    return input_args, ";".join(filter_parts)
 
 
 def _build_splitscreen_filter(clips: list[dict], speakers_dict: dict):

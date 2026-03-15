@@ -50,7 +50,19 @@ def transcribe_file(file_path: str, speaker_id: str, speaker_name: str, model_na
     try:
         audio_np = _wav_to_numpy(audio_path)
         model = whisper.load_model(model_name)
-        result = model.transcribe(audio_np, word_timestamps=True)
+        result = model.transcribe(
+            audio_np,
+            word_timestamps=True,
+            # temperature=0 forces greedy decoding — far less likely to hallucinate loops
+            temperature=0,
+            # Don't feed previous segment text as context — prevents one hallucination
+            # from snowballing into the next segment
+            condition_on_previous_text=False,
+            # Whisper's own thresholds for dropping likely-silence segments
+            no_speech_threshold=0.5,
+            logprob_threshold=-1.0,
+            compression_ratio_threshold=2.4,
+        )
     finally:
         try:
             os.unlink(audio_path)
@@ -59,6 +71,12 @@ def transcribe_file(file_path: str, speaker_id: str, speaker_name: str, model_na
 
     segments = []
     for seg in result["segments"]:
+        # Skip segments Whisper itself flagged as likely silence
+        if seg.get("no_speech_prob", 0) > 0.5:
+            continue
+        # Skip segments with suspiciously high compression ratio (repetitive text)
+        if seg.get("compression_ratio", 0) > 2.4:
+            continue
         segments.append({
             "speaker_id": speaker_id,
             "speaker_name": speaker_name,
@@ -94,48 +112,97 @@ def transcribe_all(speakers: list[dict], model_name: str, progress_callback=None
     return transcripts
 
 
+# Single-word fillers that Whisper commonly hallucinates on silence
+_FILLER_WORDS = {
+    "okay", "ok", "yeah", "yes", "no", "right", "alright", "hmm", "mhm",
+    "uh", "um", "uhh", "umm", "mm", "mmm", "ah", "oh", "er", "erm",
+    "like", "so", "well", "now", "anyway", "sure", "yep", "nope",
+}
+
+
+def _normalise(word: str) -> str:
+    return word.lower().strip(".,!?\"'")
+
+
 def _filter_hallucinations(segments: list[dict]) -> list[dict]:
     """
-    Remove Whisper hallucination artifacts.
+    Remove Whisper hallucination artifacts:
 
-    Whisper commonly hallucinates on silence by looping a single word or short
-    phrase repeatedly (e.g. "okay okay okay okay..."). Detect and drop those segments.
+    1. Within-segment loops  — "okay okay okay okay"
+    2. Repeating-phrase loops — "you know you know you know"
+    3. Pure filler segments  — segment text is only 1-2 filler words
+    4. Cross-segment runs    — 3+ consecutive segments with the same 1-2 word text
     """
-    filtered = []
+    # --- Pass 1: per-segment checks ---
+    pass1 = []
     for seg in segments:
         text = seg["text"].strip()
         if not text:
             continue
 
         words = text.split()
-        if not words:
+        norm = [_normalise(w) for w in words]
+
+        # Drop pure-filler segments (e.g. a segment that is just "Okay." or "Yeah, yeah.")
+        real_words = [w for w in norm if w not in _FILLER_WORDS]
+        if not real_words and len(words) <= 4:
             continue
 
-        # Detect consecutive-word repetition loops (e.g. "okay okay okay okay")
+        # Within-segment word loop: "okay okay okay okay"
         if len(words) >= 4:
-            counts = Counter(w.lower().strip(".,!?") for w in words)
+            counts = Counter(norm)
             top_word, top_count = counts.most_common(1)[0]
-            # If a single word is >60% of the segment AND appears ≥4 times → hallucination
-            if top_count >= 4 and top_count / len(words) > 0.6:
+            if top_count >= 4 and top_count / len(words) > 0.55:
                 continue
 
-        # Detect repeating short phrases (e.g. "you know you know you know")
-        # Check if the first 1-3 words repeat as a pattern across the segment
+        # Within-segment phrase loop: "you know you know you know"
+        is_phrase_loop = False
         for phrase_len in (1, 2, 3):
             if len(words) >= phrase_len * 4:
-                phrase = tuple(w.lower() for w in words[:phrase_len])
-                all_phrases = [
-                    tuple(w.lower() for w in words[i:i + phrase_len])
-                    for i in range(0, len(words) - phrase_len + 1, phrase_len)
+                phrase = tuple(norm[:phrase_len])
+                chunks = [
+                    tuple(norm[i:i + phrase_len])
+                    for i in range(0, len(norm) - phrase_len + 1, phrase_len)
                 ]
-                if all_phrases and all_phrases.count(phrase) / len(all_phrases) > 0.7:
-                    break  # is a loop — skip below
-        else:
-            filtered.append(seg)
+                if chunks and chunks.count(phrase) / len(chunks) > 0.65:
+                    is_phrase_loop = True
+                    break
+        if is_phrase_loop:
             continue
-        # fell through the for-loop break → hallucination, skip segment
 
-    return filtered
+        pass1.append(seg)
+
+    # --- Pass 2: cross-segment run detection ---
+    # If the same short text appears in 3+ consecutive segments, drop the run.
+    if not pass1:
+        return pass1
+
+    result = []
+    i = 0
+    while i < len(pass1):
+        seg = pass1[i]
+        text_norm = " ".join(_normalise(w) for w in seg["text"].split())
+        word_count = len(seg["text"].split())
+
+        # Only check short segments (≤5 words) for cross-segment runs
+        if word_count <= 5:
+            run_end = i + 1
+            while run_end < len(pass1):
+                other_norm = " ".join(_normalise(w) for w in pass1[run_end]["text"].split())
+                if other_norm == text_norm:
+                    run_end += 1
+                else:
+                    break
+            run_len = run_end - i
+            if run_len >= 3:
+                # Drop the entire run
+                i = run_end
+                continue
+
+        result.append(seg)
+        i += 1
+
+    return result
 
 
 def merge_transcripts(transcripts: dict[str, list], speakers: list[dict]) -> list[dict]:

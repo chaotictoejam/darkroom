@@ -363,6 +363,8 @@ def start_render(project_id):
 
     data = request.get_json(force=True) or {}
     targets = data.get("targets", ["fullEdit"])
+    camera_layout = data.get("camera_layout", "edl")
+    cam_order = data.get("cam_order", None)
 
     def _run():
         try:
@@ -371,7 +373,9 @@ def start_render(project_id):
             p["progress"] = {"step": "rendering", "percent": 5, "message": f"Rendering {', '.join(targets)}…"}
             save_project(p)
 
-            results = render_project(p, targets, PROJECTS_DIR)
+            results = render_project(p, targets, PROJECTS_DIR,
+                                     camera_layout=camera_layout,
+                                     cam_order=cam_order)
 
             p = get_project(project_id)
             p["renders"].update(results)

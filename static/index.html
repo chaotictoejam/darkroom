@@ -1061,6 +1061,50 @@ a:hover { text-decoration: underline; }
 .modal-title { font-size: 16px; font-weight: 700; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
 
+/* Preview modal */
+.preview-modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.92);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  z-index: 200;
+  gap: 14px;
+}
+.preview-modal-overlay.hidden { display: none; }
+.preview-modal-video {
+  max-width: min(90vw, 1280px);
+  max-height: 72vh;
+  width: 100%;
+  border-radius: var(--radius);
+  background: #000;
+  display: block;
+}
+.preview-modal-bar {
+  display: flex; align-items: center; gap: 10px;
+  width: min(90vw, 1280px);
+}
+.preview-modal-cam-tabs {
+  display: flex; gap: 6px; flex: 1;
+}
+.preview-modal-cam-tab {
+  font-size: 11px; padding: 4px 12px;
+  background: var(--bg-elevated); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); cursor: pointer; color: var(--text-muted);
+}
+.preview-modal-cam-tab.active { border-color: var(--red); color: var(--text); background: #130a0a; }
+.preview-modal-close {
+  font-size: 11px; padding: 4px 14px; margin-left: auto;
+}
+.cam-card-play-btn {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 50%; width: 32px; height: 32px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; color: #fff; cursor: pointer; opacity: 0;
+  transition: opacity 0.15s;
+}
+.cam-card:hover .cam-card-play-btn { opacity: 1; }
+
 /* Analysis option cards */
 .analysis-options {
   width: 100%;
@@ -1353,6 +1397,7 @@ a:hover { text-decoration: underline; }
     <div class="topbar-project-name" id="topbar-project-name">Project</div>
     <div id="topbar-status" class="status-badge topbar-status-badge"></div>
     <div class="topbar-right">
+      <button class="btn-topbar" id="btn-preview-topbar">Preview</button>
       <button class="btn-topbar" id="btn-export-edl">Export EDL</button>
       <button class="btn-topbar-red" id="btn-render" disabled>Render</button>
     </div>
@@ -1530,21 +1575,55 @@ a:hover { text-decoration: underline; }
 
     <div class="modal-actions">
       <button class="btn-ghost" id="sb-cancel">Cancel</button>
+      <button class="btn-ghost" id="sb-preview-btn">Preview ▶</button>
       <button class="btn-topbar-red" id="sb-render-btn">Render Short ▶</button>
     </div>
   </div>
 </div>
 
 <!-- ============================================================
+     PREVIEW MODAL
+     ============================================================ -->
+<div class="preview-modal-overlay hidden" id="preview-modal">
+  <div class="preview-modal-bar">
+    <div class="preview-modal-cam-tabs" id="preview-cam-tabs"></div>
+    <button class="btn-ghost preview-modal-close" id="preview-modal-close">✕ Close</button>
+  </div>
+  <video class="preview-modal-video" id="preview-video" controls playsinline></video>
+  <div style="font-size:10px;color:var(--text-dim);text-align:center" id="preview-modal-label"></div>
+</div>
+
+<!-- ============================================================
      RENDER MODAL
      ============================================================ -->
 <div class="modal-overlay hidden" id="render-modal">
-  <div class="modal">
+  <div class="modal" style="width:420px;max-width:96vw">
     <div class="modal-title">Render</div>
     <div id="render-modal-body">
+
+      <!-- Layout selector -->
+      <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-dim);margin-bottom:8px">Camera layout</div>
+      <div class="sub-style-grid" id="render-layout-grid" style="grid-template-columns:1fr 1fr;margin-bottom:14px">
+        <label class="sub-style-opt active" data-render-layout="edl">
+          <input type="radio" name="render_layout" value="edl" checked />
+          <div class="sub-style-preview" style="font-size:11px">&#9646;<br/>EDL</div>
+          <div class="sub-style-label">Active speaker</div>
+        </label>
+        <label class="sub-style-opt" data-render-layout="split">
+          <input type="radio" name="render_layout" value="split" />
+          <div class="sub-style-preview" style="font-size:10px;line-height:1.5">&#9646;&#9646;&#9646;<br/>Split</div>
+          <div class="sub-style-label">All cams side-by-side</div>
+        </label>
+      </div>
+
+      <!-- Camera order — only shown for split layout -->
+      <div id="render-cam-picker" class="hidden">
+        <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-dim);margin-bottom:8px">Camera order <span style="font-size:9px;color:var(--text-dim)">(left → right)</span></div>
+        <div id="render-cam-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px"></div>
+      </div>
+
       <p style="font-size:12px;color:var(--text-muted);line-height:1.6">
-        Selected export targets will be rendered by FFmpeg.<br/>
-        This may take a few minutes for long recordings.
+        FFmpeg will render the selected layout.<br/>This may take a few minutes.
       </p>
       <div class="progress-bar-outer mt-8" style="display:none" id="render-prog-outer">
         <div class="progress-bar-inner" id="render-prog-bar" style="width:5%"></div>
@@ -2168,8 +2247,13 @@ function buildPreviewRow() {
         <span class="cam-dot cam-dot-${sp.id}"></span>
         <span>${esc(sp.name)}</span>
       </div>
+      <div class="cam-card-play-btn" title="Preview fullscreen">▶</div>
     `;
-    card.addEventListener('click', () => {
+    card.addEventListener('click', e => {
+      if (e.target.closest('.cam-card-play-btn')) {
+        openPreviewModal(sp, S.currentTime);
+        return;
+      }
       // If a segment is selected, change its camera
       if (S.selectedSeg) {
         updateSegField(S.selectedSeg, 'camera', sp.id);
@@ -2316,6 +2400,68 @@ function seekTo(t) {
 }
 
 /* ---- Transcript ---- */
+/* ---- Preview modal ---- */
+function openPreviewModal(initialSpeaker, startTime, clipRange) {
+  const speakers = S.project.speakers || [];
+  const vid = el('preview-video');
+  const tabs = el('preview-cam-tabs');
+  const label = el('preview-modal-label');
+
+  // Build camera tabs
+  tabs.innerHTML = speakers.map(sp => `
+    <button class="preview-modal-cam-tab ${sp.id === initialSpeaker.id ? 'active' : ''}"
+            data-cam="${sp.id}" data-file="${encodeURIComponent(sp.file)}">
+      <span style="color:var(--red);margin-right:4px">${sp.id}</span>${esc(sp.name)}
+    </button>
+  `).join('');
+
+  function loadCam(sp, t) {
+    const fileUrl = `/projects/${S.project.id}/files/${encodeURIComponent(sp.file)}`;
+    vid.src = fileUrl;
+    vid.currentTime = t ?? startTime ?? 0;
+    label.textContent = `${sp.name} · ${sp.file}`;
+    if (clipRange) {
+      label.textContent += ` · Clip ${fmtTime(clipRange.start)} – ${fmtTime(clipRange.end)}`;
+      vid.addEventListener('timeupdate', function onTU() {
+        if (vid.currentTime >= clipRange.end) {
+          vid.currentTime = clipRange.start;
+        }
+      }, { once: false });
+    }
+    vid.play().catch(() => {});
+    tabs.querySelectorAll('.preview-modal-cam-tab').forEach(t =>
+      t.classList.toggle('active', t.dataset.cam === sp.id)
+    );
+  }
+
+  tabs.querySelectorAll('.preview-modal-cam-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      const sp = speakers.find(s => s.id === tab.dataset.cam);
+      if (sp) loadCam(sp, vid.currentTime);
+    });
+  });
+
+  loadCam(initialSpeaker, startTime);
+  el('preview-modal').classList.remove('hidden');
+}
+
+function closePreviewModal() {
+  const vid = el('preview-video');
+  vid.pause();
+  vid.src = '';
+  el('preview-modal').classList.add('hidden');
+}
+
+el('preview-modal-close').addEventListener('click', closePreviewModal);
+el('preview-modal').addEventListener('click', e => {
+  if (e.target === el('preview-modal')) closePreviewModal();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !el('preview-modal').classList.contains('hidden')) {
+    closePreviewModal();
+  }
+});
+
 function buildTranscript() {
   const container = el('transcript-lines');
   container.innerHTML = '';
@@ -2573,6 +2719,19 @@ el('sb-add-clip').addEventListener('click', () => {
 
 el('sb-cancel').addEventListener('click', () => el('shorts-modal').classList.add('hidden'));
 
+el('sb-preview-btn').addEventListener('click', () => {
+  if (!S.shortsClips.length) return;
+  const clip = S.shortsClips[0];
+  const speakers = S.project.speakers || [];
+  if (!speakers.length) return;
+  // Pick first checked camera, or first speaker
+  const checkedCam = [...(document.querySelectorAll('#sb-cam-list input[name=sb_cam]:checked') || [])]
+    .map(cb => cb.value)[0];
+  const sp = speakers.find(s => s.id === checkedCam) || speakers[0];
+  el('shorts-modal').classList.add('hidden');
+  openPreviewModal(sp, clip.start, { start: clip.start, end: clip.end });
+});
+
 el('sb-render-btn').addEventListener('click', async () => {
   if (!S.shortsClips.length) { alert('Add at least one clip.'); return; }
 
@@ -2780,6 +2939,20 @@ el('btn-retranscribe-editor').addEventListener('click', async () => {
   }
 });
 
+el('btn-preview-topbar').addEventListener('click', () => {
+  const speakers = S.project?.speakers || [];
+  if (!speakers.length) return;
+  // Find the active cam (highlighted card) or use the first cam assigned at current time
+  const activeCamId = document.querySelector('.cam-card.active-cam')?.dataset.camId
+    || (() => {
+      const t = S.currentTime;
+      const seg = S.edl?.segments?.find(s => s.start <= t && s.end > t);
+      return seg?.camera || speakers[0].id;
+    })();
+  const sp = speakers.find(s => s.id === activeCamId) || speakers[0];
+  openPreviewModal(sp, S.currentTime);
+});
+
 el('btn-export-edl').addEventListener('click', () => {
   if (!S.edl) return;
   const blob = new Blob([JSON.stringify(S.edl, null, 2)], { type: 'application/json' });
@@ -2791,7 +2964,65 @@ el('btn-export-edl').addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 
+// Render modal — camera layout picker
+S.renderCamOrder = [];
+
+function renderRenderCamPicker() {
+  const layout = document.querySelector('#render-layout-grid input[name=render_layout]:checked')?.value || 'edl';
+  const picker = el('render-cam-picker');
+  const list = el('render-cam-list');
+  if (layout !== 'split') { picker.classList.add('hidden'); return; }
+  picker.classList.remove('hidden');
+
+  const speakers = S.project?.speakers || [];
+  if (!S.renderCamOrder.length) S.renderCamOrder = speakers.map(s => s.id);
+
+  const posLabels = ['Left', 'Center', 'Right', '4th'];
+  list.innerHTML = S.renderCamOrder.map((id, i) => {
+    const spk = speakers.find(s => s.id === id) || { id, name: id };
+    const isFirst = i === 0, isLast = i === S.renderCamOrder.length - 1;
+    return `
+      <div class="sb-cam-row checked" data-cam="${id}">
+        <span class="sb-cam-badge">${id}</span>
+        <span class="sb-cam-name">${esc(spk.name)}</span>
+        <span class="sb-cam-pos">${posLabels[i] || (i + 1)}</span>
+        <span class="sb-cam-reorder">
+          <button data-rmove="-1" data-cam="${id}" ${isFirst ? 'disabled' : ''}>▲</button>
+          <button data-rmove="1"  data-cam="${id}" ${isLast  ? 'disabled' : ''}>▼</button>
+        </span>
+      </div>`;
+  }).join('');
+
+  list.querySelectorAll('[data-rmove]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const idx = S.renderCamOrder.indexOf(btn.dataset.cam);
+      const newIdx = idx + parseInt(btn.dataset.rmove);
+      if (newIdx < 0 || newIdx >= S.renderCamOrder.length) return;
+      S.renderCamOrder.splice(idx, 1);
+      S.renderCamOrder.splice(newIdx, 0, btn.dataset.cam);
+      renderRenderCamPicker();
+    });
+  });
+}
+
+document.querySelectorAll('#render-layout-grid .sub-style-opt').forEach(opt => {
+  opt.addEventListener('click', () => {
+    document.querySelectorAll('#render-layout-grid .sub-style-opt').forEach(o => o.classList.remove('active'));
+    opt.classList.add('active');
+    opt.querySelector('input').checked = true;
+    renderRenderCamPicker();
+  });
+});
+
 el('btn-render').addEventListener('click', () => {
+  // Reset layout picker state
+  document.querySelectorAll('#render-layout-grid .sub-style-opt').forEach(o => o.classList.remove('active'));
+  el('render-layout-grid').querySelector('[data-render-layout="edl"]').classList.add('active');
+  el('render-layout-grid').querySelector('[data-render-layout="edl"] input').checked = true;
+  el('render-cam-picker').classList.add('hidden');
+  S.renderCamOrder = [];
+
   el('render-modal').classList.remove('hidden');
   el('render-prog-outer').style.display = 'none';
   el('render-prog-msg').textContent = '';
@@ -2816,8 +3047,15 @@ el('btn-render-confirm').addEventListener('click', async () => {
   el('render-prog-msg').textContent = 'Queuing render…';
   el('render-error').classList.add('hidden');
 
+  const renderLayout = document.querySelector('#render-layout-grid input[name=render_layout]:checked')?.value || 'edl';
+  const camOrder = renderLayout === 'split' ? [...S.renderCamOrder] : null;
+
   try {
-    await API.post(`/api/projects/${S.project.id}/render`, { targets });
+    await API.post(`/api/projects/${S.project.id}/render`, {
+      targets,
+      camera_layout: renderLayout,
+      cam_order: camOrder,
+    });
     el('btn-render-cancel').textContent = 'Close';
     el('render-prog-msg').textContent = 'Rendering… this may take a few minutes.';
     startRenderPoll();
