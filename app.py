@@ -129,6 +129,28 @@ def delete_project(project_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/projects/<project_id>/reset-edl", methods=["POST"])
+def reset_edl(project_id):
+    """Clear the EDL and renders, returning the project to transcribed state for re-analysis."""
+    proj = get_project(project_id)
+    if not proj:
+        return jsonify({"error": "Project not found"}), 404
+    if not proj.get("merged_transcript"):
+        return jsonify({"error": "No transcript — transcribe first"}), 400
+
+    import shutil
+    output_dir = PROJECTS_DIR / project_id / "output"
+    if output_dir.exists():
+        shutil.rmtree(str(output_dir))
+
+    proj["edl"] = None
+    proj["renders"] = {}
+    proj["status"] = "transcribed"
+    proj["progress"] = {"step": "done", "percent": 100, "message": "Transcription complete ✓"}
+    save_project(proj)
+    return jsonify(proj)
+
+
 @app.route("/api/projects/<project_id>/reset", methods=["POST"])
 def reset_project(project_id):
     """Reset a project back to uploaded state — keeps video files, clears everything else."""

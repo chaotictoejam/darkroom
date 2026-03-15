@@ -1517,7 +1517,10 @@ a:hover { text-decoration: underline; }
         </div>
 
         <!-- Danger zone -->
-        <div class="sidebar-section" style="margin-top:auto;padding-top:12px;border-top:1px solid var(--border)">
+        <div class="sidebar-section" style="margin-top:auto;padding-top:12px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px">
+          <button id="btn-redo-edl" class="btn-ghost" style="width:100%;font-size:11px;color:var(--text-dim);border-color:var(--border)" title="Keep transcript, re-run EDL generation">
+            ↺ Redo EDL
+          </button>
           <button id="btn-regenerate-project" class="btn-ghost" style="width:100%;font-size:11px;color:var(--text-dim);border-color:var(--border)" title="Clear all transcripts, EDL and renders and start fresh">
             ↺ Regenerate Project
           </button>
@@ -3037,6 +3040,18 @@ function renderDownloads(renders) {
     }
   }).join('');
 }
+
+/* ---- Redo EDL ---- */
+el('btn-redo-edl').addEventListener('click', async () => {
+  if (!confirm('Redo the EDL?\n\nThe transcript is kept, but the current EDL and any renders will be cleared. You\'ll be taken back to choose the analysis method.')) return;
+  try {
+    S.project = await API.post(`/api/projects/${S.project.id}/reset-edl`, {});
+    clearPolling();
+    routeProject();
+  } catch (e) {
+    alert('Failed to reset EDL: ' + e.message);
+  }
+});
 
 /* ---- Regenerate project ---- */
 el('btn-regenerate-project').addEventListener('click', async () => {
