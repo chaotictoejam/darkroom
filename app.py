@@ -446,6 +446,8 @@ def start_render_short(project_id):
     accent_color = data.get("accent_color", "#FFFF00")
     sub_position = data.get("sub_position", "auto")
     output_name = data.get("output_name", "short_01")
+    box_opacity = max(0, min(100, int(data.get("box_opacity", 100))))
+    box_alpha = round((100 - box_opacity) / 100 * 255)
 
     if not clips:
         return jsonify({"error": "No clips provided"}), 400
@@ -493,6 +495,7 @@ def start_render_short(project_id):
                 merged_transcript=p["merged_transcript"],
                 output_path=out_path,
                 output_dir=output_dir,
+                box_alpha=box_alpha,
             )
 
             p = get_project(project_id)

@@ -1616,6 +1616,13 @@ a:hover { text-decoration: underline; }
       </div>
     </div>
 
+    <!-- Box opacity — hidden unless a box-based style is selected -->
+    <div id="sb-opacity-row" style="margin:10px 0 0;display:none;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="font-size:9px;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-dim);white-space:nowrap">Box opacity</span>
+      <input type="range" id="sb-box-opacity" min="0" max="100" value="100" style="flex:1;min-width:80px;accent-color:var(--accent)" />
+      <span id="sb-opacity-label" style="font-size:11px;color:var(--text-dim);width:32px;text-align:right">100%</span>
+    </div>
+
     <div id="sb-position-row" style="margin:12px 0 0;display:flex;align-items:center;gap:8px">
       <span style="font-size:9px;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-dim);white-space:nowrap">Subtitle position</span>
       <div style="display:flex;gap:5px">
@@ -2704,6 +2711,8 @@ function renderSbClipList() {
 S.accentColor = '#FFFF00';
 
 const PLAIN_STYLES = new Set(['chunk', 'word', 'none']); // no accent needed
+const BOX_STYLES   = new Set(['box', 'box_word', 'karaoke']); // support opacity
+S.boxOpacity = 100;
 
 function updateAccentPreviews(color) {
   const hex = color;
@@ -2724,7 +2733,8 @@ function updateAccentPreviews(color) {
 
 function updateAccentVisibility() {
   const style = document.querySelector('#sb-style-grid input[name=sub_style]:checked')?.value || 'chunk';
-  el('sb-accent-row').style.display = PLAIN_STYLES.has(style) ? 'none' : 'flex';
+  el('sb-accent-row').style.display  = PLAIN_STYLES.has(style) ? 'none' : 'flex';
+  el('sb-opacity-row').style.display = BOX_STYLES.has(style)   ? 'flex' : 'none';
 }
 
 document.querySelectorAll('#sb-style-grid .sub-style-opt').forEach(opt => {
@@ -2750,6 +2760,12 @@ el('sb-accent-custom').addEventListener('input', e => {
   S.accentColor = e.target.value;
   document.querySelectorAll('#sb-swatches .sb-swatch').forEach(b => b.classList.remove('active'));
   updateAccentPreviews(S.accentColor);
+});
+
+// Box opacity slider
+el('sb-box-opacity').addEventListener('input', e => {
+  S.boxOpacity = parseInt(e.target.value, 10);
+  el('sb-opacity-label').textContent = S.boxOpacity + '%';
 });
 
 // Subtitle position picker
@@ -2889,6 +2905,7 @@ el('sb-render-btn').addEventListener('click', async () => {
       accent_color: S.accentColor,
       sub_position: S.subPosition,
       output_name: outputName,
+      box_opacity: S.boxOpacity,
     });
     el('shorts-modal').classList.add('hidden');
     startRenderPoll();

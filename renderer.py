@@ -552,22 +552,25 @@ def _hex_to_ass(hex_color: str, alpha: int = 0) -> str:
     return f"&H{alpha:02X}{b:02X}{g:02X}{r:02X}&"
 
 
-def _ass_header(accent: str = "#FFFF00") -> str:
+def _ass_header(accent: str = "#FFFF00", box_alpha: int = 0) -> str:
     """
     Build the ASS [Script Info] + [V4+ Styles] header dynamically so the accent
     colour is baked into the named styles used by each render mode.
 
+    box_alpha — ASS alpha for the box fill (0=opaque, 255=fully transparent).
+
     Styles defined
     ──────────────
     plain   – white text, thick black outline (classic)
-    box     – white text on solid accent-coloured background box
+    box     – white text on accent-coloured background box
     neon    – accent-coloured text, thick black outline, bold
     active  – for karaoke: accent box behind the active word
     inactive– for karaoke: dimmed white text for non-active words
     """
-    ac      = _hex_to_ass(accent, alpha=0)     # opaque accent
-    ac_box  = _hex_to_ass(accent, alpha=0x20)  # slightly transparent box fill
-    ac_dim  = _hex_to_ass(accent, alpha=0x99)  # dim accent for inactive words
+    ac_text   = _hex_to_ass(accent, alpha=0)                          # always opaque (neon text)
+    ac_fill   = _hex_to_ass(accent, alpha=box_alpha)                  # box fill, user-controlled alpha
+    ac_shadow = _hex_to_ass(accent, alpha=min(box_alpha + 0x20, 0xFF)) # slightly more transparent shadow
+    ac_dim    = _hex_to_ass(accent, alpha=0x99)                       # dim accent for inactive words
 
     # Format: Name, Font, Size, Primary, Secondary, Outline, Back, Bold, Italic,
     #         Underline, Strike, ScaleX, ScaleY, Spacing, Angle,
@@ -577,16 +580,16 @@ def _ass_header(accent: str = "#FFFF00") -> str:
         f"Style: plain,Arial,82,&H00FFFFFF,&H000000FF,&H00000000,&HA0000000,"
         f"-1,0,0,0,100,100,2,0,1,5,2,2,60,60,180,1",
 
-        # box: white text on accent-coloured opaque box, BorderStyle=3
-        f"Style: box,Arial,82,&H00FFFFFF,&H000000FF,{ac},{ac_box},"
+        # box: white text on accent-coloured box, BorderStyle=3
+        f"Style: box,Arial,82,&H00FFFFFF,&H000000FF,{ac_fill},{ac_shadow},"
         f"-1,0,0,0,100,100,2,0,3,10,0,2,60,60,180,1",
 
         # neon: accent text, bold, thick black outline
-        f"Style: neon,Arial,88,{ac},&H000000FF,&H00000000,&HA0000000,"
+        f"Style: neon,Arial,88,{ac_text},&H000000FF,&H00000000,&HA0000000,"
         f"-1,0,0,0,100,100,2,0,1,7,3,2,60,60,180,1",
 
         # active word in karaoke: black text on accent box
-        f"Style: active,Arial,82,&H00000000,&H000000FF,{ac},{ac},"
+        f"Style: active,Arial,82,&H00000000,&H000000FF,{ac_fill},{ac_fill},"
         f"-1,0,0,0,100,100,2,0,3,10,0,2,60,60,180,1",
 
         # inactive words in karaoke: dimmed white, thin outline
@@ -666,6 +669,7 @@ def generate_ass(
     accent_color: str = "#FFFF00",
     sub_position: str = "bottom",
     speakers_dict: dict | None = None,
+    box_alpha: int = 0,
 ) -> str:
     """
     Generate ASS subtitle content for a short.
@@ -803,7 +807,7 @@ def generate_ass(
                 f"neon,,0,0,0,,{pos}{_esc_ass(text)}"
             )
 
-    return _ass_header(accent_color) + "\n".join(events) + "\n"
+    return _ass_header(accent_color, box_alpha=box_alpha) + "\n".join(events) + "\n"
 
 
 def _ffmpeg_escape_path(path: str) -> str:
@@ -830,6 +834,7 @@ def render_short_custom(
     camera_layout: str = "active",
     accent_color: str = "#FFFF00",
     sub_position: str = "auto",
+    box_alpha: int = 0,
 ) -> None:
     """
     Render a short from one or more user-defined clip windows.
@@ -869,6 +874,7 @@ def render_short_custom(
             subtitle_style, accent_color,
             sub_position=sub_position,
             speakers_dict=speakers_dict,
+            box_alpha=box_alpha,
         )
         if ass_content:
             from pathlib import Path as _Path
