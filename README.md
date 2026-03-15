@@ -42,7 +42,22 @@ cd darkroom
 brew install ffmpeg
 ```
 
-**Windows**
+**Windows (package manager)**
+
+The **full** build is required — it includes libass for subtitle burn-in. The essentials build does not.
+
+```powershell
+# Chocolatey
+choco install ffmpeg-full
+
+# Winget
+winget install ffmpeg
+
+# Scoop
+scoop install ffmpeg
+```
+
+**Windows (manual)**
 Download a build from <https://www.gyan.dev/ffmpeg/builds/> (e.g. `ffmpeg-release-essentials.zip`), extract it, and add the `bin/` folder to your `PATH`.
 
 ```powershell
