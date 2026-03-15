@@ -129,6 +129,29 @@ def delete_project(project_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/projects/<project_id>/reset", methods=["POST"])
+def reset_project(project_id):
+    """Reset a project back to uploaded state — keeps video files, clears everything else."""
+    import shutil
+    proj = get_project(project_id)
+    if not proj:
+        return jsonify({"error": "Project not found"}), 404
+
+    # Delete rendered outputs
+    output_dir = PROJECTS_DIR / project_id / "output"
+    if output_dir.exists():
+        shutil.rmtree(str(output_dir))
+
+    proj["status"] = "uploaded"
+    proj["transcripts"] = {}
+    proj["merged_transcript"] = []
+    proj["edl"] = None
+    proj["renders"] = {}
+    proj["progress"] = {"step": "uploaded", "percent": 0, "message": "Ready to transcribe"}
+    save_project(proj)
+    return jsonify(proj)
+
+
 # ---------------------------------------------------------------------------
 # File upload
 # ---------------------------------------------------------------------------
@@ -181,7 +204,11 @@ def start_transcription(project_id):
     def _run():
         try:
             p = get_project(project_id)
+            # Reset any prior analysis so the project goes back through the pipeline
             p["status"] = "transcribing"
+            p["transcripts"] = {}
+            p["merged_transcript"] = []
+            p["edl"] = None
             p["progress"] = {"step": "transcribing", "percent": 5, "message": "Loading Whisper model..."}
             save_project(p)
 
@@ -388,6 +415,8 @@ def start_render_short(project_id):
     data = request.get_json(force=True) or {}
     clips = data.get("clips", [])
     subtitle_style = data.get("subtitle_style", "chunk")
+    camera_layout = data.get("camera_layout", "active")
+    selected_cams = data.get("selected_cams", None)  # None = all cameras
     output_name = data.get("output_name", "short_01")
 
     if not clips:
@@ -414,11 +443,23 @@ def start_render_short(project_id):
             out_path = str(output_dir / f"{output_name}.mp4")
             speakers_dict = {s["id"]: s for s in p["speakers"]}
 
+            # Build ordered speakers dict for split-screen, preserving UI order
+            if camera_layout == "all" and selected_cams:
+                # selected_cams is an ordered list from the UI drag/reorder
+                filtered_speakers = {
+                    cam_id: speakers_dict[cam_id]
+                    for cam_id in selected_cams
+                    if cam_id in speakers_dict
+                }
+            else:
+                filtered_speakers = speakers_dict
+
             render_short_custom(
                 clips=clips,
                 edl_segments=p["edl"]["segments"],
-                speakers_dict=speakers_dict,
+                speakers_dict=filtered_speakers,
                 subtitle_style=subtitle_style,
+                camera_layout=camera_layout,
                 merged_transcript=p["merged_transcript"],
                 output_path=out_path,
                 output_dir=output_dir,

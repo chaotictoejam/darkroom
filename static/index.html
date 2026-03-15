@@ -883,6 +883,25 @@ a:hover { text-decoration: underline; }
 }
 .sb-add-clip-btn:hover { border-color: #444; color: var(--text); }
 
+/* Camera picker in Shorts Builder */
+.sb-cam-row {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--bg-elevated); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 8px 10px;
+  user-select: none;
+}
+.sb-cam-row.checked { border-color: var(--red); background: #130a0a; }
+.sb-cam-row input[type=checkbox] { accent-color: var(--red); width: 14px; height: 14px; flex-shrink: 0; cursor: pointer; }
+.sb-cam-badge { font-size: 10px; font-weight: 700; color: var(--red); min-width: 18px; }
+.sb-cam-name { font-size: 12px; color: var(--text); flex: 1; }
+.sb-cam-pos { font-size: 9px; color: var(--text-dim); min-width: 34px; text-align: right; }
+.sb-cam-reorder { display: flex; flex-direction: column; gap: 1px; }
+.sb-cam-reorder button {
+  background: none; border: none; color: var(--text-dim); cursor: pointer;
+  font-size: 10px; padding: 0 3px; line-height: 1;
+}
+.sb-cam-reorder button:hover { color: var(--text); }
+
 /* Subtitle style picker */
 .sub-style-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .sub-style-opt {
@@ -1359,7 +1378,10 @@ a:hover { text-decoration: underline; }
 
       <!-- Transcript -->
       <div class="transcript-panel" id="transcript-panel">
-        <div class="transcript-header">Transcript</div>
+        <div class="transcript-header" style="display:flex;align-items:center;justify-content:space-between">
+          <span>Transcript</span>
+          <button id="btn-retranscribe-editor" class="btn-ghost" style="font-size:10px;padding:3px 8px" title="Re-run Whisper on all cameras">Re-transcribe</button>
+        </div>
         <div id="transcript-lines"></div>
       </div>
 
@@ -1431,6 +1453,13 @@ a:hover { text-decoration: underline; }
           <div class="render-list" id="render-list"></div>
         </div>
 
+        <!-- Danger zone -->
+        <div class="sidebar-section" style="margin-top:auto;padding-top:12px;border-top:1px solid var(--border)">
+          <button id="btn-regenerate-project" class="btn-ghost" style="width:100%;font-size:11px;color:var(--text-dim);border-color:var(--border)" title="Clear all transcripts, EDL and renders and start fresh">
+            ↺ Regenerate Project
+          </button>
+        </div>
+
       </div><!-- /sidebar -->
     </div><!-- /workspace -->
   </div><!-- /editor-body -->
@@ -1446,6 +1475,26 @@ a:hover { text-decoration: underline; }
     <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-dim);margin-bottom:8px">Clips in this short</div>
     <div class="sb-clip-list" id="sb-clip-list"></div>
     <button class="sb-add-clip-btn" id="sb-add-clip">+ Add another clip</button>
+
+    <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-dim);margin:14px 0 8px">Camera layout</div>
+    <div class="sub-style-grid" id="sb-layout-grid" style="grid-template-columns:1fr 1fr">
+      <label class="sub-style-opt active" data-cam-layout="active">
+        <input type="radio" name="cam_layout" value="active" checked />
+        <div class="sub-style-preview" style="font-size:11px">&#9646;<br/>Active Cam</div>
+        <div class="sub-style-label">Single speaker</div>
+      </label>
+      <label class="sub-style-opt" data-cam-layout="all">
+        <input type="radio" name="cam_layout" value="all" />
+        <div class="sub-style-preview" style="font-size:10px;line-height:1.4">&#9646;&#9646;&#9646;<br/>All Cams</div>
+        <div class="sub-style-label">Split screen</div>
+      </label>
+    </div>
+
+    <!-- Camera picker — shown only when All Cams layout is selected -->
+    <div id="sb-cam-picker" class="hidden">
+      <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-dim);margin:14px 0 8px">Cameras to include</div>
+      <div id="sb-cam-list" style="display:flex;flex-direction:column;gap:6px"></div>
+    </div>
 
     <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-dim);margin:14px 0 8px">Subtitle style</div>
     <div class="sub-style-grid" id="sb-style-grid">
@@ -1631,6 +1680,7 @@ function renderProjectList() {
       </div>
       <div class="project-item-right">
         <span class="status-badge ${statusClass(p.status)}">${p.status}</span>
+        <button class="btn-ghost" style="font-size:10px;padding:2px 7px" data-reset="${p.id}" title="Reset project (keep videos, clear transcripts and EDL)">↺</button>
         <button class="btn-danger" data-del="${p.id}" title="Delete project">✕</button>
       </div>
     </div>
@@ -1638,14 +1688,22 @@ function renderProjectList() {
 
   list.querySelectorAll('.project-item').forEach(item => {
     item.addEventListener('click', e => {
-      if (e.target.dataset.del) return;
+      if (e.target.dataset.del || e.target.dataset.reset) return;
       openProject(item.dataset.id);
+    });
+  });
+  list.querySelectorAll('[data-reset]').forEach(btn => {
+    btn.addEventListener('click', async e => {
+      e.stopPropagation();
+      if (!confirm('Reset this project? Videos are kept but transcripts, EDL and renders will be cleared.')) return;
+      await API.post(`/api/projects/${btn.dataset.reset}/reset`, {});
+      await loadWelcome();
     });
   });
   list.querySelectorAll('[data-del]').forEach(btn => {
     btn.addEventListener('click', async e => {
       e.stopPropagation();
-      if (!confirm('Delete this project?')) return;
+      if (!confirm('Delete this project and all its files?')) return;
       await API.del(`/api/projects/${btn.dataset.del}`);
       await loadWelcome();
     });
@@ -2372,6 +2430,12 @@ function openShortsBuilder(initialClip) {
   document.querySelectorAll('#sb-style-grid .sub-style-opt').forEach(o => o.classList.remove('active'));
   el('sb-style-grid').querySelector('[data-style="word"]').classList.add('active');
   el('sb-style-grid').querySelector('[data-style="word"] input').checked = true;
+  // Reset camera layout
+  document.querySelectorAll('#sb-layout-grid .sub-style-opt').forEach(o => o.classList.remove('active'));
+  el('sb-layout-grid').querySelector('[data-cam-layout="active"]').classList.add('active');
+  el('sb-layout-grid').querySelector('[data-cam-layout="active"] input').checked = true;
+  el('sb-cam-picker').classList.add('hidden');
+  S.sbCamOrder = [];
   el('sb-error').classList.add('hidden');
   el('sb-render-btn').disabled = false;
   el('shorts-modal').classList.remove('hidden');
@@ -2425,6 +2489,81 @@ document.querySelectorAll('#sb-style-grid .sub-style-opt').forEach(opt => {
   });
 });
 
+// Camera layout pick — show/hide camera selector for split-screen
+// Cam picker order state — initialised when the picker first renders
+S.sbCamOrder = [];
+
+function renderSbCamPicker() {
+  const layout = document.querySelector('#sb-layout-grid input[name=cam_layout]:checked')?.value || 'active';
+  const picker = el('sb-cam-picker');
+  const list = el('sb-cam-list');
+  if (layout !== 'all') { picker.classList.add('hidden'); return; }
+  picker.classList.remove('hidden');
+
+  // Seed order from project speakers on first open; preserve on re-render
+  const speakers = S.project?.speakers || [];
+  if (!S.sbCamOrder.length || S.sbCamOrder.some(id => !speakers.find(s => s.id === id))) {
+    S.sbCamOrder = speakers.map(s => s.id);
+  }
+
+  const posLabels = ['Top', 'Middle', 'Bottom', '4th'];
+  list.innerHTML = S.sbCamOrder.map((id, i) => {
+    const spk = speakers.find(s => s.id === id) || { id, name: id };
+    const pos = posLabels[i] || `${i + 1}`;
+    const isFirst = i === 0, isLast = i === S.sbCamOrder.length - 1;
+    return `
+      <div class="sb-cam-row checked" data-cam="${id}">
+        <input type="checkbox" name="sb_cam" value="${id}" checked />
+        <span class="sb-cam-badge">${id}</span>
+        <span class="sb-cam-name">${spk.name}</span>
+        <span class="sb-cam-pos">${pos}</span>
+        <span class="sb-cam-reorder">
+          <button data-move="-1" data-cam="${id}" ${isFirst ? 'disabled' : ''} title="Move up">▲</button>
+          <button data-move="1"  data-cam="${id}" ${isLast  ? 'disabled' : ''} title="Move down">▼</button>
+        </span>
+      </div>`;
+  }).join('');
+
+  // Checkbox toggle
+  list.querySelectorAll('.sb-cam-row').forEach(row => {
+    row.querySelector('input').addEventListener('change', e => {
+      row.classList.toggle('checked', e.target.checked);
+    });
+  });
+
+  // Reorder buttons
+  list.querySelectorAll('[data-move]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const camId = btn.dataset.cam;
+      const delta = parseInt(btn.dataset.move);
+      const idx = S.sbCamOrder.indexOf(camId);
+      const newIdx = idx + delta;
+      if (newIdx < 0 || newIdx >= S.sbCamOrder.length) return;
+      // Preserve checked state across re-render
+      const checked = [...list.querySelectorAll('input[name=sb_cam]')]
+        .reduce((acc, cb) => { acc[cb.value] = cb.checked; return acc; }, {});
+      S.sbCamOrder.splice(idx, 1);
+      S.sbCamOrder.splice(newIdx, 0, camId);
+      renderSbCamPicker();
+      // Restore checked state
+      list.querySelectorAll('input[name=sb_cam]').forEach(cb => {
+        cb.checked = checked[cb.value] ?? true;
+        cb.closest('.sb-cam-row').classList.toggle('checked', cb.checked);
+      });
+    });
+  });
+}
+
+document.querySelectorAll('#sb-layout-grid .sub-style-opt').forEach(opt => {
+  opt.addEventListener('click', () => {
+    document.querySelectorAll('#sb-layout-grid .sub-style-opt').forEach(o => o.classList.remove('active'));
+    opt.classList.add('active');
+    opt.querySelector('input').checked = true;
+    renderSbCamPicker();
+  });
+});
+
 el('sb-add-clip').addEventListener('click', () => {
   const last = S.shortsClips[S.shortsClips.length - 1];
   const newStart = last ? last.end + 5 : 0;
@@ -2438,6 +2577,15 @@ el('sb-render-btn').addEventListener('click', async () => {
   if (!S.shortsClips.length) { alert('Add at least one clip.'); return; }
 
   const style = document.querySelector('#sb-style-grid input[name=sub_style]:checked')?.value || 'chunk';
+  const camLayout = document.querySelector('#sb-layout-grid input[name=cam_layout]:checked')?.value || 'active';
+  const selectedCams = camLayout === 'all'
+    ? [...document.querySelectorAll('#sb-cam-list input[name=sb_cam]:checked')].map(cb => cb.value)
+    : null;
+  if (camLayout === 'all' && selectedCams.length === 0) {
+    el('sb-error').textContent = 'Select at least one camera.';
+    el('sb-error').classList.remove('hidden');
+    return;
+  }
   const rawName = el('sb-output-name').value.trim();
   const outputName = (rawName.replace(/[^a-z0-9_\-]/gi, '_') || 'short_01');
 
@@ -2448,6 +2596,8 @@ el('sb-render-btn').addEventListener('click', async () => {
     await API.post(`/api/projects/${S.project.id}/render-short`, {
       clips: S.shortsClips,
       subtitle_style: style,
+      camera_layout: camLayout,
+      selected_cams: selectedCams,
       output_name: outputName,
     });
     el('shorts-modal').classList.add('hidden');
@@ -2601,10 +2751,33 @@ function renderDownloads(renders) {
   }).join('');
 }
 
+/* ---- Regenerate project ---- */
+el('btn-regenerate-project').addEventListener('click', async () => {
+  if (!confirm('Regenerate this project from scratch?\n\nYour video files are kept, but all transcripts, EDL and renders will be cleared.')) return;
+  try {
+    S.project = await API.post(`/api/projects/${S.project.id}/reset`, {});
+    clearPolling();
+    routeProject();
+  } catch (e) {
+    alert('Reset failed: ' + e.message);
+  }
+});
+
 /* ---- Top bar buttons ---- */
 el('btn-editor-home').addEventListener('click', () => {
   clearPolling();
   loadWelcome();
+});
+
+el('btn-retranscribe-editor').addEventListener('click', async () => {
+  if (!confirm('Re-transcribe all cameras? This will clear the current transcript and EDL and run Whisper again.')) return;
+  try {
+    await API.post(`/api/projects/${S.project.id}/transcribe`, {});
+    S.project.status = 'transcribing';
+    loadProcessing();
+  } catch (e) {
+    alert('Failed to start re-transcription: ' + e.message);
+  }
 });
 
 el('btn-export-edl').addEventListener('click', () => {

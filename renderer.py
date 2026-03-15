@@ -155,6 +155,83 @@ def _build_concat_filter(kept_segments: list[dict], speakers_dict: dict, vertica
     return input_args, filter_complex, n
 
 
+def _build_splitscreen_filter(clips: list[dict], speakers_dict: dict):
+    """
+    Build an FFmpeg filter that shows ALL cameras simultaneously, stacked/tiled
+    for each clip window, then concatenates the clips.
+
+    Layout for 9:16 (1080×1920):
+      1 cam  → 1080×1920 full
+      2 cams → stacked vertically, each 1080×960
+      3 cams → stacked vertically, each 1080×640
+      4 cams → 2×2 grid, each 540×960
+    """
+    cam_ids = list(speakers_dict.keys())
+    n_cams = len(cam_ids)
+    if n_cams == 0:
+        raise ValueError("No cameras in project")
+
+    # Input args: one per camera
+    input_args = []
+    for cam_id in cam_ids:
+        input_args.extend(["-i", speakers_dict[cam_id]["file_path"]])
+
+    # Per-cam tile dimensions
+    if n_cams == 1:
+        per_w, per_h = 1080, 1920
+    elif n_cams == 2:
+        per_w, per_h = 1080, 960
+    elif n_cams == 3:
+        per_w, per_h = 1080, 640
+    else:  # 4+
+        per_w, per_h = 540, 960
+
+    filter_parts = []
+    concat_v_labels = []
+    concat_a_labels = []
+
+    for ci, clip in enumerate(clips):
+        cs, ce = clip["start"], clip["end"]
+
+        # Scale + crop each cam tile
+        for ki, cam_id in enumerate(cam_ids):
+            filter_parts.append(
+                f"[{ki}:v]trim=start={cs}:end={ce},setpts=PTS-STARTPTS,"
+                f"scale={per_w}:{per_h}:force_original_aspect_ratio=increase,"
+                f"crop={per_w}:{per_h}[cv{ci}_{ki}]"
+            )
+
+        # Stack tiles
+        tile_labels = "".join(f"[cv{ci}_{ki}]" for ki in range(n_cams))
+        if n_cams == 1:
+            filter_parts.append(f"[cv{ci}_0]copy[cv{ci}]")
+        elif n_cams <= 3:
+            filter_parts.append(f"{tile_labels}vstack=inputs={n_cams}[cv{ci}]")
+        else:
+            # 2×2 xstack
+            filter_parts.append(
+                f"{tile_labels}xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0[cv{ci}]"
+            )
+
+        # Trim + mix audio from all cameras
+        for ki in range(n_cams):
+            filter_parts.append(
+                f"[{ki}:a]atrim=start={cs}:end={ce},asetpts=PTS-STARTPTS[ca{ci}_{ki}]"
+            )
+        amix_in = "".join(f"[ca{ci}_{ki}]" for ki in range(n_cams))
+        filter_parts.append(f"{amix_in}amix=inputs={n_cams}:normalize=0[ca{ci}]")
+
+        concat_v_labels.append(f"[cv{ci}]")
+        concat_a_labels.append(f"[ca{ci}]")
+
+    # Concat all clips
+    n_clips = len(clips)
+    all_labels = "".join(concat_v_labels[i] + concat_a_labels[i] for i in range(n_clips))
+    filter_parts.append(f"{all_labels}concat=n={n_clips}:v=1:a=1[outv][outa]")
+
+    return input_args, ";".join(filter_parts)
+
+
 def _run_ffmpeg(cmd: list[str]) -> None:
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -291,33 +368,62 @@ def generate_ass(
     if not all_words:
         return ""
 
-    # Fallback: if no word timestamps, build words from segment text
+    # Sort by start and clamp each word's end to the next word's start
+    # to prevent Whisper timestamp overlap from causing visual stacking
+    all_words.sort(key=lambda w: w["start"])
+    for i in range(len(all_words) - 1):
+        gap = all_words[i + 1]["start"] - all_words[i]["start"]
+        if all_words[i]["end"] > all_words[i + 1]["start"]:
+            all_words[i]["end"] = all_words[i + 1]["start"] - 0.001
+        # Ensure minimum visible duration
+        if all_words[i]["end"] - all_words[i]["start"] < 0.05:
+            all_words[i]["end"] = all_words[i]["start"] + 0.05
+
     events = []
     pos = r"{\an2\pos(540,1650)}"  # bottom-center, inside lower third
 
     if style == "word":
         for w in all_words:
-            events.append(
-                f"Dialogue: 0,{_ass_time(w['start'])},{_ass_time(w['end'])},"
-                f"word,,0,0,0,,{pos}{_esc_ass(w['word'].upper())}"
-            )
+            if w["end"] > w["start"]:
+                events.append(
+                    f"Dialogue: 0,{_ass_time(w['start'])},{_ass_time(w['end'])},"
+                    f"word,,0,0,0,,{pos}{_esc_ass(w['word'].upper())}"
+                )
 
     elif style == "chunk":
         chunk_size = 4
-        for i in range(0, len(all_words), chunk_size):
-            chunk = all_words[i:i + chunk_size]
+        chunks = [all_words[i:i + chunk_size] for i in range(0, len(all_words), chunk_size)]
+        for ci, chunk in enumerate(chunks):
+            t_start = chunk[0]["start"]
+            # Clamp end to next chunk's start to prevent overlap
+            if ci + 1 < len(chunks):
+                t_end = min(chunk[-1]["end"], chunks[ci + 1][0]["start"] - 0.001)
+            else:
+                t_end = chunk[-1]["end"]
+            if t_end <= t_start:
+                t_end = t_start + 0.1
             text = " ".join(w["word"].upper() for w in chunk)
             events.append(
-                f"Dialogue: 0,{_ass_time(chunk[0]['start'])},{_ass_time(chunk[-1]['end'])},"
+                f"Dialogue: 0,{_ass_time(t_start)},{_ass_time(t_end)},"
                 f"chunk,,0,0,0,,{pos}{_esc_ass(text)}"
             )
 
     elif style == "karaoke":
         chunk_size = 4
-        for i in range(0, len(all_words), chunk_size):
-            chunk = all_words[i:i + chunk_size]
-            # One event per word: show full group, highlight active word in yellow
+        chunks = [all_words[i:i + chunk_size] for i in range(0, len(all_words), chunk_size)]
+        for ci, chunk in enumerate(chunks):
+            # Clamp group end to next chunk start
+            if ci + 1 < len(chunks):
+                group_end = min(chunk[-1]["end"], chunks[ci + 1][0]["start"] - 0.001)
+            else:
+                group_end = chunk[-1]["end"]
+
             for j, active_w in enumerate(chunk):
+                w_start = active_w["start"]
+                # Each word slot ends at next word's start (or group end for last)
+                w_end = chunk[j + 1]["start"] if j + 1 < len(chunk) else group_end
+                if w_end <= w_start:
+                    w_end = w_start + 0.05
                 parts = []
                 for k, w in enumerate(chunk):
                     word_up = _esc_ass(w["word"].upper())
@@ -327,7 +433,7 @@ def generate_ass(
                         parts.append(f"{{\\c&H80FFFFFF&}}{word_up}{{\\c&H00FFFFFF&}}")
                 line = "  ".join(parts)
                 events.append(
-                    f"Dialogue: 0,{_ass_time(active_w['start'])},{_ass_time(active_w['end'])},"
+                    f"Dialogue: 0,{_ass_time(w_start)},{_ass_time(w_end)},"
                     f"chunk,,0,0,0,,{pos}{line}"
                 )
 
@@ -355,6 +461,7 @@ def render_short_custom(
     merged_transcript: list[dict],
     output_path: str,
     output_dir,
+    camera_layout: str = "active",
 ) -> None:
     """
     Render a short from one or more user-defined clip windows.
@@ -362,22 +469,29 @@ def render_short_custom(
     clips          — [{start, end, label?}, ...]  (original-timeline timestamps)
     edl_segments   — full EDL segment list (kept + cut)
     subtitle_style — 'word' | 'chunk' | 'karaoke' | 'none'
+    camera_layout  — 'active' (EDL-driven single cam) | 'all' (split-screen all cams)
     """
-    # Resolve kept sub-segments within each clip window
-    all_clip_segs = []
-    for clip in clips:
-        for seg in edl_segments:
-            if not seg.get("keep", True):
-                continue
-            s = max(seg["start"], clip["start"])
-            e = min(seg["end"], clip["end"])
-            if e > s:
-                all_clip_segs.append({**seg, "start": s, "end": e})
+    if camera_layout == "all":
+        # Show all cameras simultaneously stacked/tiled — use full clip windows, no EDL cuts
+        if not clips:
+            raise ValueError("No clips provided for split-screen render.")
+        input_args, filter_complex = _build_splitscreen_filter(clips, speakers_dict)
+    else:
+        # Resolve kept sub-segments within each clip window (EDL-aware, single cam)
+        all_clip_segs = []
+        for clip in clips:
+            for seg in edl_segments:
+                if not seg.get("keep", True):
+                    continue
+                s = max(seg["start"], clip["start"])
+                e = min(seg["end"], clip["end"])
+                if e > s:
+                    all_clip_segs.append({**seg, "start": s, "end": e})
 
-    if not all_clip_segs:
-        raise ValueError("No kept segments found within the specified clip range(s).")
+        if not all_clip_segs:
+            raise ValueError("No kept segments found within the specified clip range(s).")
 
-    input_args, filter_complex, _ = _build_concat_filter(all_clip_segs, speakers_dict, vertical=True)
+        input_args, filter_complex, _ = _build_concat_filter(all_clip_segs, speakers_dict, vertical=True)
 
     # Subtitle burn-in
     if subtitle_style and subtitle_style != "none":

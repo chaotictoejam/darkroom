@@ -3,10 +3,12 @@ processor.py — Whisper transcription and transcript merge
 """
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import wave
+from collections import Counter
 
 import numpy as np
 import whisper
@@ -69,7 +71,7 @@ def transcribe_file(file_path: str, speaker_id: str, speaker_name: str, model_na
             ],
         })
 
-    return segments
+    return _filter_hallucinations(segments)
 
 
 def transcribe_all(speakers: list[dict], model_name: str, progress_callback=None) -> dict[str, list]:
@@ -90,6 +92,50 @@ def transcribe_all(speakers: list[dict], model_name: str, progress_callback=None
         transcripts[speaker["id"]] = segments
 
     return transcripts
+
+
+def _filter_hallucinations(segments: list[dict]) -> list[dict]:
+    """
+    Remove Whisper hallucination artifacts.
+
+    Whisper commonly hallucinates on silence by looping a single word or short
+    phrase repeatedly (e.g. "okay okay okay okay..."). Detect and drop those segments.
+    """
+    filtered = []
+    for seg in segments:
+        text = seg["text"].strip()
+        if not text:
+            continue
+
+        words = text.split()
+        if not words:
+            continue
+
+        # Detect consecutive-word repetition loops (e.g. "okay okay okay okay")
+        if len(words) >= 4:
+            counts = Counter(w.lower().strip(".,!?") for w in words)
+            top_word, top_count = counts.most_common(1)[0]
+            # If a single word is >60% of the segment AND appears ≥4 times → hallucination
+            if top_count >= 4 and top_count / len(words) > 0.6:
+                continue
+
+        # Detect repeating short phrases (e.g. "you know you know you know")
+        # Check if the first 1-3 words repeat as a pattern across the segment
+        for phrase_len in (1, 2, 3):
+            if len(words) >= phrase_len * 4:
+                phrase = tuple(w.lower() for w in words[:phrase_len])
+                all_phrases = [
+                    tuple(w.lower() for w in words[i:i + phrase_len])
+                    for i in range(0, len(words) - phrase_len + 1, phrase_len)
+                ]
+                if all_phrases and all_phrases.count(phrase) / len(all_phrases) > 0.7:
+                    break  # is a loop — skip below
+        else:
+            filtered.append(seg)
+            continue
+        # fell through the for-loop break → hallucination, skip segment
+
+    return filtered
 
 
 def merge_transcripts(transcripts: dict[str, list], speakers: list[dict]) -> list[dict]:
