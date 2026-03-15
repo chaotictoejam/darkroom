@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -35,6 +36,138 @@ def get_video_info(file_path: str) -> dict:
             height = int(stream.get("height", 1080))
             break
     return {"duration": duration, "width": width, "height": height}
+
+
+# ---------------------------------------------------------------------------
+# Smart crop — face/body detection via OpenCV, center-crop fallback
+# ---------------------------------------------------------------------------
+
+# Module-level cache: video_path → (cx_ratio, cy_ratio)
+# Ratios are 0.0–1.0 relative to original frame dimensions, so they survive
+# any downstream scale operation.
+_face_center_cache: dict[str, tuple[float, float]] = {}
+
+
+def _detect_face_center_ratio(video_path: str) -> tuple[float, float]:
+    """
+    Sample 3 frames from video_path, run face + upper-body detection via OpenCV,
+    and return (cx_ratio, cy_ratio) — face centre as a fraction of frame size.
+
+    Falls back to (0.5, 0.5) — dead centre — if OpenCV is unavailable or no
+    face/body is found.
+    """
+    if video_path in _face_center_cache:
+        return _face_center_cache[video_path]
+
+    default = (0.5, 0.5)
+
+    try:
+        import cv2
+    except ImportError:
+        _face_center_cache[video_path] = default
+        return default
+
+    info = get_video_info(video_path)
+    duration = info["duration"]
+    if duration <= 0:
+        _face_center_cache[video_path] = default
+        return default
+
+    face_cascade = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    )
+    body_cascade = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_upperbody.xml"
+    )
+
+    sample_times = [duration * 0.2, duration * 0.5, duration * 0.8]
+    centers = []
+
+    for t in sample_times:
+        tmp = tempfile.mktemp(suffix=".jpg")
+        try:
+            cmd = [
+                "ffmpeg", "-y", "-ss", str(t), "-i", video_path,
+                "-frames:v", "1", "-q:v", "3", tmp,
+            ]
+            r = subprocess.run(cmd, capture_output=True, timeout=20)
+            if r.returncode != 0:
+                continue
+
+            img = cv2.imread(tmp)
+            if img is None:
+                continue
+
+            h_img, w_img = img.shape[:2]
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+            # Face detection
+            faces = face_cascade.detectMultiScale(
+                gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
+            )
+            if len(faces):
+                x, y, w, bh = max(faces, key=lambda f: f[2] * f[3])
+                centers.append(((x + w / 2) / w_img, (y + bh / 2) / h_img))
+                continue
+
+            # Upper-body fallback
+            bodies = body_cascade.detectMultiScale(
+                gray, scaleFactor=1.1, minNeighbors=3, minSize=(50, 50)
+            )
+            if len(bodies):
+                x, y, w, bh = max(bodies, key=lambda f: f[2] * f[3])
+                centers.append(((x + w / 2) / w_img, (y + bh / 2) / h_img))
+
+        except Exception:
+            pass
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+    if not centers:
+        _face_center_cache[video_path] = default
+        return default
+
+    cx = sum(c[0] for c in centers) / len(centers)
+    cy = sum(c[1] for c in centers) / len(centers)
+    result = (cx, cy)
+    _face_center_cache[video_path] = result
+    return result
+
+
+def _smart_crop_filter(video_path: str, target_w: int, target_h: int, zoom: float = 1.0) -> str:
+    """
+    Return an FFmpeg filter fragment (no input/output labels) that scales the
+    video to fill target_w×target_h and crops it centred on the detected face.
+
+    zoom > 1.0 scales to a larger canvas first so the final crop captures a
+    smaller region of the original — effectively zooming in on the face.
+    zoom=2.0 means only 50% of the source area is visible after cropping.
+
+    Example output:
+        scale=2276:1280,crop=1080:640:598:320
+    """
+    info = get_video_info(video_path)
+    orig_w, orig_h = info["width"], info["height"]
+
+    # Scale so the smaller dimension fills zoom × tile (larger canvas = tighter crop)
+    scale = max(target_w * zoom / orig_w, target_h * zoom / orig_h)
+    scaled_w = int(orig_w * scale)
+    scaled_h = int(orig_h * scale)
+
+    cx_ratio, cy_ratio = _detect_face_center_ratio(video_path)
+
+    # Map face centre to scaled-space pixel coords
+    cx_px = cx_ratio * scaled_w
+    cy_px = cy_ratio * scaled_h
+
+    # Top-left of crop window, clamped so the window stays inside the frame
+    crop_x = int(max(0, min(scaled_w - target_w, cx_px - target_w / 2)))
+    crop_y = int(max(0, min(scaled_h - target_h, cy_px - target_h / 2)))
+
+    return f"scale={scaled_w}:{scaled_h},crop={target_w}:{target_h}:{crop_x}:{crop_y}"
 
 
 # ---------------------------------------------------------------------------
@@ -151,18 +284,18 @@ def _build_concat_filter(kept_segments: list[dict], speakers_dict: dict, vertica
         idx = cam_to_idx[cam]
         s, e = seg["start"], seg["end"]
 
+        file_path = speakers_dict[cam]["file_path"]
         if vertical:
-            # Scale to height 1920, crop center 1080 width → 1080×1920 (9:16)
+            crop_frag = _smart_crop_filter(file_path, 1080, 1920)
             vf = (
                 f"[{idx}:v]trim=start={s}:end={e},setpts=PTS-STARTPTS,"
-                f"scale=-1:1920,crop=1080:1920[v{i}]"
+                f"{crop_frag}[v{i}]"
             )
         else:
-            # Scale to 1920×1080, letterbox if needed
+            crop_frag = _smart_crop_filter(file_path, 1920, 1080)
             vf = (
                 f"[{idx}:v]trim=start={s}:end={e},setpts=PTS-STARTPTS,"
-                f"scale=1920:1080:force_original_aspect_ratio=decrease,"
-                f"pad=1920:1080:(ow-iw)/2:(oh-ih)/2[v{i}]"
+                f"{crop_frag}[v{i}]"
             )
 
         af = f"[{idx}:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}]"
@@ -214,14 +347,20 @@ def _build_splitscreen_filter_landscape(speakers_dict: dict, segments: list[dict
     concat_v_labels = []
     concat_a_labels = []
 
+    # Pre-compute smart crop per camera (runs face detection once per cam)
+    tile_zoom = {1: 1.0, 2: 2.0, 3: 2.0, 4: 1.5}.get(n_cams, 1.5)
+    cam_crop = {
+        cam_id: _smart_crop_filter(speakers_dict[cam_id]["file_path"], per_w, per_h, zoom=tile_zoom)
+        for cam_id in cam_ids
+    }
+
     for si, seg in enumerate(kept):
         cs, ce = seg["start"], seg["end"]
 
         for ki, cam_id in enumerate(cam_ids):
             filter_parts.append(
                 f"[{ki}:v]trim=start={cs}:end={ce},setpts=PTS-STARTPTS,"
-                f"scale={per_w}:{per_h}:force_original_aspect_ratio=increase,"
-                f"crop={per_w}:{per_h}[sv{si}_{ki}]"
+                f"{cam_crop[cam_id]}[sv{si}_{ki}]"
             )
 
         tile_labels = "".join(f"[sv{si}_{ki}]" for ki in range(n_cams))
@@ -289,15 +428,21 @@ def _build_splitscreen_filter(clips: list[dict], speakers_dict: dict):
     concat_v_labels = []
     concat_a_labels = []
 
+    # Pre-compute smart crop per camera once
+    tile_zoom = {1: 1.0, 2: 1.5, 3: 2.0, 4: 1.5}.get(n_cams, 1.5)
+    cam_crop = {
+        cam_id: _smart_crop_filter(speakers_dict[cam_id]["file_path"], per_w, per_h, zoom=tile_zoom)
+        for cam_id in cam_ids
+    }
+
     for ci, clip in enumerate(clips):
         cs, ce = clip["start"], clip["end"]
 
-        # Scale + crop each cam tile
+        # Scale + smart-crop each cam tile
         for ki, cam_id in enumerate(cam_ids):
             filter_parts.append(
                 f"[{ki}:v]trim=start={cs}:end={ce},setpts=PTS-STARTPTS,"
-                f"scale={per_w}:{per_h}:force_original_aspect_ratio=increase,"
-                f"crop={per_w}:{per_h}[cv{ci}_{ki}]"
+                f"{cam_crop[cam_id]}[cv{ci}_{ki}]"
             )
 
         # Stack tiles
