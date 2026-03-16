@@ -741,6 +741,36 @@ a:hover { text-decoration: underline; }
   line-height: 1.5;
   color: var(--text);
 }
+.transcript-edit-btn {
+  flex-shrink: 0;
+  opacity: 0;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 10px;
+  padding: 1px 6px;
+  cursor: pointer;
+  transition: opacity 0.15s, color 0.15s;
+  align-self: flex-start;
+  margin-top: 1px;
+}
+.transcript-line:hover .transcript-edit-btn { opacity: 1; }
+.transcript-edit-btn:hover { color: var(--text); border-color: var(--text-dim); }
+.transcript-edit-input {
+  flex: 1;
+  background: var(--bg-elevated);
+  border: 1px solid var(--red);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 2px 6px;
+  font-family: inherit;
+  resize: none;
+  outline: none;
+  width: 100%;
+}
 
 /* Sidebar */
 .sidebar {
@@ -2750,19 +2780,80 @@ function buildTranscript() {
     return;
   }
 
-  S.project.merged_transcript.forEach(seg => {
+  S.project.merged_transcript.forEach((seg, idx) => {
     const cut = isSegCut(seg.start, seg.end);
     const line = document.createElement('div');
     line.className = `transcript-line${cut ? ' cut' : ''}`;
     line.dataset.start = seg.start;
     line.dataset.end = seg.end;
+    line.dataset.idx = idx;
     line.innerHTML = `
       <span class="speaker-badge badge-${seg.speaker_id}">${esc(seg.speaker_id)}</span>
       <span class="transcript-time mono">${fmtSec(seg.start)}</span>
       <span class="transcript-text">${esc(seg.text)}</span>
+      <button class="transcript-edit-btn" title="Edit text">✎</button>
     `;
-    line.addEventListener('click', () => seekTo(seg.start));
+    const textSpan = line.querySelector('.transcript-text');
+    const editBtn = line.querySelector('.transcript-edit-btn');
+
+    line.addEventListener('click', e => {
+      if (!e.target.closest('.transcript-edit-btn') && !e.target.closest('.transcript-edit-input'))
+        seekTo(seg.start);
+    });
+
+    editBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      startTranscriptEdit(line, textSpan, editBtn, idx, seg);
+    });
+
     container.appendChild(line);
+  });
+}
+
+function startTranscriptEdit(line, textSpan, editBtn, idx, seg) {
+  if (line.querySelector('.transcript-edit-input')) return; // already editing
+  const ta = document.createElement('textarea');
+  ta.className = 'transcript-edit-input';
+  ta.value = seg.text;
+  ta.rows = Math.max(1, Math.ceil(seg.text.length / 60));
+  textSpan.replaceWith(ta);
+  editBtn.style.display = 'none';
+  ta.focus();
+  ta.select();
+
+  async function saveEdit() {
+    const newText = ta.value.trim();
+    ta.disabled = true;
+    try {
+      const res = await fetch(`/api/projects/${S.project.id}/transcript/${idx}`, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({text: newText}),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      seg.text = newText;
+      S.project.merged_transcript[idx] = {...seg, text: newText};
+    } catch (err) {
+      console.error('Transcript save failed:', err);
+    }
+    // Restore span with updated text
+    const newSpan = document.createElement('span');
+    newSpan.className = 'transcript-text';
+    newSpan.textContent = seg.text;
+    ta.replaceWith(newSpan);
+    editBtn.style.display = '';
+    // Re-attach edit handler
+    newSpan.closest('.transcript-line').querySelector('.transcript-edit-btn')
+      .addEventListener('click', e => {
+        e.stopPropagation();
+        startTranscriptEdit(line, newSpan, editBtn, idx, seg);
+      });
+  }
+
+  ta.addEventListener('blur', saveEdit);
+  ta.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ta.blur(); }
+    if (e.key === 'Escape') { ta.value = seg.text; ta.blur(); }
   });
 }
 

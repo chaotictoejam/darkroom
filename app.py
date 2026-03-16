@@ -358,6 +358,41 @@ def import_edl(project_id):
 
 
 # ---------------------------------------------------------------------------
+# Transcript editing
+# ---------------------------------------------------------------------------
+
+@app.route("/api/projects/<project_id>/transcript/<int:seg_index>", methods=["PATCH"])
+def update_transcript_segment(project_id, seg_index):
+    proj = get_project(project_id)
+    if not proj:
+        return jsonify({"error": "Project not found"}), 404
+    mt = proj.get("merged_transcript", [])
+    if seg_index < 0 or seg_index >= len(mt):
+        return jsonify({"error": "Segment index out of range"}), 400
+
+    data = request.get_json(force=True) or {}
+    new_text = data.get("text", "").strip()
+    seg = mt[seg_index]
+    seg["text"] = new_text
+
+    # Remap word-level timestamps: distribute evenly across segment duration
+    words = [w for w in new_text.split() if w]
+    if words:
+        duration = seg["end"] - seg["start"]
+        step = duration / len(words)
+        seg["words"] = [
+            {"word": " " + w, "start": seg["start"] + i * step, "end": seg["start"] + (i + 1) * step}
+            for i, w in enumerate(words)
+        ]
+    else:
+        seg["words"] = []
+
+    proj["merged_transcript"] = mt
+    save_project(proj)
+    return jsonify({"ok": True, "segment": seg})
+
+
+# ---------------------------------------------------------------------------
 # EDL editing (user modifications)
 # ---------------------------------------------------------------------------
 
