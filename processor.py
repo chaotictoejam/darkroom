@@ -44,7 +44,7 @@ def _wav_to_numpy(wav_path: str) -> np.ndarray:
     return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
 
 
-def transcribe_file(file_path: str, speaker_id: str, speaker_name: str, model_name: str = "base") -> list[dict]:
+def transcribe_file(file_path: str, speaker_id: str, speaker_name: str, model_name: str = "base", language: str | None = None) -> list[dict]:
     """Transcribe a single video/audio file using Whisper. Returns list of segment dicts."""
     audio_path = _extract_audio(file_path)
     try:
@@ -53,6 +53,7 @@ def transcribe_file(file_path: str, speaker_id: str, speaker_name: str, model_na
         result = model.transcribe(
             audio_np,
             word_timestamps=True,
+            language=language,
             # temperature=0 forces greedy decoding — far less likely to hallucinate loops
             temperature=0,
             # Don't feed previous segment text as context — prevents one hallucination
@@ -92,7 +93,7 @@ def transcribe_file(file_path: str, speaker_id: str, speaker_name: str, model_na
     return _filter_hallucinations(segments)
 
 
-def transcribe_all(speakers: list[dict], model_name: str, progress_callback=None) -> dict[str, list]:
+def transcribe_all(speakers: list[dict], model_name: str, progress_callback=None, language: str | None = None) -> dict[str, list]:
     """Transcribe all speaker files. Returns {speaker_id: [segments]}."""
     transcripts = {}
     total = len(speakers)
@@ -106,6 +107,7 @@ def transcribe_all(speakers: list[dict], model_name: str, progress_callback=None
             speaker["id"],
             speaker["name"],
             model_name,
+            language=language,
         )
         transcripts[speaker["id"]] = segments
 

@@ -1351,6 +1351,39 @@ a:hover { text-decoration: underline; }
       <button class="add-speaker-btn" id="btn-add-speaker">+ Add camera</button>
     </div>
 
+    <div style="display:flex;gap:10px">
+      <div class="form-field" style="flex:1">
+        <label class="form-label">Language</label>
+        <select id="setup-language" style="background:var(--bg-elevated);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;width:100%">
+          <option value="en">English</option>
+          <option value="">Auto-detect</option>
+          <option value="es">Spanish</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="it">Italian</option>
+          <option value="pt">Portuguese</option>
+          <option value="nl">Dutch</option>
+          <option value="pl">Polish</option>
+          <option value="ru">Russian</option>
+          <option value="zh">Chinese</option>
+          <option value="ja">Japanese</option>
+          <option value="ko">Korean</option>
+          <option value="ar">Arabic</option>
+          <option value="hi">Hindi</option>
+        </select>
+      </div>
+      <div class="form-field" style="flex:1">
+        <label class="form-label">Whisper model</label>
+        <select id="setup-model" style="background:var(--bg-elevated);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;width:100%">
+          <option value="base">base — fast, less accurate</option>
+          <option value="small">small — balanced</option>
+          <option value="medium" selected>medium — good accuracy</option>
+          <option value="large">large — best, slowest</option>
+          <option value="turbo">turbo — fast + accurate</option>
+        </select>
+      </div>
+    </div>
+
     <button class="btn-primary" id="btn-upload-start" disabled>Upload &amp; Transcribe</button>
   </div>
 </div>
@@ -1844,10 +1877,12 @@ const API = {
   async del(path) {
     await fetch(path, { method: 'DELETE' });
   },
-  async uploadFiles(projectId, files, names) {
+  async uploadFiles(projectId, files, names, language, model) {
     const fd = new FormData();
     files.forEach(f => fd.append('files', f));
     names.forEach(n => fd.append('names', n));
+    if (language) fd.append('language', language);
+    if (model) fd.append('model', model);
     const r = await fetch(`/api/projects/${projectId}/upload`, { method: 'POST', body: fd });
     if (!r.ok) throw new Error(`Upload failed: ${r.status}`);
     return r.json();
@@ -2053,7 +2088,9 @@ el('btn-upload-start').addEventListener('click', async () => {
     // Upload files
     const files = setupSpeakers.map(sp => sp.file);
     const names = setupSpeakers.map(sp => sp.name.trim());
-    await API.uploadFiles(proj.id, files, names);
+    const language = el('setup-language').value;
+    const model = el('setup-model').value;
+    await API.uploadFiles(proj.id, files, names, language, model);
 
     // Start transcription
     await API.post(`/api/projects/${proj.id}/transcribe`, {});

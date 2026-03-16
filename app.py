@@ -3,7 +3,6 @@ app.py — Flask server + API routes for Darkroom
 """
 
 import json
-import os
 import threading
 import traceback
 import uuid
@@ -80,7 +79,6 @@ def index():
 def api_status():
     return jsonify({
         "ffmpeg_available": ffmpeg_available,
-        "whisper_model": os.getenv("WHISPER_MODEL", "base"),
     })
 
 
@@ -189,6 +187,8 @@ def upload_files(project_id):
 
     files = request.files.getlist("files")
     names = request.form.getlist("names")
+    language = request.form.get("language", "").strip() or None
+    model = request.form.get("model", "").strip() or "medium"
     cam_ids = ["A", "B", "C", "D"]
 
     speakers = []
@@ -207,6 +207,8 @@ def upload_files(project_id):
         })
 
     proj["speakers"] = speakers
+    proj["transcribe_language"] = language
+    proj["transcribe_model"] = model
     proj["status"] = "uploaded"
     proj["progress"] = {"step": "uploaded", "percent": 0, "message": "Files uploaded"}
     save_project(proj)
@@ -234,7 +236,8 @@ def start_transcription(project_id):
             p["progress"] = {"step": "transcribing", "percent": 5, "message": "Loading Whisper model..."}
             save_project(p)
 
-            model_name = os.getenv("WHISPER_MODEL", "base")
+            model_name = p.get("transcribe_model") or "medium"
+            language = p.get("transcribe_language") or None
             total = len(p["speakers"])
 
             def _progress(i, total, name):
@@ -247,7 +250,7 @@ def start_transcription(project_id):
                 }
                 save_project(q)
 
-            transcripts = transcribe_all(p["speakers"], model_name, _progress)
+            transcripts = transcribe_all(p["speakers"], model_name, _progress, language=language)
 
             p = get_project(project_id)
             p["transcripts"] = transcripts
