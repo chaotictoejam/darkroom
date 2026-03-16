@@ -167,7 +167,7 @@ def _smart_crop_filter(video_path: str, target_w: int, target_h: int, zoom: floa
     crop_x = int(max(0, min(scaled_w - target_w, cx_px - target_w / 2)))
     crop_y = int(max(0, min(scaled_h - target_h, cy_px - target_h / 2)))
 
-    return f"scale={scaled_w}:{scaled_h},crop={target_w}:{target_h}:{crop_x}:{crop_y}"
+    return f"scale={scaled_w}:{scaled_h},crop={target_w}:{target_h}:{crop_x}:{crop_y},setsar=1"
 
 
 # ---------------------------------------------------------------------------
@@ -255,51 +255,54 @@ def _build_concat_filter(kept_segments: list[dict], speakers_dict: dict, vertica
     """
     Return (input_args, filter_complex, n_segments) for an ffmpeg concat.
 
-    Strategy: one input per unique camera.  When the same camera appears in
-    multiple segments its stream is explicitly split (split/asplit) so every
-    segment has its own private copy.  trim/atrim are then used for accurate
-    per-segment cutting.  This avoids the silent-audio bug caused by FFmpeg
-    refusing to deliver the same stream to more than one filter branch.
+    Video: switches per EDL segment camera assignment.
+    Audio: ALL cameras' mics are mixed for every segment, so every speaker
+           is always audible regardless of which camera is shown.
     """
-    # Collect unique cameras in order of first use
-    unique_cams: list[str] = []
+    # ALL cameras in project — inputs and audio sources
+    all_cams: list[str] = list(speakers_dict.keys())
+    n_all = len(all_cams)
+    if not all_cams:
+        raise ValueError("No cameras in speakers_dict")
+
+    # Cameras that appear in segments — needed for video switching
+    seg_cams: list[str] = []
     for seg in kept_segments:
         cam = seg.get("camera")
-        if cam in speakers_dict and cam not in unique_cams:
-            unique_cams.append(cam)
-
-    if not unique_cams:
+        if cam in speakers_dict and cam not in seg_cams:
+            seg_cams.append(cam)
+    if not seg_cams:
         raise ValueError("No valid camera assignments found in kept segments")
 
-    fallback_cam = unique_cams[0]
-    cam_to_idx = {cam: i for i, cam in enumerate(unique_cams)}
+    fallback_cam = seg_cams[0]
+    # cam_to_idx covers ALL cameras (their -i index)
+    cam_to_idx = {cam: i for i, cam in enumerate(all_cams)}
 
-    # Build one -i per unique camera
+    # One -i per camera in the project
     input_args: list[str] = []
-    for cam in unique_cams:
+    for cam in all_cams:
         input_args.extend(["-i", speakers_dict[cam]["file_path"]])
 
-    # Pre-compute crop per camera (face-detection cache keeps this fast)
+    # Pre-compute crop for cameras that appear in segments (video only)
     crop_cache: dict[str, str] = {}
-    for cam in unique_cams:
+    for cam in seg_cams:
         fp = speakers_dict[cam]["file_path"]
         crop_cache[cam] = _smart_crop_filter(fp, 1080 if vertical else 1920,
                                               1920 if vertical else 1080)
 
-    # Count how many segments each camera serves (for video stream splitting)
-    cam_use_count: dict[str, int] = {cam: 0 for cam in unique_cams}
+    # Count video uses per camera (for split)
+    cam_use_count: dict[str, int] = {cam: 0 for cam in seg_cams}
     for seg in kept_segments:
         cam = seg.get("camera") if seg.get("camera") in cam_to_idx else fallback_cam
-        cam_use_count[cam] += 1
+        cam_use_count[cam] = cam_use_count.get(cam, 0) + 1
 
     n_segs = len(kept_segments)
-    n_cams = len(unique_cams)
 
     filter_parts: list[str] = []
 
     # Split video streams — one copy per segment that uses that camera
     cam_v_pool: dict[str, list[str]] = {}
-    for cam in unique_cams:
+    for cam in seg_cams:
         idx = cam_to_idx[cam]
         n = cam_use_count[cam]
         if n == 1:
@@ -309,10 +312,9 @@ def _build_concat_filter(kept_segments: list[dict], speakers_dict: dict, vertica
             filter_parts.append(f"[{idx}:v]split={n}{v_labels}")
             cam_v_pool[cam] = [f"[vs{cam}{j}]" for j in range(n)]
 
-    # Split audio streams — every camera's audio is used for EVERY segment
-    # (all mics mixed together regardless of which camera is active)
+    # Split audio streams for ALL cameras — n_segs copies each
     cam_a_pool: dict[str, list[str]] = {}
-    for cam in unique_cams:
+    for cam in all_cams:
         idx = cam_to_idx[cam]
         if n_segs == 1:
             cam_a_pool[cam] = [f"[{idx}:a]"]
@@ -321,7 +323,7 @@ def _build_concat_filter(kept_segments: list[dict], speakers_dict: dict, vertica
             filter_parts.append(f"[{idx}:a]asplit={n_segs}{a_labels}")
             cam_a_pool[cam] = [f"[as{cam}{j}]" for j in range(n_segs)]
 
-    cam_use_counter: dict[str, int] = {cam: 0 for cam in unique_cams}
+    cam_use_counter: dict[str, int] = {cam: 0 for cam in seg_cams}
     stream_labels: list[str] = []
 
     for i, seg in enumerate(kept_segments):
@@ -329,30 +331,31 @@ def _build_concat_filter(kept_segments: list[dict], speakers_dict: dict, vertica
         if cam not in cam_to_idx:
             cam = fallback_cam
 
-        # Video: active camera only
-        j = cam_use_counter[cam]
-        cam_use_counter[cam] += 1
+        # Video: active camera
+        j = cam_use_counter.get(cam, 0)
+        cam_use_counter[cam] = j + 1
         v_src = cam_v_pool[cam][j]
         s, e = seg["start"], seg["end"]
         vf = f"{v_src}trim=start={s}:end={e},setpts=PTS-STARTPTS,{crop_cache[cam]}[v{i}]"
         filter_parts.append(vf)
 
-        # Audio: mix ALL cameras' mics for this time range
-        if n_cams == 1:
-            a_src = cam_a_pool[unique_cams[0]][i]
+        # Audio: mix ALL cameras' mics
+        if n_all == 1:
+            a_src = cam_a_pool[all_cams[0]][i]
             filter_parts.append(f"{a_src}atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}]")
         else:
-            for k, ac in enumerate(unique_cams):
+            for k, ac in enumerate(all_cams):
                 a_src = cam_a_pool[ac][i]
                 filter_parts.append(f"{a_src}atrim=start={s}:end={e},asetpts=PTS-STARTPTS[am{i}_{k}]")
-            amix_in = "".join(f"[am{i}_{k}]" for k in range(n_cams))
-            filter_parts.append(f"{amix_in}amix=inputs={n_cams}:normalize=0:dropout_transition=0[a{i}]")
+            amix_in = "".join(f"[am{i}_{k}]" for k in range(n_all))
+            filter_parts.append(f"{amix_in}amix=inputs={n_all}:normalize=0:dropout_transition=0[a{i}]")
 
         stream_labels.extend([f"[v{i}]", f"[a{i}]"])
 
     n = len(kept_segments)
-    concat_str = "".join(stream_labels) + f"concat=n={n}:v=1:a=1[outv][outa]"
-    filter_complex = ";".join(filter_parts) + ";" + concat_str
+    concat_str = "".join(stream_labels) + f"concat=n={n}:v=1:a=1[outv][outa_raw]"
+    norm_str = "[outa_raw]loudnorm=I=-16:TP=-1.5:LRA=11[outa]"
+    filter_complex = ";".join(filter_parts) + ";" + concat_str + ";" + norm_str
 
     return input_args, filter_complex, n
 
@@ -440,7 +443,8 @@ def _build_splitscreen_filter_landscape(speakers_dict: dict, segments: list[dict
 
     n = len(kept)
     all_labels = "".join(concat_v_labels[i] + concat_a_labels[i] for i in range(n))
-    filter_parts.append(f"{all_labels}concat=n={n}:v=1:a=1[outv][outa]")
+    filter_parts.append(f"{all_labels}concat=n={n}:v=1:a=1[outv][outa_raw]")
+    filter_parts.append("[outa_raw]loudnorm=I=-16:TP=-1.5:LRA=11[outa]")
 
     return input_args, ";".join(filter_parts)
 
@@ -524,17 +528,25 @@ def _build_splitscreen_filter(clips: list[dict], speakers_dict: dict):
         concat_v_labels.append(f"[cv{ci}]")
         concat_a_labels.append(f"[ca{ci}]")
 
-    # Concat all clips
+    # Concat all clips then normalise
     n_clips = len(clips)
     all_labels = "".join(concat_v_labels[i] + concat_a_labels[i] for i in range(n_clips))
-    filter_parts.append(f"{all_labels}concat=n={n_clips}:v=1:a=1[outv][outa]")
+    filter_parts.append(f"{all_labels}concat=n={n_clips}:v=1:a=1[outv][outa_raw]")
+    filter_parts.append("[outa_raw]loudnorm=I=-16:TP=-1.5:LRA=11[outa]")
 
     return input_args, ";".join(filter_parts)
 
 
 def _run_ffmpeg(cmd: list[str]) -> None:
+    import sys
+    print("\n=== FFmpeg CMD ===", file=sys.stderr)
+    print(" ".join(cmd), file=sys.stderr)
+    print("=================\n", file=sys.stderr)
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
+        print("\n=== FFmpeg STDERR ===", file=sys.stderr)
+        print(result.stderr[-3000:], file=sys.stderr)
+        print("====================\n", file=sys.stderr)
         raise subprocess.CalledProcessError(result.returncode, cmd, result.stderr)
 
 
@@ -876,6 +888,73 @@ def _ffmpeg_escape_path(path: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Transcript-driven camera segment builder
+# ---------------------------------------------------------------------------
+
+def _transcript_camera_segments(
+    clips: list[dict],
+    edl_segments: list[dict],
+    merged_transcript: list[dict],
+    speakers_dict: dict,
+) -> list[dict]:
+    """
+    Build fine-grained camera-switching segments from speaker assignments in the
+    merged transcript, respecting EDL keep/cut decisions.
+
+    Each transcript segment already knows which speaker (= camera) is active.
+    We intersect those with the clip window and the EDL kept ranges to produce
+    a list of {start, end, camera, keep} dicts ordered by time.
+
+    Consecutive segments on the same camera are merged to avoid pointless cuts.
+    Silences/gaps between transcript segments hold the last known camera.
+    """
+    kept_ranges = [(s["start"], s["end"]) for s in edl_segments if s.get("keep", True)]
+
+    raw: list[dict] = []
+    for clip in clips:
+        cs, ce = clip["start"], clip["end"]
+        for tseg in merged_transcript:
+            s = max(tseg["start"], cs)
+            e = min(tseg["end"], ce)
+            if e <= s:
+                continue
+            speaker_id = tseg.get("speaker_id")
+            if speaker_id not in speakers_dict:
+                continue
+            # Intersect with each EDL kept range
+            for ks, ke in kept_ranges:
+                ss = max(s, ks)
+                ee = min(e, ke)
+                if ee > ss:
+                    raw.append({"start": ss, "end": ee, "camera": speaker_id, "keep": True})
+
+    if not raw:
+        return []
+
+    raw.sort(key=lambda x: x["start"])
+
+    # Resolve overlaps: if two segments overlap, the later one wins
+    resolved: list[dict] = []
+    for seg in raw:
+        if resolved and seg["start"] < resolved[-1]["end"]:
+            # Trim the previous segment to end where this one begins
+            resolved[-1]["end"] = seg["start"]
+            if resolved[-1]["end"] <= resolved[-1]["start"]:
+                resolved.pop()
+        resolved.append(dict(seg))
+
+    # Merge consecutive same-camera segments (gap ≤ 0.5 s counts as same shot)
+    merged: list[dict] = []
+    for seg in resolved:
+        if merged and merged[-1]["camera"] == seg["camera"] and seg["start"] - merged[-1]["end"] <= 0.5:
+            merged[-1]["end"] = seg["end"]
+        else:
+            merged.append(dict(seg))
+
+    return merged
+
+
+# ---------------------------------------------------------------------------
 # Custom short renderer (multi-clip + subtitle burn-in)
 # ---------------------------------------------------------------------------
 
@@ -907,16 +986,21 @@ def render_short_custom(
             raise ValueError("No clips provided for split-screen render.")
         input_args, filter_complex = _build_splitscreen_filter(clips, speakers_dict)
     else:
-        # Resolve kept sub-segments within each clip window (EDL-aware, single cam)
-        all_clip_segs = []
-        for clip in clips:
-            for seg in edl_segments:
-                if not seg.get("keep", True):
-                    continue
-                s = max(seg["start"], clip["start"])
-                e = min(seg["end"], clip["end"])
-                if e > s:
-                    all_clip_segs.append({**seg, "start": s, "end": e})
+        # Use transcript speaker assignments to drive camera switching.
+        # Falls back to EDL camera assignments if transcript yields nothing.
+        all_clip_segs = _transcript_camera_segments(
+            clips, edl_segments, merged_transcript, speakers_dict
+        )
+        if not all_clip_segs:
+            # Fallback: EDL-based segments
+            for clip in clips:
+                for seg in edl_segments:
+                    if not seg.get("keep", True):
+                        continue
+                    s = max(seg["start"], clip["start"])
+                    e = min(seg["end"], clip["end"])
+                    if e > s:
+                        all_clip_segs.append({**seg, "start": s, "end": e})
 
         if not all_clip_segs:
             raise ValueError("No kept segments found within the specified clip range(s).")
@@ -937,8 +1021,9 @@ def render_short_custom(
             ass_path = str(_Path(output_dir) / "subtitles.ass")
             with open(ass_path, "w", encoding="utf-8") as f:
                 f.write(ass_content)
-            # Reroute the final video output through the ass filter
-            filter_complex = filter_complex.replace("[outv][outa]", "[outv_presub][outa]")
+            # Reroute the final video output through the ass filter.
+            # Replace only the first [outv] (the concat output), not any later one.
+            filter_complex = filter_complex.replace("[outv]", "[outv_presub]", 1)
             escaped = _ffmpeg_escape_path(ass_path)
             filter_complex += f";[outv_presub]ass=filename='{escaped}'[outv]"
 
