@@ -738,6 +738,7 @@ def generate_ass(
     sub_position: str = "bottom",
     speakers_dict: dict | None = None,
     box_alpha: int = 0,
+    video_segments: list[dict] | None = None,
 ) -> str:
     """
     Generate ASS subtitle content for a short.
@@ -755,16 +756,22 @@ def generate_ass(
     if style == "none":
         return ""
 
-    # ── Collect rendered source pieces (EDL cuts applied) ────────────────────
-    rendered_pieces = []
-    for clip in clips:
-        for seg in edl_segments:
-            if not seg.get("keep", True):
-                continue
-            s = max(seg["start"], clip["start"])
-            e = min(seg["end"], clip["end"])
-            if e > s:
-                rendered_pieces.append({"src_start": s, "src_end": e})
+    # ── Collect rendered source pieces ────────────────────────────────────────
+    # If the caller provides the exact video segments (transcript-driven), use
+    # those directly so subtitle timing matches the video cut-for-cut.
+    # Otherwise fall back to EDL-based reconstruction.
+    if video_segments is not None:
+        rendered_pieces = [{"src_start": s["start"], "src_end": s["end"]} for s in video_segments]
+    else:
+        rendered_pieces = []
+        for clip in clips:
+            for seg in edl_segments:
+                if not seg.get("keep", True):
+                    continue
+                s = max(seg["start"], clip["start"])
+                e = min(seg["end"], clip["end"])
+                if e > s:
+                    rendered_pieces.append({"src_start": s, "src_end": e})
 
     if not rendered_pieces:
         return ""
@@ -1015,6 +1022,7 @@ def render_short_custom(
             sub_position=sub_position,
             speakers_dict=speakers_dict,
             box_alpha=box_alpha,
+            video_segments=all_clip_segs if camera_layout != "all" else None,
         )
         if ass_content:
             from pathlib import Path as _Path
