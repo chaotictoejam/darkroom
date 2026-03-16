@@ -31,11 +31,12 @@ Create an Edit Decision List following these rules:
 2. Remove silence gaps longer than 1.5 seconds
 3. Remove off-topic tangents, restarts, and technical interruptions
 4. NEVER cut mid-sentence — only cut at natural pause boundaries
-5. Assign `camera` to the speaker who is actively talking in each segment
+5. Assign `camera` to the speaker who is actively talking in each segment — every time the active speaker changes, start a NEW segment. Do NOT lump multiple speakers into one long segment.
 6. Use layout "single" for one speaker, "split" for two speakers talking together, "pip" for reaction shots
-7. Identify the single best 60–90 second clip for a Short/Reel (strong hook, complete thought, no context needed)
+7. Identify the 3–5 best clips for Shorts/Reels. Each clip must be under 90 seconds but can be as short as 15 seconds if the moment is punchy and self-contained. Prioritise: strong hook, complete thought, no context needed. Give each a descriptive label.
 8. Segments must be contiguous and together cover 0.0 to {duration:.1f} seconds
 9. Available cameras: {cameras}
+10. IMPORTANT: segments must be granular. A 60-second back-and-forth between two speakers should produce many short segments (5–20 seconds each), each on the correct camera. Never create a segment longer than ~30 seconds unless a single speaker talks uninterrupted for that long.
 
 Return this exact JSON structure (no other text):
 {{
@@ -53,10 +54,17 @@ Return this exact JSON structure (no other text):
   "clips": [
     {{
       "id": "clip_001",
-      "label": "Best 60-90s clip for Shorts",
+      "label": "Punchy opener",
       "start": 4.2,
-      "end": 94.2,
-      "reason": "Strong hook, complete thought"
+      "end": 34.8,
+      "reason": "Strong hook, no context needed"
+    }},
+    {{
+      "id": "clip_002",
+      "label": "Best story moment",
+      "start": 210.0,
+      "end": 285.5,
+      "reason": "Complete thought, high energy"
     }}
   ]
 }}

@@ -255,51 +255,99 @@ def _build_concat_filter(kept_segments: list[dict], speakers_dict: dict, vertica
     """
     Return (input_args, filter_complex, n_segments) for an ffmpeg concat.
 
-    Each kept segment trims from the assigned camera's file, then all are
-    concatenated into [outv][outa].
+    Strategy: one input per unique camera.  When the same camera appears in
+    multiple segments its stream is explicitly split (split/asplit) so every
+    segment has its own private copy.  trim/atrim are then used for accurate
+    per-segment cutting.  This avoids the silent-audio bug caused by FFmpeg
+    refusing to deliver the same stream to more than one filter branch.
     """
-    # Map camera ID → sequential ffmpeg input index
-    unique_cams = []
+    # Collect unique cameras in order of first use
+    unique_cams: list[str] = []
     for seg in kept_segments:
-        cam = seg.get("camera", "A")
+        cam = seg.get("camera")
         if cam in speakers_dict and cam not in unique_cams:
             unique_cams.append(cam)
 
     if not unique_cams:
         raise ValueError("No valid camera assignments found in kept segments")
 
+    fallback_cam = unique_cams[0]
     cam_to_idx = {cam: i for i, cam in enumerate(unique_cams)}
-    input_args = []
+
+    # Build one -i per unique camera
+    input_args: list[str] = []
     for cam in unique_cams:
         input_args.extend(["-i", speakers_dict[cam]["file_path"]])
 
-    filter_parts = []
-    stream_labels = []
+    # Pre-compute crop per camera (face-detection cache keeps this fast)
+    crop_cache: dict[str, str] = {}
+    for cam in unique_cams:
+        fp = speakers_dict[cam]["file_path"]
+        crop_cache[cam] = _smart_crop_filter(fp, 1080 if vertical else 1920,
+                                              1920 if vertical else 1080)
+
+    # Count how many segments each camera serves (for video stream splitting)
+    cam_use_count: dict[str, int] = {cam: 0 for cam in unique_cams}
+    for seg in kept_segments:
+        cam = seg.get("camera") if seg.get("camera") in cam_to_idx else fallback_cam
+        cam_use_count[cam] += 1
+
+    n_segs = len(kept_segments)
+    n_cams = len(unique_cams)
+
+    filter_parts: list[str] = []
+
+    # Split video streams — one copy per segment that uses that camera
+    cam_v_pool: dict[str, list[str]] = {}
+    for cam in unique_cams:
+        idx = cam_to_idx[cam]
+        n = cam_use_count[cam]
+        if n == 1:
+            cam_v_pool[cam] = [f"[{idx}:v]"]
+        else:
+            v_labels = "".join(f"[vs{cam}{j}]" for j in range(n))
+            filter_parts.append(f"[{idx}:v]split={n}{v_labels}")
+            cam_v_pool[cam] = [f"[vs{cam}{j}]" for j in range(n)]
+
+    # Split audio streams — every camera's audio is used for EVERY segment
+    # (all mics mixed together regardless of which camera is active)
+    cam_a_pool: dict[str, list[str]] = {}
+    for cam in unique_cams:
+        idx = cam_to_idx[cam]
+        if n_segs == 1:
+            cam_a_pool[cam] = [f"[{idx}:a]"]
+        else:
+            a_labels = "".join(f"[as{cam}{j}]" for j in range(n_segs))
+            filter_parts.append(f"[{idx}:a]asplit={n_segs}{a_labels}")
+            cam_a_pool[cam] = [f"[as{cam}{j}]" for j in range(n_segs)]
+
+    cam_use_counter: dict[str, int] = {cam: 0 for cam in unique_cams}
+    stream_labels: list[str] = []
 
     for i, seg in enumerate(kept_segments):
-        cam = seg.get("camera", unique_cams[0])
+        cam = seg.get("camera")
         if cam not in cam_to_idx:
-            cam = unique_cams[0]
+            cam = fallback_cam
 
-        idx = cam_to_idx[cam]
+        # Video: active camera only
+        j = cam_use_counter[cam]
+        cam_use_counter[cam] += 1
+        v_src = cam_v_pool[cam][j]
         s, e = seg["start"], seg["end"]
+        vf = f"{v_src}trim=start={s}:end={e},setpts=PTS-STARTPTS,{crop_cache[cam]}[v{i}]"
+        filter_parts.append(vf)
 
-        file_path = speakers_dict[cam]["file_path"]
-        if vertical:
-            crop_frag = _smart_crop_filter(file_path, 1080, 1920)
-            vf = (
-                f"[{idx}:v]trim=start={s}:end={e},setpts=PTS-STARTPTS,"
-                f"{crop_frag}[v{i}]"
-            )
+        # Audio: mix ALL cameras' mics for this time range
+        if n_cams == 1:
+            a_src = cam_a_pool[unique_cams[0]][i]
+            filter_parts.append(f"{a_src}atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}]")
         else:
-            crop_frag = _smart_crop_filter(file_path, 1920, 1080)
-            vf = (
-                f"[{idx}:v]trim=start={s}:end={e},setpts=PTS-STARTPTS,"
-                f"{crop_frag}[v{i}]"
-            )
+            for k, ac in enumerate(unique_cams):
+                a_src = cam_a_pool[ac][i]
+                filter_parts.append(f"{a_src}atrim=start={s}:end={e},asetpts=PTS-STARTPTS[am{i}_{k}]")
+            amix_in = "".join(f"[am{i}_{k}]" for k in range(n_cams))
+            filter_parts.append(f"{amix_in}amix=inputs={n_cams}:normalize=0:dropout_transition=0[a{i}]")
 
-        af = f"[{idx}:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}]"
-        filter_parts.extend([vf, af])
         stream_labels.extend([f"[v{i}]", f"[a{i}]"])
 
     n = len(kept_segments)
@@ -329,10 +377,6 @@ def _build_splitscreen_filter_landscape(speakers_dict: dict, segments: list[dict
     if not kept:
         raise ValueError("No kept segments to render")
 
-    input_args = []
-    for cam_id in cam_ids:
-        input_args.extend(["-i", speakers_dict[cam_id]["file_path"]])
-
     # Tile dimensions (total canvas 1920×1080)
     if n_cams == 1:
         per_w, per_h = 1920, 1080
@@ -354,12 +398,20 @@ def _build_splitscreen_filter_landscape(speakers_dict: dict, segments: list[dict
         for cam_id in cam_ids
     }
 
+    # Rebuild input_args per-segment so each segment gets its own dedicated inputs
+    input_args = []
     for si, seg in enumerate(kept):
         cs, ce = seg["start"], seg["end"]
+        for cam_id in cam_ids:
+            input_args.extend(["-ss", str(cs), "-to", str(ce), "-i", speakers_dict[cam_id]["file_path"]])
+
+    for si, seg in enumerate(kept):
+        cs, ce = seg["start"], seg["end"]
+        base = si * n_cams
 
         for ki, cam_id in enumerate(cam_ids):
             filter_parts.append(
-                f"[{ki}:v]trim=start={cs}:end={ce},setpts=PTS-STARTPTS,"
+                f"[{base + ki}:v]setpts=PTS-STARTPTS,"
                 f"{cam_crop[cam_id]}[sv{si}_{ki}]"
             )
 
@@ -378,10 +430,10 @@ def _build_splitscreen_filter_landscape(speakers_dict: dict, segments: list[dict
         # Mix audio from all cams
         for ki in range(n_cams):
             filter_parts.append(
-                f"[{ki}:a]atrim=start={cs}:end={ce},asetpts=PTS-STARTPTS[sa{si}_{ki}]"
+                f"[{base + ki}:a]asetpts=PTS-STARTPTS[sa{si}_{ki}]"
             )
         amix_in = "".join(f"[sa{si}_{ki}]" for ki in range(n_cams))
-        filter_parts.append(f"{amix_in}amix=inputs={n_cams}:normalize=0[sa{si}]")
+        filter_parts.append(f"{amix_in}amix=inputs={n_cams}:normalize=0:dropout_transition=0[sa{si}]")
 
         concat_v_labels.append(f"[sv{si}]")
         concat_a_labels.append(f"[sa{si}]")
@@ -409,11 +461,6 @@ def _build_splitscreen_filter(clips: list[dict], speakers_dict: dict):
     if n_cams == 0:
         raise ValueError("No cameras in project")
 
-    # Input args: one per camera
-    input_args = []
-    for cam_id in cam_ids:
-        input_args.extend(["-i", speakers_dict[cam_id]["file_path"]])
-
     # Per-cam tile dimensions
     if n_cams == 1:
         per_w, per_h = 1080, 1920
@@ -435,13 +482,23 @@ def _build_splitscreen_filter(clips: list[dict], speakers_dict: dict):
         for cam_id in cam_ids
     }
 
+    # Rebuild input_args per-clip so each clip gets its own dedicated inputs
+    # (avoids shared-stream audio loss when the same camera file is used for multiple clips)
+    input_args = []
     for ci, clip in enumerate(clips):
         cs, ce = clip["start"], clip["end"]
+        for cam_id in cam_ids:
+            input_args.extend(["-ss", str(cs), "-to", str(ce), "-i", speakers_dict[cam_id]["file_path"]])
+
+    for ci, clip in enumerate(clips):
+        cs, ce = clip["start"], clip["end"]
+        # Input index base for this clip
+        base = ci * n_cams
 
         # Scale + smart-crop each cam tile
         for ki, cam_id in enumerate(cam_ids):
             filter_parts.append(
-                f"[{ki}:v]trim=start={cs}:end={ce},setpts=PTS-STARTPTS,"
+                f"[{base + ki}:v]setpts=PTS-STARTPTS,"
                 f"{cam_crop[cam_id]}[cv{ci}_{ki}]"
             )
 
@@ -452,18 +509,17 @@ def _build_splitscreen_filter(clips: list[dict], speakers_dict: dict):
         elif n_cams <= 3:
             filter_parts.append(f"{tile_labels}vstack=inputs={n_cams}[cv{ci}]")
         else:
-            # 2×2 xstack
             filter_parts.append(
                 f"{tile_labels}xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0[cv{ci}]"
             )
 
-        # Trim + mix audio from all cameras
+        # Mix audio from all cameras for this clip
         for ki in range(n_cams):
             filter_parts.append(
-                f"[{ki}:a]atrim=start={cs}:end={ce},asetpts=PTS-STARTPTS[ca{ci}_{ki}]"
+                f"[{base + ki}:a]asetpts=PTS-STARTPTS[ca{ci}_{ki}]"
             )
         amix_in = "".join(f"[ca{ci}_{ki}]" for ki in range(n_cams))
-        filter_parts.append(f"{amix_in}amix=inputs={n_cams}:normalize=0[ca{ci}]")
+        filter_parts.append(f"{amix_in}amix=inputs={n_cams}:normalize=0:dropout_transition=0[ca{ci}]")
 
         concat_v_labels.append(f"[cv{ci}]")
         concat_a_labels.append(f"[ca{ci}]")
