@@ -3005,6 +3005,9 @@ function openShortsBuilder(initialClip) {
   el('sb-error').classList.add('hidden');
   el('sb-render-btn').disabled = false;
   el('sb-output-name').value = initialClip?.id || 'short_01';
+  S.boxOpacity = 100;
+  el('sb-box-opacity').value = 100;
+  el('sb-opacity-label').textContent = '100%';
   el('shorts-modal').classList.remove('hidden');
 }
 
