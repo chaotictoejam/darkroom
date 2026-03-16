@@ -2950,7 +2950,7 @@ function buildClipsList() {
       <div class="clip-item-actions">
         <button class="btn-small" data-seek="${c.start}">Seek</button>
         <button class="btn-clip-build"
-          data-clip='${JSON.stringify({start:c.start, end:c.end, label:c.label||c.id})}'>
+          data-clip="${esc(JSON.stringify({start:c.start, end:c.end, label:c.label||c.id}))}">
           Build Short ▶
         </button>
       </div>
