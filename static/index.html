@@ -482,6 +482,7 @@
     </div>
     <div class="modal-actions">
       <button class="btn-ghost" id="btn-render-cancel">Cancel</button>
+      <button class="btn-ghost" id="btn-render-preview">Preview ▶</button>
       <button class="btn-topbar-red" id="btn-render-confirm">Start Render</button>
     </div>
   </div>
@@ -1255,7 +1256,7 @@ function seekTo(t) {
 /* ---- Transcript ---- */
 /* ---- Preview modal ---- */
 let _previewClipLoopHandler = null;
-let _previewFromShorts = false;
+let _previewReturnModal = null; // id of modal to reopen on preview close
 let _subRafId = null;
 
 // ---- Subtitle preview helpers ----
@@ -1451,14 +1452,13 @@ function stopSubtitlePreview() {
 
 let _splitScreenVideos = []; // tracked so closePreviewModal can clean up
 
-function openPreviewModal(initialSpeaker, startTime, clipRange, fromShorts = false, splitScreenSpeakers = null) {
+function openPreviewModal(initialSpeaker, startTime, clipRange, fromShorts = false, splitScreenSpeakers = null, landscape = false) {
   const speakers = S.project.speakers || [];
   const wrap = el('preview-video').parentElement; // .preview-video-wrap
   const tabs = el('preview-cam-tabs');
   const label = el('preview-modal-label');
-  _previewFromShorts = fromShorts;
   _splitScreenVideos = [];
-  wrap.classList.toggle('shorts-preview', !!fromShorts);
+  wrap.classList.toggle('shorts-preview', !!fromShorts && !landscape);
 
   if (splitScreenSpeakers && splitScreenSpeakers.length > 1) {
     // ---- Split-screen mode: tile all cameras, synchronized ----
@@ -1469,7 +1469,7 @@ function openPreviewModal(initialSpeaker, startTime, clipRange, fromShorts = fal
     el('preview-video').style.display = 'none';
     const grid = document.createElement('div');
     const n = splitScreenSpeakers.length;
-    grid.className = `preview-split-grid cams-${Math.min(n, 4)}`;
+    grid.className = `preview-split-grid${landscape ? ' landscape' : ''} cams-${Math.min(n, 4)}`;
 
     splitScreenSpeakers.forEach((sp, i) => {
       const v = document.createElement('video');
@@ -1616,9 +1616,9 @@ function closePreviewModal() {
   }
   stopSubtitlePreview();
   el('preview-modal').classList.add('hidden');
-  if (_previewFromShorts) {
-    _previewFromShorts = false;
-    el('shorts-modal').classList.remove('hidden');
+  if (_previewReturnModal) {
+    el(_previewReturnModal).classList.remove('hidden');
+    _previewReturnModal = null;
   }
 }
 
@@ -2037,6 +2037,7 @@ el('sb-preview-btn').addEventListener('click', () => {
   if (!speakers.length) return;
   const camLayout = document.querySelector('#sb-layout-grid input[name=cam_layout]:checked')?.value || 'active';
   el('shorts-modal').classList.add('hidden');
+  _previewReturnModal = 'shorts-modal';
   if (camLayout === 'all') {
     const selectedIds = new Set(
       [...document.querySelectorAll('#sb-cam-list input[name=sb_cam]:checked')].map(cb => cb.value)
@@ -2368,6 +2369,26 @@ el('btn-render').addEventListener('click', () => {
 
 el('btn-render-cancel').addEventListener('click', () => {
   el('render-modal').classList.add('hidden');
+});
+
+el('btn-render-preview').addEventListener('click', () => {
+  const speakers = S.project?.speakers || [];
+  if (!speakers.length) return;
+  const renderLayout = document.querySelector('#render-layout-grid input[name=render_layout]:checked')?.value || 'edl';
+  el('render-modal').classList.add('hidden');
+
+  _previewReturnModal = 'render-modal';
+  if (renderLayout === 'split') {
+    const orderedSpeakers = (S.renderCamOrder.length ? S.renderCamOrder : speakers.map(s => s.id))
+      .map(id => speakers.find(s => s.id === id))
+      .filter(Boolean);
+    openPreviewModal(orderedSpeakers[0], S.currentTime, null, false, orderedSpeakers, true);
+  } else {
+    const t = S.currentTime;
+    const seg = S.edl?.segments?.find(s => s.start <= t && s.end > t);
+    const sp = speakers.find(s => s.id === seg?.camera) || speakers[0];
+    openPreviewModal(sp, t);
+  }
 });
 
 el('btn-render-confirm').addEventListener('click', async () => {

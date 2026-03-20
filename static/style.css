@@ -1138,6 +1138,17 @@ a:hover { text-decoration: underline; }
   max-height: 72vh;
   object-fit: cover;
 }
+/* Landscape split-screen grid — mirrors _build_splitscreen_filter_landscape (16:9 output) */
+.preview-split-grid.landscape {
+  aspect-ratio: 16 / 9;
+  max-height: 72vh;
+  width: min(90vw, 1280px);
+}
+.preview-split-grid.landscape.cams-1 { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+.preview-split-grid.landscape.cams-2 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+.preview-split-grid.landscape.cams-3 { grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr; }
+.preview-split-grid.landscape.cams-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+
 /* Split-screen grid — mirrors renderer.py _build_splitscreen_filter layout (9:16 output) */
 .preview-split-grid {
   display: grid;
