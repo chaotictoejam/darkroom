@@ -1257,6 +1257,7 @@ function seekTo(t) {
 /* ---- Preview modal ---- */
 let _previewClipLoopHandler = null;
 let _previewReturnModal = null; // id of modal to reopen on preview close
+let _edlSegRafId = null;        // RAF loop for EDL segment-skipping in episode preview
 let _subRafId = null;
 
 // ---- Subtitle preview helpers ----
@@ -1452,7 +1453,7 @@ function stopSubtitlePreview() {
 
 let _splitScreenVideos = []; // tracked so closePreviewModal can clean up
 
-function openPreviewModal(initialSpeaker, startTime, clipRange, fromShorts = false, splitScreenSpeakers = null, landscape = false) {
+function openPreviewModal(initialSpeaker, startTime, clipRange, fromShorts = false, splitScreenSpeakers = null, landscape = false, keptRanges = null) {
   const speakers = S.project.speakers || [];
   const wrap = el('preview-video').parentElement; // .preview-video-wrap
   const tabs = el('preview-cam-tabs');
@@ -1509,15 +1510,32 @@ function openPreviewModal(initialSpeaker, startTime, clipRange, fromShorts = fal
         leader.muted = false;
       }
 
-      // RAF loop: keep followers locked to leader's currentTime
+      // RAF loop: keep followers locked to leader's currentTime, skip EDL cuts
+      let _splitSegIdx = keptRanges
+        ? Math.max(0, keptRanges.findIndex(s => clipStart < s.end))
+        : -1;
+
       function syncLoop() {
         const t = leader.currentTime;
-        if (t >= clipEnd) {
-          _splitScreenVideos.forEach(({ vid }) => { vid.currentTime = clipStart; });
+        if (keptRanges) {
+          const cur = keptRanges[_splitSegIdx];
+          if (t >= cur.end) {
+            _splitSegIdx = (_splitSegIdx + 1) % keptRanges.length;
+            const next = keptRanges[_splitSegIdx];
+            _splitScreenVideos.forEach(({ vid }) => { vid.currentTime = next.start; });
+          } else {
+            followers.forEach(v => {
+              if (Math.abs(v.currentTime - t) > 0.15) v.currentTime = t;
+            });
+          }
         } else {
-          followers.forEach(v => {
-            if (Math.abs(v.currentTime - t) > 0.15) v.currentTime = t;
-          });
+          if (t >= clipEnd) {
+            _splitScreenVideos.forEach(({ vid }) => { vid.currentTime = clipStart; });
+          } else {
+            followers.forEach(v => {
+              if (Math.abs(v.currentTime - t) > 0.15) v.currentTime = t;
+            });
+          }
         }
         _syncRafId = requestAnimationFrame(syncLoop);
       }
@@ -1583,7 +1601,31 @@ function openPreviewModal(initialSpeaker, startTime, clipRange, fromShorts = fal
       });
     });
 
-    loadCam(initialSpeaker, startTime);
+    if (keptRanges && keptRanges.length) {
+      // EDL-aware episode preview: jump to nearest kept segment, skip cuts, switch cameras
+      if (_edlSegRafId) { cancelAnimationFrame(_edlSegRafId); _edlSegRafId = null; }
+      let segIdx = keptRanges.findIndex(s => startTime < s.end);
+      if (segIdx < 0) segIdx = 0;
+      const firstSeg = keptRanges[segIdx];
+      const firstSp = speakers.find(s => s.id === firstSeg.camera) || initialSpeaker;
+      const seekTo = (startTime >= firstSeg.start) ? startTime : firstSeg.start;
+      loadCam(firstSp, seekTo);
+
+      function edlLoop() {
+        const t = vid.currentTime;
+        const cur = keptRanges[segIdx];
+        if (t >= cur.end) {
+          segIdx = (segIdx + 1) % keptRanges.length;
+          const next = keptRanges[segIdx];
+          const nextSp = speakers.find(s => s.id === next.camera) || initialSpeaker;
+          loadCam(nextSp, next.start);
+        }
+        _edlSegRafId = requestAnimationFrame(edlLoop);
+      }
+      _edlSegRafId = requestAnimationFrame(edlLoop);
+    } else {
+      loadCam(initialSpeaker, startTime);
+    }
     if (clipRange) startSubtitlePreview(vid, clipRange);
   }
 
@@ -1591,6 +1633,7 @@ function openPreviewModal(initialSpeaker, startTime, clipRange, fromShorts = fal
 }
 
 function closePreviewModal() {
+  if (_edlSegRafId) { cancelAnimationFrame(_edlSegRafId); _edlSegRafId = null; }
   // Clean up split-screen videos if present
   if (_splitScreenVideos.length) {
     if (_previewClipLoopHandler) {
@@ -2378,16 +2421,23 @@ el('btn-render-preview').addEventListener('click', () => {
   el('render-modal').classList.add('hidden');
 
   _previewReturnModal = 'render-modal';
+
+  const keptRanges = (S.edl?.segments || []).filter(s => s.keep !== false);
+  if (!keptRanges.length) { el('render-modal').classList.remove('hidden'); return; }
+
+  // Snap to nearest kept segment at or after current time
+  const t = S.currentTime;
+  const snapSeg = keptRanges.find(s => s.end > t) || keptRanges[0];
+  const startAt = (t >= snapSeg.start && t < snapSeg.end) ? t : snapSeg.start;
+
   if (renderLayout === 'split') {
     const orderedSpeakers = (S.renderCamOrder.length ? S.renderCamOrder : speakers.map(s => s.id))
       .map(id => speakers.find(s => s.id === id))
       .filter(Boolean);
-    openPreviewModal(orderedSpeakers[0], S.currentTime, null, false, orderedSpeakers, true);
+    openPreviewModal(orderedSpeakers[0], startAt, null, false, orderedSpeakers, true, keptRanges);
   } else {
-    const t = S.currentTime;
-    const seg = S.edl?.segments?.find(s => s.start <= t && s.end > t);
-    const sp = speakers.find(s => s.id === seg?.camera) || speakers[0];
-    openPreviewModal(sp, t);
+    const sp = speakers.find(s => s.id === snapSeg.camera) || speakers[0];
+    openPreviewModal(sp, startAt, null, false, null, false, keptRanges);
   }
 });
 
