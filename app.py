@@ -12,7 +12,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_from_directory
 
-from editor import build_prompt, generate_edl, generate_skip_edl
+from editor import build_prompt, generate_edl, generate_skip_edl, validate_edl
 from processor import merge_transcripts, transcribe_all
 from renderer import check_ffmpeg, render_project, render_short_custom
 
@@ -350,9 +350,12 @@ def import_edl(project_id):
     edl = data.get("edl")
     if not edl:
         return jsonify({"error": "No 'edl' key in request body"}), 400
-    # Basic validation
-    if "segments" not in edl or "clips" not in edl:
-        return jsonify({"error": "EDL must have 'segments' and 'clips' keys"}), 400
+    mt = proj.get("merged_transcript") or []
+    total_duration = mt[-1]["end"] if mt else None
+    try:
+        validate_edl(edl, total_duration=total_duration)
+    except ValueError as exc:
+        return jsonify({"error": f"Invalid EDL: {exc}"}), 400
     proj["edl"] = edl
     proj["status"] = "ready"
     proj["progress"] = {"step": "done", "percent": 100, "message": "EDL imported ✓"}

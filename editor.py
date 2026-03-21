@@ -145,7 +145,7 @@ def generate_edl(merged_transcript: list[dict], speakers: list[dict], retry: boo
 
     try:
         edl = json.loads(raw)
-        _validate_edl(edl)
+        validate_edl(edl, total_duration=duration)
         return edl
     except (json.JSONDecodeError, ValueError) as exc:
         if not retry:
@@ -153,8 +153,8 @@ def generate_edl(merged_transcript: list[dict], speakers: list[dict], retry: boo
         raise ValueError(f"Claude returned invalid EDL after retry: {exc}\n\nRaw response (first 500 chars):\n{raw[:500]}")
 
 
-def _validate_edl(edl: dict) -> None:
-    """Raise ValueError if EDL is structurally invalid."""
+def validate_edl(edl: dict, total_duration: float | None = None) -> None:
+    """Raise ValueError if EDL is structurally or temporally invalid."""
     if not isinstance(edl, dict):
         raise ValueError("EDL root must be a JSON object")
     if "segments" not in edl:
@@ -163,9 +163,32 @@ def _validate_edl(edl: dict) -> None:
         raise ValueError("EDL missing 'clips'")
 
     required_seg_fields = {"id", "start", "end", "keep", "camera", "layout"}
-    for i, seg in enumerate(edl["segments"]):
+    segs = edl["segments"]
+    for i, seg in enumerate(segs):
         missing = required_seg_fields - set(seg.keys())
         if missing:
             raise ValueError(f"Segment {i} missing fields: {missing}")
         if not isinstance(seg["keep"], bool):
             raise ValueError(f"Segment {i} 'keep' must be boolean")
+        if seg["end"] <= seg["start"]:
+            raise ValueError(
+                f"{seg['id']}: end ({seg['end']}) must be > start ({seg['start']})"
+            )
+
+    # Contiguity: each segment must start where the previous one ended (±50 ms)
+    _TOLERANCE = 0.05
+    for i in range(1, len(segs)):
+        prev, curr = segs[i - 1], segs[i]
+        gap = curr["start"] - prev["end"]
+        if abs(gap) > _TOLERANCE:
+            raise ValueError(
+                f"Segments not contiguous: {prev['id']} ends at {prev['end']} "
+                f"but {curr['id']} starts at {curr['start']} (gap={gap:+.3f}s)"
+            )
+
+    if total_duration is not None and segs:
+        tail_gap = abs(segs[-1]["end"] - total_duration)
+        if tail_gap > _TOLERANCE:
+            raise ValueError(
+                f"Last segment ends at {segs[-1]['end']} but total duration is {total_duration}"
+            )
