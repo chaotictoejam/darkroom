@@ -607,7 +607,7 @@ function renderProjectList() {
     <div class="project-item" data-id="${p.id}">
       <div>
         <div class="project-item-name">${esc(p.name)}</div>
-        <div class="project-item-meta">${p.id} · ${new Date(p.created_at + 'Z').toLocaleDateString()}</div>
+        <div class="project-item-meta">${p.id} · ${new Date(p.created_at).toLocaleDateString()}</div>
       </div>
       <div class="project-item-right">
         <span class="status-badge ${statusClass(p.status)}">${p.status}</span>
@@ -1384,9 +1384,12 @@ function startSubtitlePreview(vid, clipRange, disableCamSwitch = false) {
     vid.play().catch(() => {});
   }
 
-  // Cue up first segment's camera if switching is needed (not in split-screen)
+  // Cue up first segment's camera/position if switching is needed (not in split-screen)
   if (!disableCamSwitch && camSchedule.length > 1) {
     _loadSegment(0);
+  } else if (!disableCamSwitch && camSchedule.length === 1) {
+    // Single segment — seek to its actual start (may differ from clip.start)
+    vid.currentTime = camSchedule[0].src_start;
   }
 
   function render() {
@@ -1397,6 +1400,14 @@ function startSubtitlePreview(vid, clipRange, disableCamSwitch = false) {
       const cur = camSchedule[scheduleIdx];
       if (t >= cur.src_end) {
         _loadSegment(scheduleIdx + 1);
+      }
+    } else if (!disableCamSwitch && camSchedule.length === 1) {
+      // Single segment: enforce its boundaries so the preview matches the render
+      const seg = camSchedule[0];
+      if (t < seg.src_start) {
+        vid.currentTime = seg.src_start;
+      } else if (t >= seg.src_end) {
+        vid.currentTime = seg.src_start; // loop back to segment start
       }
     } else if (!disableCamSwitch && camSchedule.length === 0 && t >= clipRange.end) {
       vid.currentTime = clipRange.start; // fallback single-cam loop
