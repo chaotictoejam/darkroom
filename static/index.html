@@ -502,6 +502,7 @@ const S = {
   currentTime: 0,
   totalDuration: 0,
   sysStatus: { ffmpeg_available: true, whisper_model: 'base' },
+  faceCenters: null,   // {cam_id: [cx, cy]} — cached per project, null = not loaded
 };
 
 /* ============================================================
@@ -531,6 +532,36 @@ function statusClass(status) {
   return map[status] || 'status-created';
 }
 function el(id) { return document.getElementById(id); }
+
+// Compute CSS object-position that centres the video on the detected face,
+// matching the FFmpeg smart-crop formula used during rendering.
+// cx/cy are 0–1 ratios of the original video frame (from _detect_face_center_ratio).
+// containerAR is the container's aspect ratio (width/height).
+function faceObjectPosition(cx, cy, videoW, videoH, containerAR) {
+  const videoAR = videoW / videoH;
+  let xPct = 50, yPct = 50;
+  if (videoAR > containerAR) {
+    // Video wider than container: horizontal overflow, vertical fills.
+    const overflow = videoAR - containerAR;
+    xPct = Math.max(0, Math.min(100, (cx * videoAR - containerAR / 2) / overflow * 100));
+  } else {
+    // Video taller than container: vertical overflow, horizontal fills.
+    const invVideo = 1 / videoAR, invCont = 1 / containerAR;
+    const overflow = invVideo - invCont;
+    yPct = Math.max(0, Math.min(100, (cy * invVideo - invCont / 2) / overflow * 100));
+  }
+  return `${xPct.toFixed(1)}% ${yPct.toFixed(1)}%`;
+}
+
+async function loadFaceCenters() {
+  if (S.faceCenters !== null) return S.faceCenters;
+  try {
+    S.faceCenters = await API.get(`/api/projects/${S.project.id}/face-centers`);
+  } catch (_) {
+    S.faceCenters = {};
+  }
+  return S.faceCenters;
+}
 function showView(id) {
   ['view-welcome','view-setup','view-processing','view-editor'].forEach(v => {
     el(v).classList.toggle('hidden', v !== id);
@@ -643,6 +674,7 @@ function renderProjectList() {
 
 async function openProject(id) {
   try {
+    S.faceCenters = null;
     S.project = await API.get(`/api/projects/${id}`);
     routeProject();
   } catch (e) {
@@ -1483,12 +1515,31 @@ function openPreviewModal(initialSpeaker, startTime, clipRange, fromShorts = fal
     const n = splitScreenSpeakers.length;
     grid.className = `preview-split-grid${landscape ? ' landscape' : ''} cams-${Math.min(n, 4)}`;
 
+    // Pre-fetch face centers for split-screen positioning
+    if (fromShorts) loadFaceCenters();
+
     splitScreenSpeakers.forEach((sp, i) => {
       const v = document.createElement('video');
       v.src = `/projects/${S.project.id}/files/${encodeURIComponent(sp.file)}`;
       v.muted = true; // mute all initially; unmute leader after sync
       v.playsInline = true;
       v.preload = 'auto';
+      if (fromShorts) {
+        const n = splitScreenSpeakers.length;
+        const tileAR = n <= 3 ? (9 / 16) / n : (9 / 16) / 2;
+        loadFaceCenters().then(centers => {
+          const c = centers[sp.id];
+          if (!c) return;
+          const [cx, cy] = c;
+          function setPos() {
+            v.style.objectPosition = faceObjectPosition(
+              cx, cy, v.videoWidth || 1920, v.videoHeight || 1080, tileAR
+            );
+          }
+          if (v.videoWidth) setPos();
+          else v.addEventListener('loadedmetadata', setPos, { once: true });
+        });
+      }
       grid.appendChild(v);
       _splitScreenVideos.push({ vid: v, sp });
     });
@@ -1583,6 +1634,20 @@ function openPreviewModal(initialSpeaker, startTime, clipRange, fromShorts = fal
       </button>
     `).join('');
 
+    function applyFacePosition(videoEl, camId) {
+      if (!fromShorts || !S.faceCenters) return;
+      const c = S.faceCenters[camId];
+      if (!c) return;
+      const [cx, cy] = c;
+      function setPos() {
+        videoEl.style.objectPosition = faceObjectPosition(
+          cx, cy, videoEl.videoWidth || 1920, videoEl.videoHeight || 1080, 9 / 16
+        );
+      }
+      if (videoEl.videoWidth) setPos();
+      else videoEl.addEventListener('loadedmetadata', setPos, { once: true });
+    }
+
     function loadCam(sp, t) {
       if (_previewClipLoopHandler) {
         vid.removeEventListener('timeupdate', _previewClipLoopHandler);
@@ -1603,7 +1668,11 @@ function openPreviewModal(initialSpeaker, startTime, clipRange, fromShorts = fal
       tabs.querySelectorAll('.preview-modal-cam-tab').forEach(t =>
         t.classList.toggle('active', t.dataset.cam === sp.id)
       );
+      applyFacePosition(vid, sp.id);
     }
+
+    // Pre-fetch face centers so they're ready when loadCam is called
+    if (fromShorts) loadFaceCenters().then(() => applyFacePosition(vid, initialSpeaker.id));
 
     tabs.querySelectorAll('.preview-modal-cam-tab').forEach(tab => {
       tab.addEventListener('click', () => {

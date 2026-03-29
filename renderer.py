@@ -19,7 +19,7 @@ def check_ffmpeg() -> bool:
 
 
 def get_video_info(file_path: str) -> dict:
-    """Return duration, width, height via ffprobe."""
+    """Return duration, width, height, fps via ffprobe."""
     cmd = [
         "ffprobe", "-v", "quiet",
         "-print_format", "json",
@@ -29,13 +29,24 @@ def get_video_info(file_path: str) -> dict:
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     data = json.loads(result.stdout)
     duration = float(data["format"].get("duration", 0))
-    width, height = 1920, 1080
+    width, height, fps = 1920, 1080, 30.0
     for stream in data.get("streams", []):
         if stream.get("codec_type") == "video":
             width = int(stream.get("width", 1920))
             height = int(stream.get("height", 1080))
+            # r_frame_rate is the codec fps (e.g. "60000/1001"); avg_frame_rate
+            # is the container-level average.  Use avg first, fall back to r.
+            for key in ("avg_frame_rate", "r_frame_rate"):
+                raw = stream.get(key, "")
+                if raw and raw != "0/0":
+                    try:
+                        num, den = raw.split("/")
+                        fps = float(num) / float(den)
+                        break
+                    except (ValueError, ZeroDivisionError):
+                        pass
             break
-    return {"duration": duration, "width": width, "height": height}
+    return {"duration": duration, "width": width, "height": height, "fps": fps}
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +214,7 @@ def render_project(project: dict, targets: list[str], projects_dir: Path,
                     cmd = ["ffmpeg", "-y"] + input_args + [
                         "-filter_complex", filter_complex,
                         "-map", "[outv]", "-map", "[outa]",
-                        "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                        "-c:v", "libx264", "-preset", "medium", "-crf", "23", "-bf", "0",
                         "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
                         out,
                     ]
@@ -275,13 +286,18 @@ def _build_concat_filter(kept_segments: list[dict], speakers_dict: dict, vertica
         raise ValueError("No valid camera assignments found in kept segments")
 
     fallback_cam = seg_cams[0]
-    # cam_to_idx covers ALL cameras (their -i index)
-    cam_to_idx = {cam: i for i, cam in enumerate(all_cams)}
+    cam_to_idx_in_all = {cam: i for i, cam in enumerate(all_cams)}
 
-    # One -i per camera in the project
-    input_args: list[str] = []
-    for cam in all_cams:
-        input_args.extend(["-i", speakers_dict[cam]["file_path"]])
+    # Detect source fps once (use first camera in seg_cams) to force CFR output.
+    _first_fp = speakers_dict[seg_cams[0]]["file_path"]
+    source_fps = get_video_info(_first_fp).get("fps", 30.0)
+    # Round to nearest common fps to avoid awkward fractions.
+    if source_fps > 55:
+        out_fps = 60
+    elif source_fps > 27:
+        out_fps = 30
+    else:
+        out_fps = 25
 
     # Pre-compute crop for cameras that appear in segments (video only)
     crop_cache: dict[str, str] = {}
@@ -290,65 +306,46 @@ def _build_concat_filter(kept_segments: list[dict], speakers_dict: dict, vertica
         crop_cache[cam] = _smart_crop_filter(fp, 1080 if vertical else 1920,
                                               1920 if vertical else 1080)
 
-    # Count video uses per camera (for split)
-    cam_use_count: dict[str, int] = {cam: 0 for cam in seg_cams}
+    # Seek directly to each segment. FFmpeg's default -accurate_seek decodes
+    # from the keyframe to the exact position internally, so the first output
+    # frame is clean without a manual pre-roll.
+    input_args: list[str] = []
     for seg in kept_segments:
-        cam = seg.get("camera") if seg.get("camera") in cam_to_idx else fallback_cam
-        cam_use_count[cam] = cam_use_count.get(cam, 0) + 1
-
-    n_segs = len(kept_segments)
+        s, e = seg["start"], seg["end"]
+        for cam in all_cams:
+            input_args.extend(["-ss", str(s), "-to", str(e), "-i",
+                                speakers_dict[cam]["file_path"]])
 
     filter_parts: list[str] = []
-
-    # Split video streams — one copy per segment that uses that camera
-    cam_v_pool: dict[str, list[str]] = {}
-    for cam in seg_cams:
-        idx = cam_to_idx[cam]
-        n = cam_use_count[cam]
-        if n == 1:
-            cam_v_pool[cam] = [f"[{idx}:v]"]
-        else:
-            v_labels = "".join(f"[vs{cam}{j}]" for j in range(n))
-            filter_parts.append(f"[{idx}:v]split={n}{v_labels}")
-            cam_v_pool[cam] = [f"[vs{cam}{j}]" for j in range(n)]
-
-    # Split audio streams for ALL cameras — n_segs copies each
-    cam_a_pool: dict[str, list[str]] = {}
-    for cam in all_cams:
-        idx = cam_to_idx[cam]
-        if n_segs == 1:
-            cam_a_pool[cam] = [f"[{idx}:a]"]
-        else:
-            a_labels = "".join(f"[as{cam}{j}]" for j in range(n_segs))
-            filter_parts.append(f"[{idx}:a]asplit={n_segs}{a_labels}")
-            cam_a_pool[cam] = [f"[as{cam}{j}]" for j in range(n_segs)]
-
-    cam_use_counter: dict[str, int] = {cam: 0 for cam in seg_cams}
     stream_labels: list[str] = []
 
     for i, seg in enumerate(kept_segments):
         cam = seg.get("camera")
-        if cam not in cam_to_idx:
+        if cam not in speakers_dict:
             cam = fallback_cam
 
-        # Video: active camera
-        j = cam_use_counter.get(cam, 0)
-        cam_use_counter[cam] = j + 1
-        v_src = cam_v_pool[cam][j]
         s, e = seg["start"], seg["end"]
-        vf = f"{v_src}trim=start={s}:end={e},setpts=PTS-STARTPTS,{crop_cache[cam]}[v{i}]"
-        filter_parts.append(vf)
+        base = i * n_all
+        cam_v_idx = base + cam_to_idx_in_all[cam]
 
-        # Audio: mix ALL cameras' mics
+        filter_parts.append(
+            f"[{cam_v_idx}:v]fps={out_fps},"
+            f"setpts=PTS-STARTPTS,{crop_cache[cam]}[v{i}]"
+        )
+
         if n_all == 1:
-            a_src = cam_a_pool[all_cams[0]][i]
-            filter_parts.append(f"{a_src}atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}]")
+            filter_parts.append(
+                f"[{base}:a]asetpts=PTS-STARTPTS[a{i}]"
+            )
         else:
-            for k, ac in enumerate(all_cams):
-                a_src = cam_a_pool[ac][i]
-                filter_parts.append(f"{a_src}atrim=start={s}:end={e},asetpts=PTS-STARTPTS[am{i}_{k}]")
+            for k in range(n_all):
+                filter_parts.append(
+                    f"[{base + k}:a]asetpts=PTS-STARTPTS[am{i}_{k}]"
+                )
             amix_in = "".join(f"[am{i}_{k}]" for k in range(n_all))
-            filter_parts.append(f"{amix_in}amix=inputs={n_all}:normalize=0:dropout_transition=0[a{i}]")
+            filter_parts.append(
+                f"{amix_in}amix=inputs={n_all}:normalize=0:dropout_transition=0[a{i}]"
+            )
 
         stream_labels.extend([f"[v{i}]", f"[a{i}]"])
 
@@ -479,6 +476,16 @@ def _build_splitscreen_filter(clips: list[dict], speakers_dict: dict):
     concat_v_labels = []
     concat_a_labels = []
 
+    # Detect source fps for CFR conversion (same logic as _build_concat_filter).
+    _first_fp = speakers_dict[cam_ids[0]]["file_path"]
+    _src_fps = get_video_info(_first_fp).get("fps", 30.0)
+    if _src_fps > 55:
+        out_fps = 60
+    elif _src_fps > 27:
+        out_fps = 30
+    else:
+        out_fps = 25
+
     # Pre-compute smart crop per camera once
     tile_zoom = {1: 1.0, 2: 1.5, 3: 2.0, 4: 1.5}.get(n_cams, 1.5)
     cam_crop = {
@@ -486,24 +493,22 @@ def _build_splitscreen_filter(clips: list[dict], speakers_dict: dict):
         for cam_id in cam_ids
     }
 
-    # Rebuild input_args per-clip so each clip gets its own dedicated inputs
-    # (avoids shared-stream audio loss when the same camera file is used for multiple clips)
     input_args = []
     for ci, clip in enumerate(clips):
         cs, ce = clip["start"], clip["end"]
         for cam_id in cam_ids:
-            input_args.extend(["-ss", str(cs), "-to", str(ce), "-i", speakers_dict[cam_id]["file_path"]])
+            input_args.extend(["-ss", str(cs), "-to", str(ce), "-i",
+                                speakers_dict[cam_id]["file_path"]])
 
     for ci, clip in enumerate(clips):
         cs, ce = clip["start"], clip["end"]
         # Input index base for this clip
         base = ci * n_cams
 
-        # Scale + smart-crop each cam tile
         for ki, cam_id in enumerate(cam_ids):
             filter_parts.append(
-                f"[{base + ki}:v]setpts=PTS-STARTPTS,"
-                f"{cam_crop[cam_id]}[cv{ci}_{ki}]"
+                f"[{base + ki}:v]fps={out_fps},"
+                f"setpts=PTS-STARTPTS,{cam_crop[cam_id]}[cv{ci}_{ki}]"
             )
 
         # Stack tiles
@@ -517,7 +522,6 @@ def _build_splitscreen_filter(clips: list[dict], speakers_dict: dict):
                 f"{tile_labels}xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0[cv{ci}]"
             )
 
-        # Mix audio from all cameras for this clip
         for ki in range(n_cams):
             filter_parts.append(
                 f"[{base + ki}:a]asetpts=PTS-STARTPTS[ca{ci}_{ki}]"
@@ -539,14 +543,14 @@ def _build_splitscreen_filter(clips: list[dict], speakers_dict: dict):
 
 def _run_ffmpeg(cmd: list[str]) -> None:
     import sys
-    print("\n=== FFmpeg CMD ===", file=sys.stderr)
-    print(" ".join(cmd), file=sys.stderr)
-    print("=================\n", file=sys.stderr)
+    cmd_str = "\n=== FFmpeg CMD ===\n" + " ".join(cmd) + "\n=================\n"
+    sys.stderr.write(cmd_str)
+    sys.stderr.flush()
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        print("\n=== FFmpeg STDERR ===", file=sys.stderr)
-        print(result.stderr[-3000:], file=sys.stderr)
-        print("====================\n", file=sys.stderr)
+        err_str = "\n=== FFmpeg STDERR ===\n" + result.stderr[-3000:] + "\n====================\n"
+        sys.stderr.write(err_str)
+        sys.stderr.flush()
         raise subprocess.CalledProcessError(result.returncode, cmd, result.stderr)
 
 
@@ -566,6 +570,7 @@ def _render_fulledit(segments: list[dict], speakers_dict: dict, output_path: str
         "-c:v", "libx264",
         "-preset", "medium",
         "-crf", "23",
+        "-bf", "0",
         "-c:a", "aac",
         "-b:a", "192k",
         "-movflags", "+faststart",
@@ -590,6 +595,7 @@ def _render_vertical(segments: list[dict], speakers_dict: dict, output_path: str
         "-c:v", "libx264",
         "-preset", "medium",
         "-crf", "23",
+        "-bf", "0",
         "-c:a", "aac",
         "-b:a", "192k",
         "-movflags", "+faststart",
@@ -958,7 +964,11 @@ def _transcript_camera_segments(
         else:
             merged.append(dict(seg))
 
-    return merged
+    # Drop segments shorter than 2 frames at 30 fps (≈ 67 ms).
+    # The select filter can produce zero output frames for sub-frame slivers,
+    # which causes FFmpeg's concat filter to fail.
+    _MIN_SEG = 2 / 30.0
+    return [s for s in merged if s["end"] - s["start"] >= _MIN_SEG]
 
 
 # ---------------------------------------------------------------------------
@@ -1022,7 +1032,9 @@ def render_short_custom(
             sub_position=sub_position,
             speakers_dict=speakers_dict,
             box_alpha=box_alpha,
-            video_segments=all_clip_segs if camera_layout != "all" else None,
+            # For splitscreen, video is the full clip windows with no EDL cuts,
+            # so pass clips directly so subtitle timestamps match the output timeline.
+            video_segments=all_clip_segs if camera_layout != "all" else clips,
         )
         if ass_content:
             from pathlib import Path as _Path
@@ -1044,6 +1056,7 @@ def render_short_custom(
         "-c:v", "libx264",
         "-preset", "medium",
         "-crf", "23",
+        "-bf", "0",
         "-c:a", "aac",
         "-b:a", "192k",
         "-movflags", "+faststart",
@@ -1081,6 +1094,7 @@ def _render_clip(clip: dict, segments: list[dict], speakers_dict: dict, output_p
         "-c:v", "libx264",
         "-preset", "medium",
         "-crf", "23",
+        "-bf", "0",
         "-c:a", "aac",
         "-b:a", "192k",
         "-movflags", "+faststart",

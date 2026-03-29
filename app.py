@@ -14,9 +14,21 @@ from flask import Flask, jsonify, request, send_from_directory
 
 from editor import build_prompt, generate_edl, generate_skip_edl, validate_edl
 from processor import merge_transcripts, transcribe_all
-from renderer import check_ffmpeg, render_project, render_short_custom
+from renderer import check_ffmpeg, render_project, render_short_custom, _detect_face_center_ratio
 
 load_dotenv()
+
+# Per-project render locks — prevents concurrent FFmpeg processes on the same project
+_render_locks: dict[str, threading.Lock] = {}
+_render_locks_mutex = threading.Lock()
+
+
+def _get_render_lock(project_id: str) -> threading.Lock:
+    with _render_locks_mutex:
+        if project_id not in _render_locks:
+            _render_locks[project_id] = threading.Lock()
+        return _render_locks[project_id]
+
 
 app = Flask(__name__, static_folder="static")
 
@@ -47,8 +59,10 @@ def get_project(project_id: str) -> dict | None:
 def save_project(project: dict) -> None:
     path = _project_path(project["id"])
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
+    tmp = path.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(project, f, indent=2)
+    tmp.replace(path)  # atomic on POSIX; near-atomic on Windows
 
 
 def _new_project(name: str) -> dict:
@@ -429,6 +443,10 @@ def start_render(project_id):
     camera_layout = data.get("camera_layout", "edl")
     cam_order = data.get("cam_order", None)
 
+    lock = _get_render_lock(project_id)
+    if not lock.acquire(blocking=False):
+        return jsonify({"error": "A render is already in progress for this project"}), 409
+
     def _run():
         try:
             p = get_project(project_id)
@@ -454,12 +472,14 @@ def start_render(project_id):
                 p["progress"] = {"step": "done", "percent": 100, "message": "Render complete ✓"}
             save_project(p)
 
-        except Exception as exc:
+        except Exception:
             q = get_project(project_id)
             if q:
                 q["status"] = "error"
                 q["progress"] = {"step": "error", "percent": 0, "message": traceback.format_exc()}
                 save_project(q)
+        finally:
+            lock.release()
 
     threading.Thread(target=_run, daemon=True).start()
     return jsonify({"message": "Render started"})
@@ -496,6 +516,10 @@ def start_render_short(project_id):
     # Sanitise output name
     import re as _re
     output_name = _re.sub(r"[^a-z0-9_\-]", "_", output_name.lower()) or "short_01"
+
+    lock = _get_render_lock(project_id)
+    if not lock.acquire(blocking=False):
+        return jsonify({"error": "A render is already in progress for this project"}), 409
 
     def _run():
         try:
@@ -549,15 +573,33 @@ def start_render_short(project_id):
             p["progress"] = {"step": "done", "percent": 100, "message": f"Short '{output_name}' rendered ✓"}
             save_project(p)
 
-        except Exception as exc:
+        except Exception:
             q = get_project(project_id)
             if q:
                 q["status"] = "error"
                 q["progress"] = {"step": "error", "percent": 0, "message": traceback.format_exc()}
                 save_project(q)
+        finally:
+            lock.release()
 
     threading.Thread(target=_run, daemon=True).start()
     return jsonify({"message": "Short render started"})
+
+
+# ---------------------------------------------------------------------------
+# Face-center detection (used by preview to match render crop)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/projects/<project_id>/face-centers")
+def get_face_centers(project_id):
+    proj = get_project(project_id)
+    if not proj:
+        return jsonify({"error": "Project not found"}), 404
+    result = {}
+    for sp in proj.get("speakers", []):
+        cx, cy = _detect_face_center_ratio(sp["file_path"])
+        result[sp["id"]] = [cx, cy]
+    return jsonify(result)
 
 
 # ---------------------------------------------------------------------------
