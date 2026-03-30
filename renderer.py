@@ -851,6 +851,7 @@ def generate_ass(
                 )
 
     elif style == "karaoke":
+        ac_inline = _hex_to_ass(accent_color, alpha=0)
         for chunk, _, group_end in _clamp_chunks(all_words):
             for j, active_w in enumerate(chunk):
                 w_start = active_w["start"]
@@ -862,22 +863,17 @@ def generate_ass(
                 for k, w in enumerate(chunk):
                     word_up = _esc_ass(w["word"].upper())
                     if k == j:
-                        # Active word: accent box style via inline override
-                        parts.append(f"{{\\r active}}{word_up}{{\\r inactive}}")
+                        # Active word: black text with thick accent outline ≈ box background.
+                        # Single line avoids the overlap caused by two centered overlays.
+                        parts.append(
+                            f"{{\\1c&H00000000&\\3c{ac_inline}\\4c{ac_inline}\\bord8\\shad0}}"
+                            f"{word_up}{{\\r}}"
+                        )
                     else:
                         parts.append(word_up)
-                # Emit inactive base + one active overlay
-                inactive_line = "  ".join(
-                    _esc_ass(w["word"].upper()) for w in chunk
-                )
                 events.append(
                     f"Dialogue: 0,{_ass_time(w_start)},{_ass_time(w_end)},"
-                    f"inactive,,0,0,0,,{pos}{_esc_ass(inactive_line)}"
-                )
-                active_word = _esc_ass(active_w["word"].upper())
-                events.append(
-                    f"Dialogue: 1,{_ass_time(w_start)},{_ass_time(w_end)},"
-                    f"active,,0,0,0,,{pos}{active_word}"
+                    f"inactive,,0,0,0,,{pos}{' '.join(parts)}"
                 )
 
     elif style == "neon":
