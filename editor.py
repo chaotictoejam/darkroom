@@ -170,25 +170,40 @@ def validate_edl(edl: dict, total_duration: float | None = None) -> None:
             raise ValueError(f"Segment {i} missing fields: {missing}")
         if not isinstance(seg["keep"], bool):
             raise ValueError(f"Segment {i} 'keep' must be boolean")
-        if seg["end"] <= seg["start"]:
-            raise ValueError(
-                f"{seg['id']}: end ({seg['end']}) must be > start ({seg['start']})"
-            )
+        if seg["end"] < seg["start"]:
+            seg["start"], seg["end"] = seg["end"], seg["start"]
+        if seg["end"] == seg["start"]:
+            raise ValueError(f"{seg['id']}: start and end are equal ({seg['start']}), segment has zero duration")
 
-    # Contiguity: each segment must start where the previous one ended (±50 ms)
-    _TOLERANCE = 0.05
+    # Contiguity: drop backward keep=false placeholders; snap small gaps; reject large jumps (> 2 s)
+    _SNAP_TOLERANCE = 2.0
+    to_remove = set()
     for i in range(1, len(segs)):
         prev, curr = segs[i - 1], segs[i]
         gap = curr["start"] - prev["end"]
-        if abs(gap) > _TOLERANCE:
+        if gap < -_SNAP_TOLERANCE:
+            # Segment goes backward in time — drop it if it's a discarded placeholder
+            if not curr["keep"]:
+                to_remove.add(i)
+                continue
             raise ValueError(
                 f"Segments not contiguous: {prev['id']} ends at {prev['end']} "
                 f"but {curr['id']} starts at {curr['start']} (gap={gap:+.3f}s)"
             )
+        if abs(gap) > _SNAP_TOLERANCE:
+            raise ValueError(
+                f"Segments not contiguous: {prev['id']} ends at {prev['end']} "
+                f"but {curr['id']} starts at {curr['start']} (gap={gap:+.3f}s)"
+            )
+        if gap != 0:
+            curr["start"] = prev["end"]
+    if to_remove:
+        edl["segments"] = [s for i, s in enumerate(segs) if i not in to_remove]
+        segs = edl["segments"]
 
     if total_duration is not None and segs:
         tail_gap = abs(segs[-1]["end"] - total_duration)
-        if tail_gap > _TOLERANCE:
+        if tail_gap > _SNAP_TOLERANCE:
             raise ValueError(
                 f"Last segment ends at {segs[-1]['end']} but total duration is {total_duration}"
             )
