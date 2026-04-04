@@ -1,0 +1,24 @@
+version: "3.9"
+
+# Docker Compose is optional — primarily useful for CI or reproducible demos.
+# For day-to-day dev, use `make dev` directly (Whisper model downloads on first run
+# and is cached in the venv, not inside the container).
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount projects dir so renders survive container restarts
+      - ./projects:/app/projects
+      # Mount .env for API keys
+      - ./.env:/app/.env:ro
+    environment:
+      - DARKROOM_PROJECTS_DIR=/app/projects
+    restart: unless-stopped
+
+  # In production, `make build` first — backend serves the built frontend.
+  # No separate frontend container needed.
