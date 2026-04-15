@@ -10,12 +10,25 @@ interface Props {
 export default function Welcome({ onNewProject, onOpenProject }: Props) {
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [loading, setLoading] = useState(true)
+  const [backendDown, setBackendDown] = useState(false)
   const [creating, setCreating] = useState(false)
 
   useEffect(() => {
-    api.listProjects()
-      .then(setProjects)
-      .finally(() => setLoading(false))
+    let cancelled = false
+    async function load() {
+      while (!cancelled) {
+        try {
+          const data = await api.listProjects()
+          if (!cancelled) { setProjects(data); setBackendDown(false); setLoading(false) }
+          return
+        } catch {
+          if (!cancelled) setBackendDown(true)
+          await new Promise((r) => setTimeout(r, 2000))
+        }
+      }
+    }
+    load()
+    return () => { cancelled = true }
   }, [])
 
   async function handleNew() {
@@ -62,7 +75,17 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
 
       <div style={{ width: '100%', maxWidth: 480 }}>
         {loading && <p style={{ color: 'var(--text-muted)', textAlign: 'center' }}>Loading projects…</p>}
-        {!loading && projects.length === 0 && (
+        {backendDown && (
+          <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--accent)', borderRadius: 8, padding: '12px 16px', fontSize: 13 }}>
+            <strong style={{ color: 'var(--accent)' }}>Backend not running.</strong>
+            <p style={{ color: 'var(--text-muted)', marginTop: 4 }}>
+              Start it with: <code style={{ background: 'var(--bg-card)', padding: '2px 6px', borderRadius: 4 }}>make backend</code>
+              {' '}or{' '}
+              <code style={{ background: 'var(--bg-card)', padding: '2px 6px', borderRadius: 4 }}>cd backend && uvicorn darkroom.main:app --reload --port 8000</code>
+            </p>
+          </div>
+        )}
+        {!loading && !backendDown && projects.length === 0 && (
           <p style={{ color: 'var(--text-muted)', textAlign: 'center' }}>No projects yet.</p>
         )}
         {projects.map((p) => (

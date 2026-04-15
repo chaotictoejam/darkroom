@@ -11,9 +11,11 @@
  *
  * Each panel lives in src/components/<Panel>/<Panel>.tsx
  */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
-import type { Project } from '../api/types'
+import type { Project, WordCut } from '../api/types'
+import VideoPreview, { type VideoPreviewHandle } from '../components/VideoPreview/VideoPreview'
+import TranscriptEditor from '../components/TranscriptEditor/TranscriptEditor'
 
 interface Props {
   project: Project
@@ -75,7 +77,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
       </header>
 
       {/* Main area */}
-      <main style={{ flex: 1, overflow: 'auto', padding: 24 }}>
+      <main style={{ flex: 1, overflow: tab === 'transcript' ? 'hidden' : 'auto', padding: 24, display: 'flex', flexDirection: 'column' }}>
         {tab === 'transcript' && (
           <TranscriptTab
             project={project}
@@ -99,7 +101,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
   )
 }
 
-// ── Transcript tab ─────────────────────────────────────────────────────────────
+// ── Transcript tab — split panel: video left, transcript right ────────────────
 
 function TranscriptTab({
   project,
@@ -114,52 +116,97 @@ function TranscriptTab({
   analyzing: boolean
   anthropicConfigured: boolean
 }) {
-  const mt = project.merged_transcript
   const hasEdl = !!project.edl
+  const videoRef = useRef<VideoPreviewHandle>(null)
+  const [currentTime, setCurrentTime] = useState(0)
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Primary camera — first speaker's file
+  const primarySpeaker = project.speakers[0]
+  const videoSrc = primarySpeaker
+    ? `/projects/${project.id}/files/${primarySpeaker.file}`
+    : null
+
+  const wordCuts: WordCut[] = project.word_cuts ?? []
+
+  const handleCutsChange = useCallback(
+    (newCuts: WordCut[]) => {
+      // Optimistic update
+      onChange({ ...project, word_cuts: newCuts })
+      // Debounce persist to backend — 600 ms after last change
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+      saveTimer.current = setTimeout(() => {
+        api.saveWordCuts(project.id, newCuts)
+      }, 600)
+    },
+    [project, onChange],
+  )
 
   return (
-    <div style={{ maxWidth: 720, margin: '0 auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
-        <h3 style={{ fontWeight: 600 }}>Transcript ({mt.length} segments)</h3>
-        {!hasEdl && (
-          <div style={{ display: 'flex', gap: 8 }}>
-            {anthropicConfigured ? (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: '100%' }}>
+      {/* Toolbar */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+          {project.merged_transcript.length} segments
+          {wordCuts.length > 0 && ` · ${wordCuts.length} cut${wordCuts.length !== 1 ? 's' : ''}`}
+        </span>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {!hasEdl && (
+            anthropicConfigured ? (
               <button
                 onClick={onAnalyze}
                 disabled={analyzing}
-                style={{ background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 16px', fontWeight: 600 }}
+                style={{ background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, padding: '5px 14px', fontWeight: 600, fontSize: 13 }}
               >
-                {analyzing ? 'Analyzing…' : 'Analyze with AI'}
+                {analyzing ? 'Analyzing…' : 'Analyze with AI →'}
               </button>
             ) : (
               <span style={{ color: 'var(--text-muted)', fontSize: 12, alignSelf: 'center' }}>
-                No API key — use manual flow below
+                No API key — use manual flow ↓
               </span>
-            )}
-          </div>
-        )}
+            )
+          )}
+        </div>
       </div>
 
-      {/* Manual fallback — always shown when no EDL, prominent when no API key */}
-      {!hasEdl && (
-        <ManualAnalysis
-          project={project}
-          onChange={onChange}
-          highlight={!anthropicConfigured}
-        />
-      )}
+      {/* Split panel */}
+      <div style={{ display: 'flex', gap: 20, flex: 1, minHeight: 0 }}>
+        {/* Left: video + manual analysis */}
+        <div style={{ width: 360, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {videoSrc ? (
+            <VideoPreview
+              ref={videoRef}
+              src={videoSrc}
+              wordCuts={wordCuts}
+              edlSegments={project.edl?.segments ?? []}
+              onTimeUpdate={setCurrentTime}
+            />
+          ) : (
+            <div style={{ background: 'var(--bg-elevated)', borderRadius: 8, height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+              No video uploaded
+            </div>
+          )}
 
-      {mt.map((seg, i) => (
-        <div key={i} style={{ display: 'flex', gap: 12, padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-          <span style={{ color: 'var(--text-muted)', fontSize: 12, width: 80, flexShrink: 0, paddingTop: 2 }}>
-            {fmt(seg.start)}
-          </span>
-          <span style={{ color: 'var(--accent)', fontSize: 12, width: 80, flexShrink: 0, paddingTop: 2 }}>
-            {seg.speaker_name}
-          </span>
-          <span style={{ flex: 1 }}>{seg.text}</span>
+          {!hasEdl && (
+            <ManualAnalysis project={project} onChange={onChange} highlight={!anthropicConfigured} />
+          )}
         </div>
-      ))}
+
+        {/* Right: transcript editor */}
+        <div style={{ flex: 1, overflowY: 'auto', paddingRight: 4 }}>
+          {project.merged_transcript.length > 0 ? (
+            <TranscriptEditor
+              segments={project.merged_transcript}
+              wordCuts={wordCuts}
+              currentTime={currentTime}
+              onSeek={(t) => videoRef.current?.seekTo(t)}
+              onCutsChange={handleCutsChange}
+            />
+          ) : (
+            <p style={{ color: 'var(--text-muted)' }}>No transcript yet.</p>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

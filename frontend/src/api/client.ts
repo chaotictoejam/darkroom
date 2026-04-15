@@ -83,6 +83,12 @@ export const api = {
       body: JSON.stringify({ text }),
     }),
 
+  saveWordCuts: (id: string, wordCuts: import('./types').WordCut[]) =>
+    request<{ ok: boolean }>(`/api/projects/${id}/word-cuts`, {
+      method: 'PUT',
+      body: JSON.stringify({ word_cuts: wordCuts }),
+    }),
+
   render: (
     id: string,
     targets: string[],

@@ -69,6 +69,12 @@ export type ProjectStatus =
   | 'rendering'
   | 'error'
 
+/** A deleted time range — from a word-level transcript edit. */
+export interface WordCut {
+  start: number
+  end: number
+}
+
 export interface Project {
   id: string
   name: string
@@ -78,6 +84,7 @@ export interface Project {
   transcripts: Record<string, TranscriptSegment[]>
   merged_transcript: TranscriptSegment[]
   edl: EDL | null
+  word_cuts: WordCut[]   // manual word-level cuts, separate from AI EDL cuts
   renders: Record<string, Render>
   progress: Progress
   transcribe_model?: string

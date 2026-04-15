@@ -51,6 +51,25 @@ async def upload_files(
     return proj
 
 
+class WordCutItem(BaseModel):
+    start: float
+    end: float
+
+
+class WordCutsBody(BaseModel):
+    word_cuts: list[WordCutItem]
+
+
+@router.put("/projects/{project_id}/word-cuts")
+def save_word_cuts(project_id: str, body: WordCutsBody):
+    proj = get_project(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    proj["word_cuts"] = [{"start": c.start, "end": c.end} for c in body.word_cuts]
+    save_project(proj)
+    return {"ok": True}
+
+
 class TranscriptPatch(BaseModel):
     text: str
 

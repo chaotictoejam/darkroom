@@ -8,11 +8,15 @@
 
 .PHONY: install dev backend frontend build lint
 
+# Use the project .venv if it exists, otherwise fall back to whatever python is on PATH
+VENV_PYTHON := $(if $(wildcard .venv/Scripts/python.exe),.venv/Scripts/python.exe,\
+               $(if $(wildcard .venv/bin/python),.venv/bin/python,python))
+
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
 install:
 	@echo "→ Installing Python backend..."
-	cd backend && pip install -e ".[dev]"
+	$(VENV_PYTHON) -m pip install -e "backend/[dev]"
 	@echo "→ Installing frontend dependencies..."
 	cd frontend && npm install
 	@echo ""
@@ -25,7 +29,7 @@ dev:
 	$(MAKE) -j2 backend frontend
 
 backend:
-	cd backend && uvicorn darkroom.main:app --reload --port 8000
+	cd backend && $(abspath $(VENV_PYTHON)) -m uvicorn darkroom.main:app --reload --port 8000
 
 frontend:
 	cd frontend && npm run dev
