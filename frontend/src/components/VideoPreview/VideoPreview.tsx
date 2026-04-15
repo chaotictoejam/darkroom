@@ -19,6 +19,8 @@ interface Props {
   edlSegments: EDLSegment[]
   /** Called on every timeupdate with the current playback time in seconds. */
   onTimeUpdate?: (time: number) => void
+  /** Called once the video metadata loads, with the total duration in seconds. */
+  onDurationChange?: (duration: number) => void
 }
 
 /**
@@ -47,7 +49,7 @@ function buildSkipRanges(wordCuts: WordCut[], edlSegments: EDLSegment[]): WordCu
 }
 
 const VideoPreview = forwardRef<VideoPreviewHandle, Props>(
-  ({ src, wordCuts, edlSegments, onTimeUpdate }, ref) => {
+  ({ src, wordCuts, edlSegments, onTimeUpdate, onDurationChange }, ref) => {
     const videoRef = useRef<HTMLVideoElement>(null)
     // Keep a ref to skip ranges so the timeupdate handler always sees latest
     const skipRangesRef = useRef<WordCut[]>([])
@@ -84,6 +86,7 @@ const VideoPreview = forwardRef<VideoPreviewHandle, Props>(
           src={src}
           controls
           onTimeUpdate={handleTimeUpdate}
+          onLoadedMetadata={() => onDurationChange?.(videoRef.current?.duration ?? 0)}
           style={{ width: '100%', display: 'block', maxHeight: '40vh' }}
         />
       </div>
