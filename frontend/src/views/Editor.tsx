@@ -23,7 +23,7 @@ interface Props {
   onBack: () => void
 }
 
-type SidePanel = 'shorts' | 'render' | 'manual'
+type SidePanel = 'shorts' | 'render' | 'manual' | 'advanced'
 type PreviewLayout = 'multi' | 'solo'
 
 export default function Editor({ project, onChange, onBack }: Props) {
@@ -174,6 +174,18 @@ export default function Editor({ project, onChange, onBack }: Props) {
           >
             <RenderContent project={project} onChange={onChange} />
           </SidebarSection>
+
+          {/* Spacer pushes advanced section to bottom */}
+          <div style={{ flex: 1 }} />
+
+          <SidebarSection
+            label="Advanced Tools"
+            open={openPanels.has('advanced')}
+            onToggle={() => togglePanel('advanced')}
+            danger
+          >
+            <AdvancedTools project={project} />
+          </SidebarSection>
         </aside>
 
         {/* ── Main content ─────────────────────────────────────────────────── */}
@@ -286,21 +298,27 @@ function SidebarSection({
   label,
   open,
   onToggle,
+  danger,
   children,
 }: {
   label: string
   open: boolean
   onToggle: () => void
+  danger?: boolean
   children: React.ReactNode
 }) {
   return (
-    <div style={{ borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+    <div style={{
+      borderTop: danger ? '1px solid rgba(180,50,50,0.3)' : 'none',
+      borderBottom: '1px solid var(--border)',
+      flexShrink: 0,
+    }}>
       <button
         onClick={onToggle}
         style={{
           width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: '10px 14px', background: 'none', border: 'none',
-          color: open ? 'var(--text)' : 'var(--text-muted)',
+          color: open ? (danger ? '#c96' : 'var(--text)') : 'var(--text-muted)',
           fontSize: 13, fontWeight: open ? 600 : 400,
           cursor: 'pointer', textAlign: 'left',
           transition: 'color 0.1s',
@@ -316,6 +334,85 @@ function SidebarSection({
       )}
     </div>
   )
+}
+
+// ── Advanced tools ─────────────────────────────────────────────────────────────
+
+function AdvancedTools({ project }: { project: Project }) {
+  const [promptCopied, setPromptCopied] = useState(false)
+
+  function exportTranscript() {
+    const lines = project.merged_transcript.map(
+      (seg) => `[${seg.speaker_name}]\n${seg.text}`,
+    )
+    download(`${project.name}-transcript.txt`, lines.join('\n\n'), 'text/plain')
+  }
+
+  function exportEdl() {
+    if (!project.edl) return
+    download(
+      `${project.name}-edl.json`,
+      JSON.stringify(project.edl, null, 2),
+      'application/json',
+    )
+  }
+
+  async function copyAnalysisPrompt() {
+    const { prompt } = await api.getPrompt(project.id)
+    await navigator.clipboard.writeText(prompt)
+    setPromptCopied(true)
+    setTimeout(() => setPromptCopied(false), 2000)
+  }
+
+  return (
+    <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <AdvBtn label="Export Transcript" onClick={exportTranscript} />
+      <AdvBtn label="Export EDL" onClick={exportEdl} disabled={!project.edl} />
+      <div style={{ height: 1, background: 'rgba(180,50,50,0.2)', margin: '4px 0' }} />
+      <AdvBtn
+        label={promptCopied ? '✓ Prompt copied!' : 'Redo Manual Analysis'}
+        onClick={copyAnalysisPrompt}
+        warning
+      />
+    </div>
+  )
+}
+
+function AdvBtn({
+  label,
+  onClick,
+  disabled,
+  warning,
+}: {
+  label: string
+  onClick: () => void
+  disabled?: boolean
+  warning?: boolean
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        width: '100%', textAlign: 'left',
+        background: 'none',
+        border: `1px solid ${warning ? 'rgba(180,50,50,0.35)' : 'var(--border)'}`,
+        borderRadius: 6, padding: '6px 10px',
+        color: disabled ? 'var(--text-muted)' : warning ? '#c96' : 'var(--text)',
+        fontSize: 12, cursor: disabled ? 'default' : 'pointer',
+        opacity: disabled ? 0.45 : 1,
+      }}
+    >
+      {label}
+    </button>
+  )
+}
+
+function download(filename: string, content: string, mime: string) {
+  const url = URL.createObjectURL(new Blob([content], { type: mime }))
+  const a = Object.assign(document.createElement('a'), { href: url, download: filename })
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 // ── Render content (sidebar) ───────────────────────────────────────────────────
