@@ -89,6 +89,12 @@ export const api = {
       body: JSON.stringify({ word_cuts: wordCuts }),
     }),
 
+  saveWordMutes: (id: string, wordMutes: import('./types').WordMute[]) =>
+    request<{ ok: boolean }>(`/api/projects/${id}/word-mutes`, {
+      method: 'PUT',
+      body: JSON.stringify({ word_mutes: wordMutes }),
+    }),
+
   render: (
     id: string,
     targets: string[],

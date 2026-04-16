@@ -16,7 +16,7 @@
  *   Active (playing)      → accent underline
  */
 import { useEffect, useRef, useState } from 'react'
-import type { EDLSegment, TranscriptSegment, WordCut } from '../../api/types'
+import type { EDLSegment, TranscriptSegment, WordCut, WordMute } from '../../api/types'
 
 // ── Flat word model ───────────────────────────────────────────────────────────
 
@@ -50,6 +50,10 @@ function isEdlCut(word: FlatWord, segments: EDLSegment[]): boolean {
   return segments.some((s) => !s.keep && word.start < s.end && word.end > s.start)
 }
 
+function isMuted(word: FlatWord, mutes: WordMute[]): boolean {
+  return mutes.some((m) => word.start < m.end && word.end > m.start)
+}
+
 function getEdlSegment(word: FlatWord, segments: EDLSegment[]): EDLSegment | null {
   return segments.find((s) => word.start < s.end && word.end > s.start) ?? null
 }
@@ -74,6 +78,7 @@ function mergeAndSort(cuts: WordCut[]): WordCut[] {
 interface Props {
   segments: TranscriptSegment[]
   wordCuts: WordCut[]
+  wordMutes?: WordMute[]
   /** EDL segments from AI analysis — keep=false words are shown grayed + struck. */
   edlSegments?: EDLSegment[]
   /** Current video playback time — used to highlight the active word. */
@@ -81,6 +86,7 @@ interface Props {
   onSeek: (time: number) => void
   /** Called whenever the cut list changes (after delete or undo). */
   onCutsChange: (cuts: WordCut[]) => void
+  onMutesChange: (mutes: WordMute[]) => void
 }
 
 interface ToolbarState {
@@ -93,10 +99,12 @@ interface ToolbarState {
 export default function TranscriptEditor({
   segments,
   wordCuts,
+  wordMutes = [],
   edlSegments = [],
   currentTime,
   onSeek,
   onCutsChange,
+  onMutesChange,
 }: Props) {
   const words = useRef<FlatWord[]>(flattenWords(segments))
   const [selRange, setSelRange] = useState<{ anchor: number; focus: number } | null>(null)
@@ -152,6 +160,31 @@ export default function TranscriptEditor({
     const rangeStart = selected[0].start
     const rangeEnd   = selected[selected.length - 1].end
     onCutsChange(wordCuts.filter((c) => c.end <= rangeStart || c.start >= rangeEnd))
+    setToolbar(null)
+  }
+
+  function muteToolbarSelection() {
+    if (!toolbar) return
+    const selected = words.current.filter(
+      (w) => w.globalIndex >= toolbar.selStart && w.globalIndex <= toolbar.selEnd,
+    )
+    if (selected.length === 0) return
+    const newMute: WordMute = { start: selected[0].start, end: selected[selected.length - 1].end }
+    const merged = mergeAndSort([...wordMutes, newMute])
+    onMutesChange(merged)
+    setToolbar(null)
+    setSelRange(null)
+  }
+
+  function unmuteToolbarSelection() {
+    if (!toolbar) return
+    const selected = words.current.filter(
+      (w) => w.globalIndex >= toolbar.selStart && w.globalIndex <= toolbar.selEnd,
+    )
+    if (selected.length === 0) return
+    const rangeStart = selected[0].start
+    const rangeEnd   = selected[selected.length - 1].end
+    onMutesChange(wordMutes.filter((m) => m.end <= rangeStart || m.start >= rangeEnd))
     setToolbar(null)
   }
 
@@ -246,8 +279,9 @@ export default function TranscriptEditor({
   const toolbarWords = toolbar
     ? words.current.filter((w) => w.globalIndex >= toolbar.selStart && w.globalIndex <= toolbar.selEnd)
     : []
-  const anyWordCut  = toolbarWords.some((w) => isCut(w, wordCuts))
-  const allWordCut  = toolbarWords.length > 0 && toolbarWords.every((w) => isCut(w, wordCuts))
+  const anyWordCut   = toolbarWords.some((w) => isCut(w, wordCuts))
+  const allWordCut   = toolbarWords.length > 0 && toolbarWords.every((w) => isCut(w, wordCuts))
+  const anyWordMuted = toolbarWords.some((w) => isMuted(w, wordMutes))
   const anchorEdlSeg = toolbarWords.length > 0 ? getEdlSegment(toolbarWords[0], edlSegments) : null
 
   return (
@@ -306,6 +340,14 @@ export default function TranscriptEditor({
           ) : (
             <ToolbarBtn label="Cut" onClick={cutToolbarSelection} />
           )}
+
+          <div style={{ width: 1, background: '#3a3a3a', alignSelf: 'stretch', margin: '3px 2px' }} />
+
+          {/* Mute / Unmute */}
+          {anyWordMuted
+            ? <ToolbarBtn label="🔊 Unmute" onClick={unmuteToolbarSelection} />
+            : <ToolbarBtn label="🔇 Mute" onClick={muteToolbarSelection} />
+          }
         </div>
       )}
 
@@ -324,6 +366,7 @@ export default function TranscriptEditor({
               {group.words.map((w) => {
                 const cut      = isCut(w, wordCuts)
                 const edlCut   = !cut && isEdlCut(w, edlSegments)
+                const muted    = !cut && isMuted(w, wordMutes)
                 const selected = isSelected(w.globalIndex)
                 const active   = w.globalIndex === activeIndex
 
@@ -336,16 +379,18 @@ export default function TranscriptEditor({
                     onPointerUp={(e) => onWordPointerUp(e, w.globalIndex, w)}
                     style={{
                       display: 'inline-block',
-                      marginRight: 3, paddingLeft: 1, paddingRight: 1,
+                      marginRight: 3, paddingLeft: 2, paddingRight: 2,
                       borderRadius: 3, cursor: 'pointer',
                       transition: 'background 0.05s',
-                      background: selected ? 'rgba(59,130,246,0.35)' : 'transparent',
+                      background: selected
+                        ? 'rgba(59,130,246,0.35)'
+                        : muted ? 'rgba(180,120,0,0.18)' : 'transparent',
                       color: cut ? '#e05555' : edlCut ? 'var(--text-muted)' : 'inherit',
                       textDecoration: cut || edlCut ? 'line-through' : 'none',
                       opacity: cut ? 0.45 : edlCut ? 0.4 : 1,
                       borderBottom: active && !cut && !edlCut
                         ? '2px solid var(--accent)'
-                        : '2px solid transparent',
+                        : muted ? '2px solid rgba(180,120,0,0.5)' : '2px solid transparent',
                     }}
                   >
                     {w.word.trimStart()}

@@ -20,6 +20,7 @@ def project_path(project_id: str) -> Path:
 
 _DEFAULTS = {
     "word_cuts": [],
+    "word_mutes": [],
     "renders": {},
     "progress": {"step": "", "percent": 0, "message": ""},
 }
@@ -74,6 +75,7 @@ def new_project(name: str) -> dict:
         "merged_transcript": [],
         "edl": None,
         "word_cuts": [],
+        "word_mutes": [],
         "renders": {},
         "progress": {"step": "", "percent": 0, "message": ""},
     }

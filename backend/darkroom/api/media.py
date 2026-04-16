@@ -70,6 +70,25 @@ def save_word_cuts(project_id: str, body: WordCutsBody):
     return {"ok": True}
 
 
+class WordMuteItem(BaseModel):
+    start: float
+    end: float
+
+
+class WordMutesBody(BaseModel):
+    word_mutes: list[WordMuteItem]
+
+
+@router.put("/projects/{project_id}/word-mutes")
+def save_word_mutes(project_id: str, body: WordMutesBody):
+    proj = get_project(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    proj["word_mutes"] = [{"start": m.start, "end": m.end} for m in body.word_mutes]
+    save_project(proj)
+    return {"ok": True}
+
+
 class TranscriptPatch(BaseModel):
     text: str
 

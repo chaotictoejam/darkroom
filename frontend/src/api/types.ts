@@ -75,6 +75,12 @@ export interface WordCut {
   end: number
 }
 
+/** A muted time range — video is kept but audio is silenced. */
+export interface WordMute {
+  start: number
+  end: number
+}
+
 export interface Project {
   id: string
   name: string
@@ -85,6 +91,7 @@ export interface Project {
   merged_transcript: TranscriptSegment[]
   edl: EDL | null
   word_cuts: WordCut[]   // manual word-level cuts, separate from AI EDL cuts
+  word_mutes: WordMute[] // audio-only mutes — video kept, sound silenced
   renders: Record<string, Render>
   progress: Progress
   transcribe_model?: string

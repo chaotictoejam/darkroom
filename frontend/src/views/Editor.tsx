@@ -13,7 +13,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
-import type { EDLSegment, Project, WordCut } from '../api/types'
+import type { EDLSegment, Project, WordCut, WordMute } from '../api/types'
 import VideoPreview, { type VideoPreviewHandle } from '../components/VideoPreview/VideoPreview'
 import TranscriptEditor from '../components/TranscriptEditor/TranscriptEditor'
 
@@ -67,6 +67,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
     : null
 
   const wordCuts: WordCut[] = project.word_cuts ?? []
+  const wordMutes: WordMute[] = project.word_mutes ?? []
   const hasEdl = !!project.edl
 
   const handleCutsChange = useCallback(
@@ -75,6 +76,17 @@ export default function Editor({ project, onChange, onBack }: Props) {
       if (saveTimer.current) clearTimeout(saveTimer.current)
       saveTimer.current = setTimeout(() => {
         api.saveWordCuts(project.id, newCuts)
+      }, 600)
+    },
+    [project, onChange],
+  )
+
+  const handleMutesChange = useCallback(
+    (newMutes: WordMute[]) => {
+      onChange({ ...project, word_mutes: newMutes })
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+      saveTimer.current = setTimeout(() => {
+        api.saveWordMutes(project.id, newMutes)
       }, 600)
     },
     [project, onChange],
@@ -186,10 +198,12 @@ export default function Editor({ project, onChange, onBack }: Props) {
                   <TranscriptEditor
                     segments={project.merged_transcript}
                     wordCuts={wordCuts}
+                    wordMutes={wordMutes}
                     edlSegments={project.edl?.segments ?? []}
                     currentTime={currentTime}
                     onSeek={(t) => videoRef.current?.seekTo(t)}
                     onCutsChange={handleCutsChange}
+                    onMutesChange={handleMutesChange}
                   />
                 ) : (
                   <p style={{ color: 'var(--text-muted)' }}>No transcript yet.</p>
@@ -234,6 +248,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
                     ref={videoRef}
                     src={videoSrc}
                     wordCuts={wordCuts}
+                    wordMutes={wordMutes}
                     edlSegments={project.edl?.segments ?? []}
                     onTimeUpdate={setCurrentTime}
                     onDurationChange={setDuration}
