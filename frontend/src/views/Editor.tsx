@@ -23,7 +23,7 @@ interface Props {
   onBack: () => void
 }
 
-type SidePanel = 'edl' | 'shorts' | 'render' | 'manual'
+type SidePanel = 'shorts' | 'render' | 'manual'
 type PreviewLayout = 'multi' | 'solo'
 
 export default function Editor({ project, onChange, onBack }: Props) {
@@ -132,14 +132,6 @@ export default function Editor({ project, onChange, onBack }: Props) {
           overflowY: 'auto',
         }}>
           <SidebarSection
-            label="Edit Decision List"
-            open={openPanels.has('edl')}
-            onToggle={() => togglePanel('edl')}
-          >
-            <EDLContent project={project} onChange={onChange} />
-          </SidebarSection>
-
-          <SidebarSection
             label="Shorts Builder"
             open={openPanels.has('shorts')}
             onToggle={() => togglePanel('shorts')}
@@ -194,6 +186,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
                   <TranscriptEditor
                     segments={project.merged_transcript}
                     wordCuts={wordCuts}
+                    edlSegments={project.edl?.segments ?? []}
                     currentTime={currentTime}
                     onSeek={(t) => videoRef.current?.seekTo(t)}
                     onCutsChange={handleCutsChange}
@@ -306,55 +299,6 @@ function SidebarSection({
           {children}
         </div>
       )}
-    </div>
-  )
-}
-
-// ── EDL content (sidebar) ──────────────────────────────────────────────────────
-
-function EDLContent({ project }: { project: Project; onChange: (p: Project) => void }) {
-  if (!project.edl) {
-    return (
-      <p style={{ padding: '12px 14px', color: 'var(--text-muted)', fontSize: 13, margin: 0 }}>
-        No EDL yet — run AI analysis to generate one.
-      </p>
-    )
-  }
-
-  const segs = project.edl.segments
-  const kept = segs.filter((s) => s.keep).length
-
-  return (
-    <div style={{ padding: '8px 10px' }}>
-      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, padding: '0 2px' }}>
-        {segs.length} segments · {kept} kept
-      </div>
-      {segs.map((seg) => (
-        <div
-          key={seg.id}
-          style={{
-            display: 'flex', gap: 6, alignItems: 'center',
-            padding: '4px 7px', borderRadius: 5, marginBottom: 3,
-            background: seg.keep ? 'rgba(50,180,100,0.08)' : 'transparent',
-            opacity: seg.keep ? 1 : 0.45,
-            border: '1px solid var(--border)',
-            fontSize: 11,
-          }}
-        >
-          <span style={{ color: 'var(--text-muted)', width: 72, flexShrink: 0, fontFamily: 'monospace' }}>
-            {fmt(seg.start)}
-          </span>
-          <span style={{ color: 'var(--accent)', width: 14, flexShrink: 0, fontWeight: 600 }}>
-            {seg.camera}
-          </span>
-          <span style={{
-            color: 'var(--text-muted)', flex: 1,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}>
-            {seg.reason ?? seg.layout ?? '—'}
-          </span>
-        </div>
-      ))}
     </div>
   )
 }
