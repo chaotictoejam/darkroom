@@ -12,6 +12,7 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
   const [loading, setLoading] = useState(true)
   const [backendDown, setBackendDown] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -48,8 +49,14 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
 
   async function handleDelete(e: React.MouseEvent, id: string) {
     e.stopPropagation()
-    await api.deleteProject(id)
-    setProjects((prev) => prev.filter((p) => p.id !== id))
+    setConfirmDelete(id)
+  }
+
+  async function confirmAndDelete() {
+    if (!confirmDelete) return
+    await api.deleteProject(confirmDelete)
+    setProjects((prev) => prev.filter((p) => p.id !== confirmDelete))
+    setConfirmDelete(null)
   }
 
   return (
@@ -107,13 +114,68 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
             </div>
             <button
               onClick={(e) => handleDelete(e, p.id)}
-              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 16 }}
+              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 16, cursor: 'pointer' }}
             >
               ✕
             </button>
           </div>
         ))}
       </div>
+
+      {/* ── Delete confirmation modal ─────────────────────────────────────── */}
+      {confirmDelete && (
+        <div
+          onClick={() => setConfirmDelete(null)}
+          style={{
+            position: 'fixed', inset: 0,
+            background: 'rgba(0,0,0,0.6)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 100,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border)',
+              borderRadius: 10,
+              padding: '28px 32px',
+              width: 340,
+              display: 'flex', flexDirection: 'column', gap: 20,
+            }}
+          >
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 6 }}>Delete project?</div>
+              <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+                "{projects.find((p) => p.id === confirmDelete)?.name}" will be permanently deleted.
+                This cannot be undone.
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setConfirmDelete(null)}
+                style={{
+                  background: 'none', border: '1px solid var(--border)',
+                  color: 'var(--text)', borderRadius: 6, padding: '7px 18px',
+                  fontSize: 13, cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmAndDelete}
+                style={{
+                  background: '#c0392b', border: 'none',
+                  color: '#fff', borderRadius: 6, padding: '7px 18px',
+                  fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
