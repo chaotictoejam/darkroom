@@ -37,6 +37,7 @@ Create an Edit Decision List following these rules:
 8. Segments must be contiguous and together cover 0.0 to {duration:.1f} seconds
 9. Available cameras: {cameras}
 10. IMPORTANT: segments must be granular. A 60-second back-and-forth between two speakers should produce many short segments (5–20 seconds each), each on the correct camera. Never create a segment longer than ~30 seconds unless a single speaker talks uninterrupted for that long.
+11. All `start` and `end` values MUST be plain decimal numbers in seconds (e.g. 79.26). Never use arithmetic expressions (e.g. 1*60+19.26 is invalid). Copy timestamps directly from the transcript — do not compute or convert them.
 
 Return this exact JSON structure (no other text):
 {{
@@ -72,7 +73,8 @@ Return this exact JSON structure (no other text):
 
 _STRICT_SUFFIX = (
     "\n\nCRITICAL: Your response MUST start with {{ and end with }}. "
-    "No markdown. No code fences. Raw JSON only."
+    "No markdown. No code fences. Raw JSON only. "
+    "All start/end values must be plain decimal numbers — no arithmetic expressions."
 )
 
 
