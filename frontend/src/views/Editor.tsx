@@ -12,10 +12,66 @@
  *   └──────────┴─────────────────────────────────────────┘
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api } from '../api/client'
+import { api, subscribeToProgress } from '../api/client'
 import type { EDLSegment, Project, WordCut, WordMute } from '../api/types'
 import VideoPreview, { type VideoPreviewHandle } from '../components/VideoPreview/VideoPreview'
 import TranscriptEditor from '../components/TranscriptEditor/TranscriptEditor'
+
+// ── Time-mapping utilities ─────────────────────────────────────────────────────
+// The proxy video is the rendered output (all cuts applied). These functions
+// convert between source-file time and output-timeline time so that seeking
+// and transcript highlighting stay in sync regardless of which player is active.
+
+type TimeRange = { start: number; end: number }
+
+/** Build the list of kept source ranges, accounting for EDL + word cuts. */
+function buildKeptRanges(
+  edlSegments: EDLSegment[],
+  wordCuts: WordCut[],
+  totalDuration: number,
+): TimeRange[] {
+  let ranges: TimeRange[] =
+    edlSegments.length > 0
+      ? edlSegments.filter((s) => s.keep).map((s) => ({ start: s.start, end: s.end }))
+      : [{ start: 0, end: totalDuration }]
+
+  for (const cut of wordCuts) {
+    ranges = ranges.flatMap((r) => {
+      if (cut.end <= r.start || cut.start >= r.end) return [r]
+      const pieces: TimeRange[] = []
+      if (cut.start > r.start) pieces.push({ start: r.start, end: cut.start })
+      if (cut.end < r.end) pieces.push({ start: cut.end, end: r.end })
+      return pieces
+    })
+  }
+  return ranges.filter((r) => r.end - r.start > 0.067) // drop sub-2-frame slivers
+}
+
+/** Source time → position in the output/proxy timeline. */
+function sourceToOutputTime(sourceTime: number, keptRanges: TimeRange[]): number {
+  let out = 0
+  for (const r of keptRanges) {
+    if (sourceTime <= r.start) break
+    if (sourceTime >= r.end) {
+      out += r.end - r.start
+    } else {
+      out += sourceTime - r.start
+      break
+    }
+  }
+  return out
+}
+
+/** Output/proxy timeline position → source file time. */
+function outputToSourceTime(outputTime: number, keptRanges: TimeRange[]): number {
+  let rem = outputTime
+  for (const r of keptRanges) {
+    const len = r.end - r.start
+    if (rem <= len) return r.start + rem
+    rem -= len
+  }
+  return keptRanges[keptRanges.length - 1]?.end ?? 0
+}
 
 interface Props {
   project: Project
@@ -36,6 +92,23 @@ export default function Editor({ project, onChange, onBack }: Props) {
   const videoRef = useRef<VideoPreviewHandle>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // ── Proxy preview state ──────────────────────────────────────────────────────
+  const [proxyUrl, setProxyUrl] = useState<string | null>(null)
+  const [proxyGenerating, setProxyGenerating] = useState(false)
+  const proxyRef = useRef<HTMLVideoElement>(null)
+  const previewUnsubRef = useRef<(() => void) | null>(null)
+  const previewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const keptRangesRef = useRef<TimeRange[]>([])
+
+  // Recompute kept ranges whenever the cut inputs change
+  useEffect(() => {
+    keptRangesRef.current = buildKeptRanges(
+      project.edl?.segments ?? [],
+      project.word_cuts ?? [],
+      duration,
+    )
+  }, [project.edl, project.word_cuts, duration])
+
   useEffect(() => {
     api.status().then((s) => {
       setAnthropicConfigured(s.anthropic_configured)
@@ -44,12 +117,51 @@ export default function Editor({ project, onChange, onBack }: Props) {
         setOpenPanels((prev) => new Set([...prev, 'manual']))
       }
     })
+    // Cleanup on unmount
+    return () => {
+      previewUnsubRef.current?.()
+      if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current)
+    }
   }, [])
 
   async function handleAnalyze() {
     setAnalyzing(true)
     await api.analyze(project.id)
     onChange({ ...project, status: 'analyzing' })
+  }
+
+  /** Kick off a proxy render and update state when it completes. */
+  function triggerPreview() {
+    if (project.project_type === 'podcast') return
+    previewUnsubRef.current?.()
+    setProxyGenerating(true)
+
+    const unsub = subscribeToProgress(project.id, (evt) => {
+      if (evt.type === 'preview_ready' && evt.url) {
+        // Cache-bust so the browser reloads the newly-rendered file
+        setProxyUrl(evt.url + '?t=' + Date.now())
+        setProxyGenerating(false)
+        unsub()
+      } else if (evt.type === 'preview_error') {
+        setProxyGenerating(false)
+        unsub()
+      }
+    })
+    previewUnsubRef.current = unsub
+
+    api.generatePreview(project.id).catch(() => {
+      setProxyGenerating(false)
+      unsub()
+    })
+  }
+
+  /** Unified seek: uses proxy when available, falls back to raw VideoPreview. */
+  function seekTo(sourceTime: number) {
+    if (proxyRef.current) {
+      proxyRef.current.currentTime = sourceToOutputTime(sourceTime, keptRangesRef.current)
+    } else {
+      videoRef.current?.seekTo(sourceTime)
+    }
   }
 
   function togglePanel(panel: SidePanel) {
@@ -77,8 +189,12 @@ export default function Editor({ project, onChange, onBack }: Props) {
       saveTimer.current = setTimeout(() => {
         api.saveWordCuts(project.id, newCuts)
       }, 600)
+      // Debounce proxy re-render — wait for the user to stop cutting
+      if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current)
+      setProxyGenerating(true)
+      previewDebounceRef.current = setTimeout(triggerPreview, 3000)
     },
-    [project, onChange],
+    [project, onChange], // eslint-disable-line react-hooks/exhaustive-deps
   )
 
   const handleMutesChange = useCallback(
@@ -217,7 +333,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
                     wordMutes={wordMutes}
                     edlSegments={project.edl?.segments ?? []}
                     currentTime={currentTime}
-                    onSeek={(t) => videoRef.current?.seekTo(t)}
+                    onSeek={seekTo}
                     onCutsChange={handleCutsChange}
                     onMutesChange={handleMutesChange}
                   />
@@ -262,16 +378,68 @@ export default function Editor({ project, onChange, onBack }: Props) {
               {/* Media player */}
               <div style={{ flex: 1, overflow: 'hidden', padding: 8, display: 'flex', flexDirection: 'column', justifyContent: 'flex-start' }}>
                 {videoSrc ? (
-                  <VideoPreview
-                    ref={videoRef}
-                    src={videoSrc}
-                    wordCuts={wordCuts}
-                    wordMutes={wordMutes}
-                    edlSegments={project.edl?.segments ?? []}
-                    onTimeUpdate={setCurrentTime}
-                    onDurationChange={setDuration}
-                    isAudio={project.project_type === 'podcast'}
-                  />
+                  <>
+                    {/* ── Proxy (WYSIWYG) player ────────────────────────────── */}
+                    {proxyUrl && (
+                      <div style={{ position: 'relative', width: '100%', background: '#000', borderRadius: 8, overflow: 'hidden' }}>
+                        {proxyGenerating && (
+                          <div style={{
+                            position: 'absolute', top: 6, right: 6, zIndex: 1,
+                            background: 'rgba(0,0,0,0.75)', color: 'var(--accent)',
+                            fontSize: 10, fontWeight: 600, letterSpacing: '0.05em',
+                            padding: '2px 7px', borderRadius: 3,
+                          }}>
+                            UPDATING…
+                          </div>
+                        )}
+                        <video
+                          ref={proxyRef}
+                          src={proxyUrl}
+                          controls
+                          onTimeUpdate={() => {
+                            const proxy = proxyRef.current
+                            if (!proxy) return
+                            const srcTime = outputToSourceTime(proxy.currentTime, keptRangesRef.current)
+                            setCurrentTime(srcTime)
+                            const shouldMute = wordMutes.some((m) => srcTime >= m.start && srcTime < m.end)
+                            if (proxy.muted !== shouldMute) proxy.muted = shouldMute
+                          }}
+                          style={{ width: '100%', display: 'block', maxHeight: '40vh' }}
+                        />
+                      </div>
+                    )}
+
+                    {/* ── Raw source player — always mounted for metadata;
+                            hidden once proxy is ready ─────────────────────── */}
+                    <div style={{ display: proxyUrl ? 'none' : 'block', position: 'relative' }}>
+                      {proxyGenerating && !proxyUrl && (
+                        <div style={{
+                          position: 'absolute', top: 6, right: 6, zIndex: 1,
+                          background: 'rgba(0,0,0,0.75)', color: 'var(--accent)',
+                          fontSize: 10, fontWeight: 600, letterSpacing: '0.05em',
+                          padding: '2px 7px', borderRadius: 3,
+                        }}>
+                          BUILDING PREVIEW…
+                        </div>
+                      )}
+                      <VideoPreview
+                        ref={videoRef}
+                        src={videoSrc}
+                        wordCuts={wordCuts}
+                        wordMutes={wordMutes}
+                        edlSegments={project.edl?.segments ?? []}
+                        onTimeUpdate={setCurrentTime}
+                        onDurationChange={(d) => {
+                          setDuration(d)
+                          // Auto-generate proxy once we know the source duration
+                          if (d > 0 && project.project_type !== 'podcast') {
+                            triggerPreview()
+                          }
+                        }}
+                        isAudio={project.project_type === 'podcast'}
+                      />
+                    </div>
+                  </>
                 ) : (
                   <div style={{
                     width: '100%', background: 'var(--bg-card)', borderRadius: 8,
@@ -291,7 +459,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
             currentTime={currentTime}
             wordCuts={wordCuts}
             edlSegments={project.edl?.segments ?? []}
-            onSeek={(t) => videoRef.current?.seekTo(t)}
+            onSeek={seekTo}
           />
         </div>
       </div>

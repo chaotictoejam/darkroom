@@ -3,7 +3,7 @@
  * All requests go to the same origin — Vite proxies /api/* in dev,
  * FastAPI serves everything from the same port in production.
  */
-import type { Clip, EDL, Project, ProjectSummary, RenderShortParams } from './types'
+import type { EDL, Project, ProjectSummary, RenderShortParams } from './types'
 
 class ApiError extends Error {
   constructor(
@@ -113,14 +113,21 @@ export const api = {
 
   faceCenters: (id: string) =>
     request<Record<string, [number, number]>>(`/api/projects/${id}/face-centers`),
+
+  generatePreview: (id: string) =>
+    request<{ message: string }>(`/api/projects/${id}/preview`, { method: 'POST' }),
 }
 
 // ── WebSocket progress ────────────────────────────────────────────────────────
 
 export interface ProgressEvent {
-  type?: 'ping'
+  type?: 'ping' | 'preview_generating' | 'preview_ready' | 'preview_error'
   status?: string
   progress?: { step: string; percent: number; message: string }
+  /** Present on preview_ready events */
+  url?: string
+  /** Present on preview_error events */
+  message?: string
 }
 
 /**

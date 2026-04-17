@@ -18,6 +18,7 @@ from ..services.editor import build_prompt, generate_edl, generate_skip_edl, val
 from ..services.renderer import (
     _detect_face_center_ratio,
     check_ffmpeg,
+    render_preview,
     render_project,
     render_short_custom,
 )
@@ -64,7 +65,10 @@ async def ws_progress(websocket: WebSocket, project_id: str) -> None:
                 await websocket.send_json({"type": "ping"})
                 continue
             await websocket.send_json(data)
-            # Close cleanly once the job reaches a terminal state
+            # Close cleanly once the job reaches a terminal state.
+            # Preview events (type=preview_*) keep the socket open.
+            if data.get("type", "").startswith("preview_"):
+                continue
             if data.get("status") in ("ready", "error", "transcribed"):
                 break
     except WebSocketDisconnect:
@@ -401,6 +405,44 @@ def start_render_short(project_id: str, body: RenderShortBody):
 
     threading.Thread(target=_run, daemon=True).start()
     return {"message": "Short render started"}
+
+
+# ── Preview proxy render ──────────────────────────────────────────────────────
+
+@router.post("/projects/{project_id}/preview")
+def start_preview(project_id: str):
+    """
+    Kick off an async ultrafast proxy render (960p, crf42).
+    Does NOT change project status — this is a side operation.
+    Pushes {"type": "preview_ready"/"preview_error"} over WebSocket when done.
+    """
+    proj = get_project(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    if not check_ffmpeg():
+        raise HTTPException(503, "FFmpeg not found on this system")
+    if proj.get("project_type") == "podcast":
+        raise HTTPException(400, "Preview proxy not supported for podcast projects")
+
+    lock = _get_render_lock(project_id)
+    if not lock.acquire(blocking=False):
+        raise HTTPException(409, "A render is already in progress for this project")
+
+    def _run():
+        try:
+            _push(project_id, {"type": "preview_generating",
+                                "progress": {"step": "preview", "percent": 5,
+                                             "message": "Building preview…"}})
+            result = render_preview(proj, PROJECTS_DIR)
+            _push(project_id, {"type": "preview_ready", "url": result["url"]})
+        except Exception as exc:
+            _push(project_id, {"type": "preview_error",
+                                "message": str(exc)})
+        finally:
+            lock.release()
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"message": "Preview render started"}
 
 
 # ── Face detection ────────────────────────────────────────────────────────────

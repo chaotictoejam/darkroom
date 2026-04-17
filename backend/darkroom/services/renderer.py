@@ -1061,6 +1061,102 @@ def render_short_custom(
     _run_ffmpeg(cmd)
 
 
+def render_preview(project: dict, projects_dir) -> dict:
+    """
+    Render a fast low-quality proxy preview that exactly mirrors the final render:
+    - Applies EDL keep/cut decisions
+    - Applies word-level cuts
+    - 960px wide, CRF 42, ultrafast preset (typically 5–20 s for a 10 min clip)
+
+    Returns a render result dict with status/url/filename.
+    Raises on FFmpeg failure.
+    """
+    project_id = project["id"]
+    project_dir = projects_dir / project_id
+    output_dir = project_dir / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    speakers_dict = {s["id"]: s for s in project.get("speakers", [])}
+    if not speakers_dict:
+        raise ValueError("No speakers/files in project")
+
+    edl = project.get("edl")
+    word_cuts = project.get("word_cuts") or []
+
+    # ── Build kept segment list ───────────────────────────────────────────────
+    if edl and edl.get("segments"):
+        base_segs = [s for s in edl["segments"] if s.get("keep", True)]
+    else:
+        # No EDL yet — treat whole file as one kept segment
+        first = list(speakers_dict.values())[0]
+        info = get_video_info(first["file_path"])
+        first_cam = list(speakers_dict.keys())[0]
+        base_segs = [{"start": 0.0, "end": info["duration"],
+                      "camera": first_cam, "keep": True}]
+
+    # ── Apply word cuts by slicing kept segments ──────────────────────────────
+    if word_cuts:
+        refined: list[dict] = []
+        for seg in base_segs:
+            pieces = [{"start": seg["start"], "end": seg["end"],
+                       "camera": seg.get("camera")}]
+            for cut in word_cuts:
+                new_pieces: list[dict] = []
+                for p in pieces:
+                    if cut["end"] <= p["start"] or cut["start"] >= p["end"]:
+                        new_pieces.append(p)
+                    else:
+                        if cut["start"] > p["start"]:
+                            new_pieces.append({"start": p["start"], "end": cut["start"],
+                                               "camera": p["camera"]})
+                        if cut["end"] < p["end"]:
+                            new_pieces.append({"start": cut["end"], "end": p["end"],
+                                               "camera": p["camera"]})
+                pieces = new_pieces
+            refined.extend(pieces)
+        base_segs = refined
+
+    _MIN = 2 / 30.0
+    kept = [s for s in base_segs if s["end"] - s["start"] >= _MIN]
+    if not kept:
+        raise ValueError("No segments remain after applying cuts")
+
+    # ── Build filter complex (reuse existing helper) ──────────────────────────
+    input_args, filter_complex, _ = _build_concat_filter(kept, speakers_dict, vertical=False)
+
+    # For preview: skip loudnorm (slow) and scale to 960p
+    filter_complex = filter_complex.replace(
+        "[outa_raw]loudnorm=I=-16:TP=-1.5:LRA=11[outa]",
+        "[outa_raw]anull[outa]",
+    )
+    # [outv] appears exactly once in the concat output; rename it so we can scale
+    filter_complex = filter_complex.replace("[outv]", "[outv_raw]", 1)
+    filter_complex += ";[outv_raw]scale=960:-2[outv]"
+
+    out = str(output_dir / "preview.mp4")
+    cmd = ["ffmpeg", "-y"]
+    cmd.extend(input_args)
+    cmd.extend([
+        "-filter_complex", filter_complex,
+        "-map", "[outv]",
+        "-map", "[outa]",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-crf", "42",
+        "-c:a", "aac",
+        "-b:a", "96k",
+        "-movflags", "+faststart",
+        out,
+    ])
+    _run_ffmpeg(cmd)
+
+    return {
+        "status": "ready",
+        "url": f"/projects/{project_id}/files/output/preview.mp4",
+        "filename": "preview.mp4",
+    }
+
+
 def _render_clip(clip: dict, segments: list[dict], speakers_dict: dict, output_path: str, vertical: bool = True) -> None:
     """Render a specific clip (e.g. Shorts candidate) by finding overlapping segments."""
     clip_start = clip["start"]
