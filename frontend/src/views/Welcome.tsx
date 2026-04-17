@@ -12,6 +12,7 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
   const [loading, setLoading] = useState(true)
   const [backendDown, setBackendDown] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [showTypePicker, setShowTypePicker] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
 
   useEffect(() => {
@@ -32,10 +33,11 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
     return () => { cancelled = true }
   }, [])
 
-  async function handleNew() {
+  async function handleNew(type: 'video' | 'podcast') {
+    setShowTypePicker(false)
     setCreating(true)
     try {
-      const proj = await api.createProject('Untitled Project')
+      const proj = await api.createProject('Untitled Project', type)
       onNewProject(proj)
     } finally {
       setCreating(false)
@@ -69,12 +71,12 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
       </div>
 
       <button
-        onClick={handleNew}
+        onClick={() => setShowTypePicker(true)}
         disabled={creating}
         style={{
           background: 'var(--accent)', color: '#fff', border: 'none',
           borderRadius: 'var(--radius)', padding: '12px 28px',
-          fontSize: 15, fontWeight: 600,
+          fontSize: 15, fontWeight: 600, cursor: 'pointer',
         }}
       >
         {creating ? 'Creating…' : '+ New Project'}
@@ -121,6 +123,67 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
           </div>
         ))}
       </div>
+
+      {/* ── Project type picker modal ────────────────────────────────────── */}
+      {showTypePicker && (
+        <div
+          onClick={() => setShowTypePicker(false)}
+          style={{
+            position: 'fixed', inset: 0,
+            background: 'rgba(0,0,0,0.6)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 100,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'var(--bg-card)', border: '1px solid var(--border)',
+              borderRadius: 12, padding: '32px 28px', width: 420,
+              display: 'flex', flexDirection: 'column', gap: 24,
+            }}
+          >
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 17, marginBottom: 6 }}>New project</div>
+              <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>What are you editing?</div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 12 }}>
+              {([
+                { type: 'video',   icon: '🎬', title: 'Video',   desc: 'Interview, talking head, multi-cam footage' },
+                { type: 'podcast', icon: '🎙️', title: 'Podcast', desc: 'Audio-only recording, no video' },
+              ] as const).map(({ type, icon, title, desc }) => (
+                <button
+                  key={type}
+                  onClick={() => handleNew(type)}
+                  style={{
+                    flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
+                    gap: 10, padding: '20px 12px',
+                    background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                    borderRadius: 10, cursor: 'pointer', textAlign: 'center',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
+                >
+                  <span style={{ fontSize: 32 }}>{icon}</span>
+                  <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--text)' }}>{title}</span>
+                  <span style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.4 }}>{desc}</span>
+                </button>
+              ))}
+            </div>
+
+            <button
+              onClick={() => setShowTypePicker(false)}
+              style={{
+                background: 'none', border: 'none', color: 'var(--text-muted)',
+                fontSize: 13, cursor: 'pointer', alignSelf: 'center',
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Delete confirmation modal ─────────────────────────────────────── */}
       {confirmDelete && (

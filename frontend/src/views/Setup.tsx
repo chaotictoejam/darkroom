@@ -106,18 +106,20 @@ export default function Setup({ project, onBack, onProcessing }: Props) {
         </label>
 
         <div style={{ marginBottom: 16 }}>
-          <span style={{ color: 'var(--text-muted)', fontSize: 12, display: 'block', marginBottom: 8 }}>Camera files & speakers</span>
+          <span style={{ color: 'var(--text-muted)', fontSize: 12, display: 'block', marginBottom: 8 }}>
+            {project.project_type === 'podcast' ? 'Audio files & participants' : 'Camera files & speakers'}
+          </span>
           {speakers.map((s, i) => (
             <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
               <input
-                placeholder={`Speaker ${i + 1}`}
+                placeholder={project.project_type === 'podcast' ? `Participant ${i + 1}` : `Speaker ${i + 1}`}
                 value={s.name}
                 onChange={(e) => updateSpeaker(i, { name: e.target.value })}
                 style={{ flex: 1 }}
               />
               <input
                 type="file"
-                accept="video/*,audio/*"
+                accept={project.project_type === 'podcast' ? 'audio/*' : 'video/*,audio/*'}
                 onChange={(e) => updateSpeaker(i, { file: e.target.files?.[0] ?? null })}
                 style={{ flex: 2 }}
               />
@@ -128,7 +130,7 @@ export default function Setup({ project, onBack, onProcessing }: Props) {
           ))}
           {speakers.length < 4 && (
             <button onClick={addSpeaker} style={{ background: 'none', border: '1px dashed var(--border)', color: 'var(--text-muted)', borderRadius: 'var(--radius)', padding: '6px 14px', width: '100%' }}>
-              + Add camera
+              {project.project_type === 'podcast' ? '+ Add participant' : '+ Add camera'}
             </button>
           )}
         </div>

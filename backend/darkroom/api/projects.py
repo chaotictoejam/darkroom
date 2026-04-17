@@ -12,6 +12,7 @@ router = APIRouter()
 
 class CreateProjectBody(BaseModel):
     name: str = "Untitled Project"
+    project_type: str = "video"
 
 
 @router.get("/projects")
@@ -25,6 +26,7 @@ def get_projects():
 @router.post("/projects", status_code=201)
 def create_project(body: CreateProjectBody):
     project = new_project(body.name)
+    project["project_type"] = body.project_type
     save_project(project)
     return project
 

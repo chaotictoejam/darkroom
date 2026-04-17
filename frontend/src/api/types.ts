@@ -85,6 +85,7 @@ export interface Project {
   id: string
   name: string
   status: ProjectStatus
+  project_type: 'video' | 'podcast'
   created_at: string
   speakers: Speaker[]
   transcripts: Record<string, TranscriptSegment[]>

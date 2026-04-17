@@ -37,8 +37,8 @@ export const api = {
 
   listProjects: () => request<ProjectSummary[]>('/api/projects'),
 
-  createProject: (name: string) =>
-    request<Project>('/api/projects', { method: 'POST', body: JSON.stringify({ name }) }),
+  createProject: (name: string, project_type: 'video' | 'podcast' = 'video') =>
+    request<Project>('/api/projects', { method: 'POST', body: JSON.stringify({ name, project_type }) }),
 
   getProject: (id: string) => request<Project>(`/api/projects/${id}`),
 

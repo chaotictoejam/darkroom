@@ -234,30 +234,32 @@ export default function Editor({ project, onChange, onBack }: Props) {
               display: 'flex', flexDirection: 'column',
               background: 'var(--bg-elevated)',
             }}>
-              {/* Layout selector */}
-              <div style={{
-                display: 'flex', gap: 4, padding: '6px 10px', flexShrink: 0,
-                borderBottom: '1px solid var(--border)',
-              }}>
-                {(['multi', 'solo'] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    onClick={() => setPreviewLayout(mode)}
-                    style={{
-                      flex: 1,
-                      background: previewLayout === mode ? 'var(--accent)' : 'var(--bg-card)',
-                      color: previewLayout === mode ? '#fff' : 'var(--text-muted)',
-                      border: `1px solid ${previewLayout === mode ? 'var(--accent)' : 'var(--border)'}`,
-                      borderRadius: 6, padding: '4px 8px', fontSize: 12,
-                      cursor: 'pointer', fontWeight: previewLayout === mode ? 600 : 400,
-                    }}
-                  >
-                    {mode === 'multi' ? 'Multi Speaker' : 'Solo Speaker'}
-                  </button>
-                ))}
-              </div>
+              {/* Layout selector — video only */}
+              {project.project_type !== 'podcast' && (
+                <div style={{
+                  display: 'flex', gap: 4, padding: '6px 10px', flexShrink: 0,
+                  borderBottom: '1px solid var(--border)',
+                }}>
+                  {(['multi', 'solo'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      onClick={() => setPreviewLayout(mode)}
+                      style={{
+                        flex: 1,
+                        background: previewLayout === mode ? 'var(--accent)' : 'var(--bg-card)',
+                        color: previewLayout === mode ? '#fff' : 'var(--text-muted)',
+                        border: `1px solid ${previewLayout === mode ? 'var(--accent)' : 'var(--border)'}`,
+                        borderRadius: 6, padding: '4px 8px', fontSize: 12,
+                        cursor: 'pointer', fontWeight: previewLayout === mode ? 600 : 400,
+                      }}
+                    >
+                      {mode === 'multi' ? 'Multi Speaker' : 'Solo Speaker'}
+                    </button>
+                  ))}
+                </div>
+              )}
 
-              {/* Video player */}
+              {/* Media player */}
               <div style={{ flex: 1, overflow: 'hidden', padding: 8, display: 'flex', flexDirection: 'column', justifyContent: 'flex-start' }}>
                 {videoSrc ? (
                   <VideoPreview
@@ -268,6 +270,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
                     edlSegments={project.edl?.segments ?? []}
                     onTimeUpdate={setCurrentTime}
                     onDurationChange={setDuration}
+                    isAudio={project.project_type === 'podcast'}
                   />
                 ) : (
                   <div style={{
@@ -275,7 +278,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
                     height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center',
                     color: 'var(--text-muted)', fontSize: 13,
                   }}>
-                    No video uploaded
+                    {project.project_type === 'podcast' ? 'No audio uploaded' : 'No video uploaded'}
                   </div>
                 )}
               </div>
@@ -637,7 +640,7 @@ function Timeline({
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             height: '100%', color: 'var(--text-muted)', fontSize: 12,
           }}>
-            Load a video to see the timeline
+            Load a file to see the timeline
           </div>
         )}
       </div>

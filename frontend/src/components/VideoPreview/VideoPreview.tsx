@@ -23,6 +23,8 @@ interface Props {
   wordMutes?: WordMute[]
   /** Called once the video metadata loads, with the total duration in seconds. */
   onDurationChange?: (duration: number) => void
+  /** When true, renders an <audio> element instead of <video> (podcast mode). */
+  isAudio?: boolean
 }
 
 /**
@@ -51,8 +53,8 @@ function buildSkipRanges(wordCuts: WordCut[], edlSegments: EDLSegment[]): WordCu
 }
 
 const VideoPreview = forwardRef<VideoPreviewHandle, Props>(
-  ({ src, wordCuts, edlSegments, wordMutes = [], onTimeUpdate, onDurationChange }, ref) => {
-    const videoRef = useRef<HTMLVideoElement>(null)
+  ({ src, wordCuts, edlSegments, wordMutes = [], onTimeUpdate, onDurationChange, isAudio = false }, ref) => {
+    const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement>(null)
     const skipRangesRef = useRef<WordCut[]>([])
     const muteRangesRef = useRef<WordMute[]>([])
 
@@ -66,37 +68,56 @@ const VideoPreview = forwardRef<VideoPreviewHandle, Props>(
 
     useImperativeHandle(ref, () => ({
       seekTo(time: number) {
-        if (videoRef.current) videoRef.current.currentTime = time
+        if (mediaRef.current) mediaRef.current.currentTime = time
       },
     }))
 
     function handleTimeUpdate() {
-      const video = videoRef.current
-      if (!video) return
-      const t = video.currentTime
+      const media = mediaRef.current
+      if (!media) return
+      const t = media.currentTime
       onTimeUpdate?.(t)
 
       // Skip into any cut region — jump to its end
       for (const cut of skipRangesRef.current) {
         if (t >= cut.start && t < cut.end) {
-          video.currentTime = cut.end
+          media.currentTime = cut.end
           return
         }
       }
 
       // Mute audio in mute ranges
       const shouldMute = muteRangesRef.current.some((m) => t >= m.start && t < m.end)
-      if (video.muted !== shouldMute) video.muted = shouldMute
+      if (media.muted !== shouldMute) media.muted = shouldMute
+    }
+
+    function handleLoadedMetadata() {
+      onDurationChange?.(mediaRef.current?.duration ?? 0)
+    }
+
+    if (isAudio) {
+      return (
+        <div style={{ width: '100%', padding: '16px 0' }}>
+          <audio
+            ref={mediaRef as React.RefObject<HTMLAudioElement>}
+            src={src}
+            controls
+            onTimeUpdate={handleTimeUpdate}
+            onLoadedMetadata={handleLoadedMetadata}
+            style={{ width: '100%' }}
+          />
+        </div>
+      )
     }
 
     return (
       <div style={{ position: 'relative', width: '100%', background: '#000', borderRadius: 8, overflow: 'hidden' }}>
         <video
-          ref={videoRef}
+          ref={mediaRef as React.RefObject<HTMLVideoElement>}
           src={src}
           controls
           onTimeUpdate={handleTimeUpdate}
-          onLoadedMetadata={() => onDurationChange?.(videoRef.current?.duration ?? 0)}
+          onLoadedMetadata={handleLoadedMetadata}
           style={{ width: '100%', display: 'block', maxHeight: '40vh' }}
         />
       </div>

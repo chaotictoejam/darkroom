@@ -19,6 +19,7 @@ def project_path(project_id: str) -> Path:
 
 
 _DEFAULTS = {
+    "project_type": "video",
     "word_cuts": [],
     "word_mutes": [],
     "renders": {},
@@ -74,6 +75,7 @@ def new_project(name: str) -> dict:
         "transcripts": {},
         "merged_transcript": [],
         "edl": None,
+        "project_type": "video",
         "word_cuts": [],
         "word_mutes": [],
         "renders": {},
