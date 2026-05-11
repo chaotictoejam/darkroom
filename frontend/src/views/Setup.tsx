@@ -119,8 +119,15 @@ export default function Setup({ project, onBack, onProcessing }: Props) {
               />
               <input
                 type="file"
-                accept={project.project_type === 'podcast' ? 'audio/*' : 'video/*,audio/*'}
-                onChange={(e) => updateSpeaker(i, { file: e.target.files?.[0] ?? null })}
+                accept={
+                  project.project_type === 'podcast'
+                    ? 'audio/*,.mp3,.m4a,.wav,.aac,.ogg,.flac,.opus'
+                    : 'video/*,audio/*,.mp4,.mov,.mkv,.avi,.webm,.mp3,.m4a,.wav'
+                }
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file !== undefined) updateSpeaker(i, { file })
+                }}
                 style={{ flex: 2 }}
               />
               {speakers.length > 1 && (

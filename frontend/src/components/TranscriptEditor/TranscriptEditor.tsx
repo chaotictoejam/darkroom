@@ -248,7 +248,7 @@ export default function TranscriptEditor({
     }
   }
 
-  function onWordPointerUp(e: React.PointerEvent, idx: number, word: FlatWord) {
+  function onWordPointerUp(_e: React.PointerEvent, idx: number, word: FlatWord) {
     isDragging.current = false
     const start = selRange ? Math.min(selRange.anchor, selRange.focus) : idx
     const end   = selRange ? Math.max(selRange.anchor, selRange.focus) : idx

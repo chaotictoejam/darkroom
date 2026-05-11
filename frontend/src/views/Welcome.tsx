@@ -139,7 +139,8 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
             onClick={(e) => e.stopPropagation()}
             style={{
               background: 'var(--bg-card)', border: '1px solid var(--border)',
-              borderRadius: 12, padding: '32px 28px', width: 420,
+              borderRadius: 12, padding: '32px 28px',
+              width: 'min(420px, calc(100vw - 32px))',
               display: 'flex', flexDirection: 'column', gap: 24,
             }}
           >
@@ -151,13 +152,14 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
             <div style={{ display: 'flex', gap: 12 }}>
               {([
                 { type: 'video',   icon: '🎬', title: 'Video',   desc: 'Interview, talking head, multi-cam footage' },
-                { type: 'podcast', icon: '🎙️', title: 'Podcast', desc: 'Audio-only recording, no video' },
+                { type: 'podcast', icon: '🎙', title: 'Podcast', desc: 'Audio-only recording, no video' },
               ] as const).map(({ type, icon, title, desc }) => (
                 <button
                   key={type}
                   onClick={() => handleNew(type)}
                   style={{
-                    flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
+                    flex: 1, minWidth: 0,
+                    display: 'flex', flexDirection: 'column', alignItems: 'center',
                     gap: 10, padding: '20px 12px',
                     background: 'var(--bg-elevated)', border: '1px solid var(--border)',
                     borderRadius: 10, cursor: 'pointer', textAlign: 'center',
