@@ -1,8 +1,7 @@
 """
-editor.py — Claude API call + EDL generation
+editor.py — Claude EDL generation via Anthropic API or AWS Bedrock
 """
 
-import anthropic
 import json
 import os
 import re
@@ -108,13 +107,45 @@ def generate_skip_edl(merged_transcript: list[dict], speakers: list[dict]) -> di
     return {"segments": segments, "clips": []}
 
 
-def generate_edl(merged_transcript: list[dict], speakers: list[dict], retry: bool = False) -> dict:
-    """Call Claude to produce an EDL from the merged transcript."""
+def _call_anthropic(prompt: str) -> str:
+    import anthropic
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key or api_key == "your_anthropic_api_key_here":
         raise ValueError("ANTHROPIC_API_KEY is not set in .env")
-
     client = anthropic.Anthropic(api_key=api_key)
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=8192,
+        system=_SYSTEM,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return message.content[0].text.strip()
+
+
+def _call_bedrock(prompt: str) -> str:
+    import boto3
+    model_id = os.getenv("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+    region = os.getenv("AWS_REGION", "us-east-1")
+    client = boto3.client("bedrock-runtime", region_name=region)
+    body = json.dumps({
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 8192,
+        "system": _SYSTEM,
+        "messages": [{"role": "user", "content": prompt}],
+    })
+    response = client.invoke_model(
+        modelId=model_id,
+        body=body,
+        contentType="application/json",
+        accept="application/json",
+    )
+    result = json.loads(response["body"].read())
+    return result["content"][0]["text"].strip()
+
+
+def generate_edl(merged_transcript: list[dict], speakers: list[dict], retry: bool = False) -> dict:
+    """Call Claude (via Anthropic API or Bedrock) to produce an EDL from the merged transcript."""
+    provider = os.getenv("AI_PROVIDER", "anthropic").lower()
 
     transcript_text = format_for_claude(merged_transcript)
     duration = merged_transcript[-1]["end"] if merged_transcript else 0.0
@@ -130,14 +161,10 @@ def generate_edl(merged_transcript: list[dict], speakers: list[dict], retry: boo
     if retry:
         prompt += _STRICT_SUFFIX
 
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=8192,
-        system=_SYSTEM,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    raw = message.content[0].text.strip()
+    if provider == "bedrock":
+        raw = _call_bedrock(prompt)
+    else:
+        raw = _call_anthropic(prompt)
 
     # Strip accidental markdown fences
     if raw.startswith("```"):

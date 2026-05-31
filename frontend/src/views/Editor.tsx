@@ -13,7 +13,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, subscribeToProgress } from '../api/client'
-import type { EDLSegment, Project, WordCut, WordMute } from '../api/types'
+import type { EDL, EDLSegment, Project, WordCut, WordMute } from '../api/types'
 import VideoPreview, { type VideoPreviewHandle } from '../components/VideoPreview/VideoPreview'
 import TranscriptEditor from '../components/TranscriptEditor/TranscriptEditor'
 
@@ -79,13 +79,15 @@ interface Props {
   onBack: () => void
 }
 
-type SidePanel = 'shorts' | 'render' | 'manual' | 'advanced'
+type SidePanel = 'edl' | 'shorts' | 'render' | 'manual' | 'advanced'
 type PreviewLayout = 'multi' | 'solo'
 
 export default function Editor({ project, onChange, onBack }: Props) {
   const [analyzing, setAnalyzing] = useState(false)
   const [anthropicConfigured, setAnthropicConfigured] = useState<boolean | null>(null)
-  const [openPanels, setOpenPanels] = useState<Set<SidePanel>>(new Set())
+  const [openPanels, setOpenPanels] = useState<Set<SidePanel>>(
+    () => new Set(project.edl ? (['edl'] as SidePanel[]) : []),
+  )
   const [previewLayout, setPreviewLayout] = useState<PreviewLayout>('multi')
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -259,6 +261,16 @@ export default function Editor({ project, onChange, onBack }: Props) {
           display: 'flex', flexDirection: 'column',
           overflowY: 'auto',
         }}>
+          {hasEdl && (
+            <SidebarSection
+              label={`Edit Decision List · ${project.edl!.segments.length} segments`}
+              open={openPanels.has('edl')}
+              onToggle={() => togglePanel('edl')}
+            >
+              <EdlPanel edl={project.edl!} onSeek={seekTo} />
+            </SidebarSection>
+          )}
+
           <SidebarSection
             label="Shorts Builder"
             open={openPanels.has('shorts')}
@@ -507,6 +519,79 @@ function SidebarSection({
           {children}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── EDL panel ─────────────────────────────────────────────────────────────────
+
+function EdlPanel({ edl, onSeek }: { edl: EDL; onSeek: (t: number) => void }) {
+  const kept = edl.segments.filter((s) => s.keep).length
+  const cut = edl.segments.length - kept
+
+  return (
+    <div>
+      <div style={{
+        padding: '6px 12px 8px',
+        fontSize: 11, color: 'var(--text-muted)',
+        borderBottom: '1px solid var(--border)',
+        display: 'flex', gap: 12,
+      }}>
+        <span style={{ color: '#4c8' }}>● {kept} kept</span>
+        <span style={{ color: '#e55' }}>● {cut} cut</span>
+      </div>
+
+      {edl.segments.map((seg) => (
+        <div
+          key={seg.id}
+          onClick={() => onSeek(seg.start)}
+          style={{
+            padding: '7px 12px 7px 10px',
+            borderLeft: `3px solid ${seg.keep ? 'rgba(60,200,110,0.55)' : 'rgba(210,55,55,0.5)'}`,
+            borderBottom: '1px solid var(--border)',
+            cursor: 'pointer',
+            display: 'flex', flexDirection: 'column', gap: 3,
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-card)')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+        >
+          {/* Time + badges row */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontFamily: 'monospace', fontSize: 10, color: 'var(--text-muted)', flexShrink: 0 }}>
+              {fmt(seg.start)} → {fmt(seg.end)}
+            </span>
+            <span style={{
+              fontSize: 9, fontWeight: 700, letterSpacing: '0.05em',
+              padding: '1px 5px', borderRadius: 3,
+              background: seg.keep ? 'rgba(60,200,110,0.15)' : 'rgba(210,55,55,0.15)',
+              color: seg.keep ? '#4c8' : '#e55',
+            }}>
+              {seg.keep ? 'KEEP' : 'CUT'}
+            </span>
+            {seg.camera && (
+              <span style={{
+                fontSize: 9, fontWeight: 600, letterSpacing: '0.04em',
+                color: 'var(--text-muted)',
+                padding: '1px 5px', borderRadius: 3,
+                background: 'var(--bg-card)',
+                border: '1px solid var(--border)',
+              }}>
+                CAM {seg.camera}
+              </span>
+            )}
+          </div>
+
+          {/* Reason */}
+          {seg.reason && (
+            <div style={{
+              fontSize: 11, color: 'var(--text-muted)',
+              lineHeight: 1.35, fontStyle: 'italic',
+            }}>
+              {seg.reason}
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   )
 }

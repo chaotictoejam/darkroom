@@ -12,7 +12,7 @@ A local-first video and podcast editor. Upload your pre-aligned camera or audio 
 |-------|-----------|
 | Backend | Python · FastAPI |
 | Transcription | OpenAI Whisper (local) |
-| AI editing | Anthropic Claude (`claude-sonnet-4-6`) |
+| AI editing | Anthropic Claude (`claude-sonnet-4-6`) or AWS Bedrock (`claude-sonnet-4-5`) |
 | Rendering | FFmpeg |
 | Frontend | React · TypeScript · Vite |
 | State | JSON files in `projects/` |
@@ -24,7 +24,9 @@ A local-first video and podcast editor. Upload your pre-aligned camera or audio 
 - Python 3.10+
 - Node.js 18+
 - FFmpeg (full build — required for rendering)
-- An Anthropic API key
+- An Anthropic API key  
+  **or**  
+  AWS credentials with access to Bedrock model `us.anthropic.claude-sonnet-4-5-20250929-v1:0`
 
 ---
 
@@ -90,21 +92,36 @@ cd frontend && npm install
 
 ---
 
-### 4 — API key
+### 4 — AI provider
 
 Copy the example env file:
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` and add your key:
-```
+#### Option A — Anthropic API (default)
+
+```env
+AI_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 Get a key at <https://console.anthropic.com> → API Keys → Create Key.
 
-> **Cost:** A typical edit (one Claude call, ~10,000-word transcript) costs well under $0.10.
+#### Option B — AWS Bedrock
+
+Requires AWS credentials available in the environment (via `AWS_PROFILE`, `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, or an IAM role) and the model `us.anthropic.claude-sonnet-4-5-20250929-v1:0` enabled in your Bedrock console.
+
+```env
+AI_PROVIDER=bedrock
+AWS_REGION=us-east-1
+# BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0  # default, override if needed
+```
+
+Also install the `boto3` extra:
+```bash
+pip install -e "backend/[bedrock]"
+```
 
 ---
 
@@ -190,7 +207,7 @@ darkroom/
 │       │   └── media.py     # file serving helpers
 │       ├── services/
 │       │   ├── transcriber.py  # Whisper transcription
-│       │   ├── editor.py       # Claude EDL generation
+│       │   ├── editor.py       # Claude EDL generation (Anthropic API or Bedrock)
 │       │   └── renderer.py     # FFmpeg rendering
 │       └── storage.py       # project JSON persistence
 ├── frontend/
@@ -203,10 +220,17 @@ darkroom/
 │       └── api/
 │           ├── client.ts    # typed API client + WebSocket helper
 │           └── types.ts     # shared TypeScript types
+├── infra/                   # optional CDK deployment (Bedrock Lambda)
+│   ├── app.py               # CDK entry point
+│   ├── darkroom_stack.py    # Lambda + IAM + Function URL
+│   ├── lambda/
+│   │   └── handler.py       # async Lambda → Bedrock
+│   ├── requirements.txt
+│   └── cdk.json
 ├── projects/                # auto-created; stores project JSON + media + outputs
 ├── static/                  # legacy vanilla JS UI (deprecated)
 ├── Makefile
-├── .env                     # ANTHROPIC_API_KEY
+├── .env                     # AI_PROVIDER + keys
 └── .env.example
 ```
 
@@ -294,11 +318,88 @@ projects/
 
 ## Environment variables
 
-| Variable | Description |
-|----------|-------------|
-| `ANTHROPIC_API_KEY` | **Required.** Your Anthropic API key. |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_PROVIDER` | `anthropic` | `anthropic` to use the Anthropic API; `bedrock` to use AWS Bedrock |
+| `ANTHROPIC_API_KEY` | — | **Required when `AI_PROVIDER=anthropic`.** Your Anthropic API key. |
+| `AWS_REGION` | `us-east-1` | AWS region for Bedrock calls (used when `AI_PROVIDER=bedrock`) |
+| `BEDROCK_MODEL_ID` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | Bedrock model ID override |
 
 Whisper model and language are set per-project in the upload UI, not in `.env`.
+
+---
+
+## Optional: CDK deployment (Bedrock Lambda)
+
+The `infra/` directory contains an [AWS CDK](https://aws.amazon.com/cdk/) Python stack that deploys an async Lambda function wired to Bedrock. This is useful for serverless or multi-user deployments where you want the EDL generation to run in the cloud rather than locally.
+
+```
+infra/
+├── app.py              # CDK entry point
+├── darkroom_stack.py   # Stack: Lambda + IAM + Function URL
+├── lambda/
+│   └── handler.py      # Async Lambda handler → Bedrock
+├── requirements.txt    # aws-cdk-lib, constructs
+└── cdk.json
+```
+
+### Deploy
+
+```bash
+cd infra
+python -m venv .venv && .venv/Scripts/Activate.ps1   # Windows
+# source .venv/bin/activate                           # macOS/Linux
+pip install -r requirements.txt
+
+cdk bootstrap   # first time only, per account/region
+cdk deploy
+```
+
+The stack outputs:
+- **`EdlFunctionArn`** — invoke via `boto3.client("lambda").invoke(...)`
+- **`EdlFunctionUrl`** — HTTPS endpoint (IAM-authenticated)
+
+The Lambda accepts `{ "prompt": "<formatted prompt>", "retry": false }` and returns `{ "edl_raw": "<json string>" }`.
+
+---
+
+## Costs
+
+Whisper transcription and FFmpeg rendering run locally and are always free. The only billable step is **Analyse** — the single Claude call that generates the EDL.
+
+### Model pricing
+
+| Provider | Model | Input | Output |
+|----------|-------|-------|--------|
+| Anthropic API | `claude-sonnet-4-6` | $3.00 / M tokens | $15.00 / M tokens |
+| AWS Bedrock | `claude-sonnet-4-5` (cross-region) | $3.00 / M tokens | $15.00 / M tokens |
+
+> Prices are per million tokens and subject to change. Verify current rates at the Anthropic and AWS Bedrock pricing pages before budgeting.
+
+### Typical per-edit cost
+
+Token consumption scales with episode length. The transcript is the dominant input cost; the EDL JSON segments are the dominant output cost.
+
+| Episode length | Input tokens | Output tokens | Estimated cost |
+|----------------|-------------|---------------|---------------|
+| 15 min (1 speaker) | ~4,000 | ~1,500 | ~$0.03 |
+| 30 min (2 speakers) | ~7,500 | ~3,500 | ~$0.07 |
+| 60 min (2–4 speakers) | ~14,000 | ~6,500 | ~$0.13 |
+
+These are rough estimates. A dense multi-speaker episode produces more EDL segments (more output tokens); a solo monologue produces fewer.
+
+Shorts clips and re-renders do **not** generate additional AI calls — they reuse the existing EDL.
+
+### CDK Lambda costs (infra/)
+
+| Component | Cost |
+|-----------|------|
+| Lambda at idle | **$0.00** |
+| Lambda per invocation (512 MB × up to 5 min) | < $0.001 |
+| Bedrock model call | Same per-token rates as above |
+| CDK bootstrap S3 storage (deployment artifact) | < $0.001 / month |
+
+The Lambda adds effectively zero overhead on top of the Bedrock model cost.
 
 ---
 

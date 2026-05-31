@@ -21,7 +21,10 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
-    "httpx>=0.27",  # async test client for FastAPI
+    "httpx>=0.27",
+]
+bedrock = [
+    "boto3>=1.34.0",
 ]
 
 [project.scripts]
