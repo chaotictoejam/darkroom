@@ -17,6 +17,23 @@ import type { EDL, EDLSegment, Project, WordCut, WordMute } from '../api/types'
 import VideoPreview, { type VideoPreviewHandle } from '../components/VideoPreview/VideoPreview'
 import TranscriptEditor from '../components/TranscriptEditor/TranscriptEditor'
 
+// ── Shared cut utilities ───────────────────────────────────────────────────────
+
+function mergeAndSortCuts(cuts: WordCut[]): WordCut[] {
+  if (cuts.length === 0) return []
+  const sorted = [...cuts].sort((a, b) => a.start - b.start)
+  const merged: WordCut[] = [{ ...sorted[0] }]
+  for (let i = 1; i < sorted.length; i++) {
+    const last = merged[merged.length - 1]
+    if (sorted[i].start <= last.end + 0.05) {
+      last.end = Math.max(last.end, sorted[i].end)
+    } else {
+      merged.push({ ...sorted[i] })
+    }
+  }
+  return merged
+}
+
 // ── Time-mapping utilities ─────────────────────────────────────────────────────
 // The proxy video is the rendered output (all cuts applied). These functions
 // convert between source-file time and output-timeline time so that seeking
@@ -504,6 +521,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
             projectId={project.id}
             speakerFile={primarySpeaker?.file}
             onSeek={seekTo}
+            onCutsChange={handleCutsChange}
           />
         </div>
       </div>
@@ -826,7 +844,10 @@ function RenderContent({ project, onChange }: { project: Project; onChange: (p: 
 
 // ── Timeline / Tracker ─────────────────────────────────────────────────────────
 
-const PAUSE_THRESHOLD = 0.4 // seconds — gaps shorter than this are not marked
+const PAUSE_THRESHOLD = 0.4 // seconds
+const DRAG_PX_THRESHOLD = 4  // pixels — less than this is a click, not a selection drag
+
+type DragMode = 'none' | 'selecting' | 'left-handle' | 'right-handle'
 
 function Timeline({
   duration,
@@ -837,6 +858,7 @@ function Timeline({
   projectId,
   speakerFile,
   onSeek,
+  onCutsChange,
 }: {
   duration: number
   currentTime: number
@@ -846,8 +868,14 @@ function Timeline({
   projectId: string
   speakerFile: string | undefined
   onSeek: (t: number) => void
+  onCutsChange: (cuts: WordCut[]) => void
 }) {
   const [waveform, setWaveform] = useState<number[]>([])
+  const [selection, setSelection] = useState<{ start: number; end: number } | null>(null)
+  const trackRef = useRef<HTMLDivElement>(null)
+  const dragMode = useRef<DragMode>('none')
+  const dragAnchorTime = useRef(0)   // fixed edge during handle drag
+  const dragStartX = useRef(0)       // pointer x at mousedown, for click-vs-drag
 
   // Fetch waveform once the file and duration are known
   useEffect(() => {
@@ -855,31 +883,106 @@ function Timeline({
     api.getWaveform(projectId, speakerFile).then(({ waveform }) => setWaveform(waveform)).catch(() => {})
   }, [projectId, speakerFile, duration])
 
-  // Detect pauses: gaps between words within a segment, and between segments
+  // Detect pauses
   const pauses = useMemo(() => {
     const result: Array<{ time: number; dur: number }> = []
     for (const seg of segments) {
       for (let i = 0; i < seg.words.length - 1; i++) {
         const gap = seg.words[i + 1].start - seg.words[i].end
-        if (gap >= PAUSE_THRESHOLD) {
-          result.push({ time: seg.words[i].end + gap / 2, dur: gap })
-        }
+        if (gap >= PAUSE_THRESHOLD) result.push({ time: seg.words[i].end + gap / 2, dur: gap })
       }
     }
     for (let i = 0; i < segments.length - 1; i++) {
       const gap = segments[i + 1].start - segments[i].end
-      if (gap >= PAUSE_THRESHOLD) {
-        result.push({ time: segments[i].end + gap / 2, dur: gap })
-      }
+      if (gap >= PAUSE_THRESHOLD) result.push({ time: segments[i].end + gap / 2, dur: gap })
     }
     return result
   }, [segments])
 
-  function handleClick(e: React.MouseEvent<HTMLDivElement>) {
-    if (duration === 0) return
-    const rect = e.currentTarget.getBoundingClientRect()
-    onSeek(((e.clientX - rect.left) / rect.width) * duration)
+  // Delete/Escape keyboard handling when there's an active selection
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (!selection) return
+      const tag = (e.target as HTMLElement).tagName
+      if (['INPUT', 'TEXTAREA', 'VIDEO', 'AUDIO'].includes(tag)) return
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault()
+        commitCut()
+      }
+      if (e.key === 'Escape') setSelection(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [selection, wordCuts]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function pxToTime(clientX: number): number {
+    if (!trackRef.current || duration === 0) return 0
+    const rect = trackRef.current.getBoundingClientRect()
+    return Math.max(0, Math.min(duration, ((clientX - rect.left) / rect.width) * duration))
   }
+
+  function commitCut() {
+    if (!selection || selection.end - selection.start < 0.033) {
+      setSelection(null)
+      return
+    }
+    onCutsChange(mergeAndSortCuts([...wordCuts, { start: selection.start, end: selection.end }]))
+    setSelection(null)
+  }
+
+  // ── Pointer handlers on the track ─────────────────────────────────────────
+  function onTrackPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (duration === 0) return
+    // Let handle pointerDown events bubble up without starting a new selection
+    if ((e.target as HTMLElement).dataset.handle) return
+    e.preventDefault()
+    dragStartX.current = e.clientX
+    const t = pxToTime(e.clientX)
+    dragAnchorTime.current = t
+    dragMode.current = 'selecting'
+    setSelection({ start: t, end: t })
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+
+  function onTrackPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (dragMode.current === 'none' || duration === 0) return
+    const t = pxToTime(e.clientX)
+    if (dragMode.current === 'selecting') {
+      const s = Math.min(dragAnchorTime.current, t)
+      const en = Math.max(dragAnchorTime.current, t)
+      setSelection({ start: s, end: en })
+    } else if (dragMode.current === 'left-handle' && selection) {
+      setSelection({ start: Math.min(t, selection.end - 0.033), end: selection.end })
+    } else if (dragMode.current === 'right-handle' && selection) {
+      setSelection({ start: selection.start, end: Math.max(t, selection.start + 0.033) })
+    }
+  }
+
+  function onTrackPointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    if (dragMode.current === 'none') return
+    const wasDrag = Math.abs(e.clientX - dragStartX.current) >= DRAG_PX_THRESHOLD
+    if (dragMode.current === 'selecting' && !wasDrag) {
+      // Pure click — seek and clear
+      onSeek(pxToTime(e.clientX))
+      setSelection(null)
+    }
+    dragMode.current = 'none'
+  }
+
+  // ── Handle pointer events (resize left/right edge of selection) ────────────
+  function onHandlePointerDown(e: React.PointerEvent<HTMLDivElement>, side: 'left' | 'right') {
+    e.stopPropagation()
+    e.preventDefault()
+    if (!selection) return
+    dragMode.current = side === 'left' ? 'left-handle' : 'right-handle'
+    dragAnchorTime.current = side === 'left' ? selection.end : selection.start
+    // Capture on the track so move/up fire there
+    trackRef.current?.setPointerCapture(e.pointerId)
+  }
+
+  const selPct = selection && duration > 0
+    ? { left: (selection.start / duration) * 100, width: ((selection.end - selection.start) / duration) * 100 }
+    : null
 
   return (
     <div style={{
@@ -895,115 +998,199 @@ function Timeline({
           TIMELINE
         </span>
         <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
-          {duration > 0 ? `${fmt(currentTime)} / ${fmt(duration)}` : '--:-- / --:--'}
+          {selection
+            ? `${fmt(selection.start)} → ${fmt(selection.end)}  (${(selection.end - selection.start).toFixed(2)}s selected)`
+            : duration > 0 ? `${fmt(currentTime)} / ${fmt(duration)}` : '--:-- / --:--'
+          }
         </span>
       </div>
 
       {/* Track */}
       <div
-        onClick={handleClick}
+        ref={trackRef}
+        onPointerDown={onTrackPointerDown}
+        onPointerMove={onTrackPointerMove}
+        onPointerUp={onTrackPointerUp}
         style={{
           flex: 1, position: 'relative',
           background: 'var(--bg-card)',
-          borderRadius: 4, overflow: 'hidden',
-          cursor: duration > 0 ? 'pointer' : 'default',
+          borderRadius: 4, overflow: 'visible',  // visible so toolbar can overflow
+          cursor: duration > 0 ? 'crosshair' : 'default',
           border: '1px solid var(--border)',
+          userSelect: 'none',
         }}
       >
-        {duration > 0 ? (
-          <>
-            {/* EDL segment shading */}
-            {edlSegments.map((seg) => (
+        {/* Clip so layers inside don't overflow the track */}
+        <div style={{ position: 'absolute', inset: 0, borderRadius: 4, overflow: 'hidden' }}>
+          {duration > 0 ? (
+            <>
+              {/* EDL segment shading */}
+              {edlSegments.map((seg) => (
+                <div
+                  key={seg.id}
+                  style={{
+                    position: 'absolute', top: 0, bottom: 0,
+                    left: `${(seg.start / duration) * 100}%`,
+                    width: `${((seg.end - seg.start) / duration) * 100}%`,
+                    background: seg.keep ? 'rgba(50,180,100,0.22)' : 'rgba(200,50,50,0.18)',
+                  }}
+                />
+              ))}
+
+              {/* Waveform */}
+              {waveform.length > 0 && (
+                <svg
+                  style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+                  viewBox={`0 0 ${waveform.length} 100`}
+                  preserveAspectRatio="none"
+                >
+                  {waveform.map((amp, i) => {
+                    const h = Math.max(1, amp * 90)
+                    return <rect key={i} x={i} y={(100 - h) / 2} width={0.7} height={h} fill="rgba(255,255,255,0.18)" />
+                  })}
+                </svg>
+              )}
+
+              {/* Pause markers */}
+              {pauses.map((p: { time: number; dur: number }, i: number) => (
+                <div
+                  key={i}
+                  title={`${p.dur.toFixed(1)}s pause`}
+                  style={{
+                    position: 'absolute', top: 3,
+                    left: `${(p.time / duration) * 100}%`,
+                    transform: 'translateX(-50%)',
+                    fontSize: p.dur >= 1 ? 11 : 9, lineHeight: 1,
+                    color: p.dur >= 1 ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.35)',
+                    pointerEvents: 'none', userSelect: 'none', fontFamily: 'monospace',
+                  }}
+                >
+                  {p.dur >= 1 ? '~~~' : '~'}
+                </div>
+              ))}
+
+              {/* Committed word cuts */}
+              {wordCuts.map((cut, i) => (
+                <div
+                  key={i}
+                  style={{
+                    position: 'absolute', top: '20%', bottom: '20%',
+                    left: `${(cut.start / duration) * 100}%`,
+                    width: `${Math.max(0.25, ((cut.end - cut.start) / duration) * 100)}%`,
+                    background: 'rgba(229,51,51,0.75)', borderRadius: 1,
+                  }}
+                />
+              ))}
+
+              {/* Playhead */}
               <div
-                key={seg.id}
                 style={{
                   position: 'absolute', top: 0, bottom: 0,
-                  left: `${(seg.start / duration) * 100}%`,
-                  width: `${((seg.end - seg.start) / duration) * 100}%`,
-                  background: seg.keep
-                    ? 'rgba(50, 180, 100, 0.22)'
-                    : 'rgba(200, 50, 50, 0.18)',
-                }}
-              />
-            ))}
-
-            {/* Waveform — SVG bars centered vertically, rendered over EDL shading */}
-            {waveform.length > 0 && (
-              <svg
-                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
-                viewBox={`0 0 ${waveform.length} 100`}
-                preserveAspectRatio="none"
-              >
-                {waveform.map((amp, i) => {
-                  const h = Math.max(1, amp * 90)
-                  return (
-                    <rect
-                      key={i}
-                      x={i}
-                      y={(100 - h) / 2}
-                      width={0.7}
-                      height={h}
-                      fill="rgba(255,255,255,0.18)"
-                    />
-                  )
-                })}
-              </svg>
-            )}
-
-            {/* Pause markers — tilde above the waveform at gap positions */}
-            {pauses.map((p: { time: number; dur: number }, i: number) => (
-              <div
-                key={i}
-                title={`${p.dur.toFixed(1)}s pause`}
-                style={{
-                  position: 'absolute',
-                  top: 3,
-                  left: `${(p.time / duration) * 100}%`,
+                  left: `${(currentTime / duration) * 100}%`,
+                  width: 2, background: 'var(--accent)',
                   transform: 'translateX(-50%)',
-                  fontSize: p.dur >= 1 ? 11 : 9,
-                  lineHeight: 1,
-                  color: p.dur >= 1 ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.35)',
                   pointerEvents: 'none',
-                  userSelect: 'none',
-                  fontFamily: 'monospace',
-                }}
-              >
-                {p.dur >= 1 ? '~~~' : '~'}
-              </div>
-            ))}
-
-            {/* Word cuts */}
-            {wordCuts.map((cut, i) => (
-              <div
-                key={i}
-                style={{
-                  position: 'absolute', top: '20%', bottom: '20%',
-                  left: `${(cut.start / duration) * 100}%`,
-                  width: `${Math.max(0.25, ((cut.end - cut.start) / duration) * 100)}%`,
-                  background: 'rgba(229, 51, 51, 0.75)',
-                  borderRadius: 1,
+                  boxShadow: '0 0 4px var(--accent)',
                 }}
               />
-            ))}
 
-            {/* Playhead */}
-            <div
+              {/* Active selection overlay */}
+              {selPct && selPct.width > 0 && (
+                <>
+                  {/* Blue fill */}
+                  <div
+                    style={{
+                      position: 'absolute', top: 0, bottom: 0,
+                      left: `${selPct.left}%`,
+                      width: `${selPct.width}%`,
+                      background: 'rgba(59,130,246,0.28)',
+                      pointerEvents: 'none',
+                    }}
+                  />
+                  {/* Left handle */}
+                  <div
+                    data-handle="left"
+                    onPointerDown={(e) => onHandlePointerDown(e, 'left')}
+                    style={{
+                      position: 'absolute', top: 0, bottom: 0, width: 6,
+                      left: `${selPct.left}%`,
+                      transform: 'translateX(-50%)',
+                      background: 'rgba(59,130,246,0.9)',
+                      cursor: 'ew-resize', zIndex: 2,
+                      borderRadius: '2px 0 0 2px',
+                    }}
+                  />
+                  {/* Right handle */}
+                  <div
+                    data-handle="right"
+                    onPointerDown={(e) => onHandlePointerDown(e, 'right')}
+                    style={{
+                      position: 'absolute', top: 0, bottom: 0, width: 6,
+                      left: `${selPct.left + selPct.width}%`,
+                      transform: 'translateX(-50%)',
+                      background: 'rgba(59,130,246,0.9)',
+                      cursor: 'ew-resize', zIndex: 2,
+                      borderRadius: '0 2px 2px 0',
+                    }}
+                  />
+                </>
+              )}
+            </>
+          ) : (
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              height: '100%', color: 'var(--text-muted)', fontSize: 12,
+            }}>
+              Load a file to see the timeline
+            </div>
+          )}
+        </div>
+
+        {/* Selection toolbar — floats above the track, outside the clip box */}
+        {selPct && selPct.width > 0.3 && selection && (
+          <div
+            style={{
+              position: 'absolute',
+              bottom: 'calc(100% + 6px)',
+              left: `${selPct.left + selPct.width / 2}%`,
+              transform: 'translateX(-50%)',
+              zIndex: 100,
+              display: 'flex', alignItems: 'center', gap: 1,
+              background: '#1c1c1c',
+              border: '1px solid #3a3a3a',
+              borderRadius: 7,
+              padding: '3px 4px',
+              boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+              fontSize: 12, whiteSpace: 'nowrap',
+            }}
+          >
+            <button
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={commitCut}
               style={{
-                position: 'absolute', top: 0, bottom: 0,
-                left: `${(currentTime / duration) * 100}%`,
-                width: 2, background: 'var(--accent)',
-                transform: 'translateX(-50%)',
-                pointerEvents: 'none',
-                boxShadow: '0 0 4px var(--accent)',
+                background: 'none', border: 'none',
+                color: '#e05555', padding: '3px 10px',
+                borderRadius: 5, fontSize: 12, fontWeight: 600, cursor: 'pointer',
               }}
-            />
-          </>
-        ) : (
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            height: '100%', color: 'var(--text-muted)', fontSize: 12,
-          }}>
-            Load a file to see the timeline
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#2e2e2e' }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'none' }}
+            >
+              ✂ Cut {(selection.end - selection.start).toFixed(1)}s
+            </button>
+            <div style={{ width: 1, background: '#3a3a3a', alignSelf: 'stretch', margin: '3px 2px' }} />
+            <button
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => setSelection(null)}
+              style={{
+                background: 'none', border: 'none',
+                color: '#888', padding: '3px 8px',
+                borderRadius: 5, fontSize: 11, cursor: 'pointer',
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#2e2e2e' }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'none' }}
+            >
+              ✕
+            </button>
           </div>
         )}
       </div>
