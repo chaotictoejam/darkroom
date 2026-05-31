@@ -116,6 +116,11 @@ export const api = {
 
   generatePreview: (id: string) =>
     request<{ message: string }>(`/api/projects/${id}/preview`, { method: 'POST' }),
+
+  getWaveform: (id: string, speaker: string, buckets = 400) =>
+    request<{ waveform: number[] }>(
+      `/api/projects/${id}/waveform?speaker=${encodeURIComponent(speaker)}&buckets=${buckets}`,
+    ),
 }
 
 // ── WebSocket progress ────────────────────────────────────────────────────────

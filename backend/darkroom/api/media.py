@@ -1,7 +1,10 @@
 """
 File upload and transcript editing routes.
 """
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+import subprocess
+
+import numpy as np
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from typing import Optional
 
@@ -121,3 +124,53 @@ def update_transcript_segment(project_id: str, seg_index: int, body: TranscriptP
     proj["merged_transcript"] = mt
     save_project(proj)
     return {"ok": True, "segment": seg}
+
+
+@router.get("/projects/{project_id}/waveform")
+def get_waveform(
+    project_id: str,
+    speaker: str = Query(..., description="Filename of the speaker's media file"),
+    buckets: int = Query(400, ge=50, le=2000),
+):
+    """Extract audio amplitude as a normalized waveform for timeline display."""
+    proj = get_project(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    file_path = PROJECTS_DIR / project_id / speaker
+    if not file_path.exists():
+        raise HTTPException(404, "File not found")
+
+    # Resample to 200 Hz mono — fast even for hour-long files (~2.9 MB for 60 min)
+    cmd = [
+        "ffmpeg", "-i", str(file_path),
+        "-ac", "1",
+        "-af", "aresample=200",
+        "-map", "a",
+        "-c:a", "pcm_f32le",
+        "-f", "f32le",
+        "pipe:1",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(500, "Waveform extraction timed out")
+    except FileNotFoundError:
+        raise HTTPException(500, "ffmpeg not found")
+
+    if not result.stdout:
+        return {"waveform": [0.0] * buckets}
+
+    samples = np.frombuffer(result.stdout, dtype=np.float32)
+    if len(samples) == 0:
+        return {"waveform": [0.0] * buckets}
+
+    actual_buckets = min(buckets, len(samples))
+    bucket_size = max(1, len(samples) // actual_buckets)
+    trimmed = samples[: actual_buckets * bucket_size]
+    rms = np.sqrt(np.mean(trimmed.reshape(actual_buckets, bucket_size) ** 2, axis=1))
+
+    max_val = float(rms.max())
+    normalized = (rms / max_val).tolist() if max_val > 0 else rms.tolist()
+
+    return {"waveform": normalized}

@@ -11,7 +11,7 @@
  *   │ [Manual] │ Timeline / Tracker                      │
  *   └──────────┴─────────────────────────────────────────┘
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, subscribeToProgress } from '../api/client'
 import type { EDL, EDLSegment, Project, WordCut, WordMute } from '../api/types'
 import VideoPreview, { type VideoPreviewHandle } from '../components/VideoPreview/VideoPreview'
@@ -500,6 +500,9 @@ export default function Editor({ project, onChange, onBack }: Props) {
             currentTime={currentTime}
             wordCuts={wordCuts}
             edlSegments={project.edl?.segments ?? []}
+            segments={project.merged_transcript}
+            projectId={project.id}
+            speakerFile={primarySpeaker?.file}
             onSeek={seekTo}
           />
         </div>
@@ -823,19 +826,55 @@ function RenderContent({ project, onChange }: { project: Project; onChange: (p: 
 
 // ── Timeline / Tracker ─────────────────────────────────────────────────────────
 
+const PAUSE_THRESHOLD = 0.4 // seconds — gaps shorter than this are not marked
+
 function Timeline({
   duration,
   currentTime,
   wordCuts,
   edlSegments,
+  segments,
+  projectId,
+  speakerFile,
   onSeek,
 }: {
   duration: number
   currentTime: number
   wordCuts: WordCut[]
   edlSegments: EDLSegment[]
+  segments: import('../api/types').TranscriptSegment[]
+  projectId: string
+  speakerFile: string | undefined
   onSeek: (t: number) => void
 }) {
+  const [waveform, setWaveform] = useState<number[]>([])
+
+  // Fetch waveform once the file and duration are known
+  useEffect(() => {
+    if (!speakerFile || duration === 0) return
+    api.getWaveform(projectId, speakerFile).then(({ waveform }) => setWaveform(waveform)).catch(() => {})
+  }, [projectId, speakerFile, duration])
+
+  // Detect pauses: gaps between words within a segment, and between segments
+  const pauses = useMemo(() => {
+    const result: Array<{ time: number; dur: number }> = []
+    for (const seg of segments) {
+      for (let i = 0; i < seg.words.length - 1; i++) {
+        const gap = seg.words[i + 1].start - seg.words[i].end
+        if (gap >= PAUSE_THRESHOLD) {
+          result.push({ time: seg.words[i].end + gap / 2, dur: gap })
+        }
+      }
+    }
+    for (let i = 0; i < segments.length - 1; i++) {
+      const gap = segments[i + 1].start - segments[i].end
+      if (gap >= PAUSE_THRESHOLD) {
+        result.push({ time: segments[i].end + gap / 2, dur: gap })
+      }
+    }
+    return result
+  }, [segments])
+
   function handleClick(e: React.MouseEvent<HTMLDivElement>) {
     if (duration === 0) return
     const rect = e.currentTarget.getBoundingClientRect()
@@ -844,7 +883,7 @@ function Timeline({
 
   return (
     <div style={{
-      height: 84, flexShrink: 0,
+      height: 100, flexShrink: 0,
       background: 'var(--bg-elevated)',
       borderTop: '1px solid var(--border)',
       padding: '8px 16px',
@@ -854,9 +893,6 @@ function Timeline({
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-muted)', letterSpacing: '0.04em' }}>
           TIMELINE
-        </span>
-        <span style={{ fontSize: 11, color: 'var(--border)', fontStyle: 'italic' }}>
-          Smart segments — coming soon
         </span>
         <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
           {duration > 0 ? `${fmt(currentTime)} / ${fmt(duration)}` : '--:-- / --:--'}
@@ -889,6 +925,51 @@ function Timeline({
                     : 'rgba(200, 50, 50, 0.18)',
                 }}
               />
+            ))}
+
+            {/* Waveform — SVG bars centered vertically, rendered over EDL shading */}
+            {waveform.length > 0 && (
+              <svg
+                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+                viewBox={`0 0 ${waveform.length} 100`}
+                preserveAspectRatio="none"
+              >
+                {waveform.map((amp, i) => {
+                  const h = Math.max(1, amp * 90)
+                  return (
+                    <rect
+                      key={i}
+                      x={i}
+                      y={(100 - h) / 2}
+                      width={0.7}
+                      height={h}
+                      fill="rgba(255,255,255,0.18)"
+                    />
+                  )
+                })}
+              </svg>
+            )}
+
+            {/* Pause markers — tilde above the waveform at gap positions */}
+            {pauses.map((p: { time: number; dur: number }, i: number) => (
+              <div
+                key={i}
+                title={`${p.dur.toFixed(1)}s pause`}
+                style={{
+                  position: 'absolute',
+                  top: 3,
+                  left: `${(p.time / duration) * 100}%`,
+                  transform: 'translateX(-50%)',
+                  fontSize: p.dur >= 1 ? 11 : 9,
+                  lineHeight: 1,
+                  color: p.dur >= 1 ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.35)',
+                  pointerEvents: 'none',
+                  userSelect: 'none',
+                  fontFamily: 'monospace',
+                }}
+              >
+                {p.dur >= 1 ? '~~~' : '~'}
+              </div>
             ))}
 
             {/* Word cuts */}
