@@ -282,6 +282,29 @@ export default function TranscriptEditor({
     }
   }
 
+  // ── Segment label click ────────────────────────────────────────────────────
+  // Click  → select all words in the segment
+  // Shift+click → extend current selection to encompass the whole segment
+  function onSegmentLabelClick(e: React.MouseEvent, segIndex: number) {
+    const segWords = words.current.filter((w) => w.segIndex === segIndex)
+    if (segWords.length === 0) return
+    e.preventDefault()
+    setToolbar(null)
+    const firstIdx = segWords[0].globalIndex
+    const lastIdx  = segWords[segWords.length - 1].globalIndex
+
+    if (e.shiftKey && selRange !== null) {
+      // Extend from current anchor: if this segment is ahead, go to its last word;
+      // if behind, go to its first word — so the full segment is always included.
+      const focus = firstIdx > selRange.anchor ? lastIdx : firstIdx
+      setSelRange({ anchor: selRange.anchor, focus })
+      openToolbar(Math.min(selRange.anchor, focus), Math.max(selRange.anchor, focus))
+    } else {
+      setSelRange({ anchor: firstIdx, focus: lastIdx })
+      openToolbar(firstIdx, lastIdx)
+    }
+  }
+
   function onWordPointerUp(_e: React.PointerEvent, idx: number, word: FlatWord) {
     isDragging.current = false
     const start = selRange ? Math.min(selRange.anchor, selRange.focus) : idx
@@ -444,9 +467,28 @@ export default function TranscriptEditor({
         tabIndex={0}
         style={{ outline: 'none', userSelect: 'none', WebkitUserSelect: 'none', lineHeight: 1.9, fontSize: 15 }}
       >
-        {grouped.map((group) => (
+        {grouped.map((group) => {
+          const segWords = words.current.filter((w) => w.segIndex === group.segIndex)
+          const segSelected = segWords.length > 0
+            && isSelected(segWords[0].globalIndex)
+            && isSelected(segWords[segWords.length - 1].globalIndex)
+          return (
           <div key={group.segIndex} style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent)', marginBottom: 4, letterSpacing: 0.5 }}>
+            <div
+              onClick={(e) => onSegmentLabelClick(e, group.segIndex)}
+              title="Click to select segment · Shift+click to extend selection"
+              style={{
+                fontSize: 11, fontWeight: 600, letterSpacing: 0.5,
+                marginBottom: 4,
+                color: segSelected ? '#fff' : 'var(--accent)',
+                background: segSelected ? 'rgba(59,130,246,0.35)' : 'transparent',
+                borderRadius: 3, padding: '1px 4px', marginLeft: -4,
+                cursor: 'pointer', display: 'inline-block',
+                userSelect: 'none',
+              }}
+              onMouseEnter={(e) => { if (!segSelected) (e.currentTarget as HTMLElement).style.background = 'rgba(59,130,246,0.15)' }}
+              onMouseLeave={(e) => { if (!segSelected) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+            >
               {group.label}
             </div>
             <div>
@@ -510,7 +552,8 @@ export default function TranscriptEditor({
               })}
             </div>
           </div>
-        ))}
+          )
+        })}
 
         {wordCuts.length > 0 && (
           <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-muted)' }}>
