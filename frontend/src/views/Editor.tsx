@@ -119,14 +119,17 @@ export default function Editor({ project, onChange, onBack }: Props) {
   const previewUnsubRef = useRef<(() => void) | null>(null)
   const previewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const keptRangesRef = useRef<TimeRange[]>([])
+  const [outputDuration, setOutputDuration] = useState(0)
 
-  // Recompute kept ranges whenever the cut inputs change
+  // Recompute kept ranges and output duration whenever cuts/EDL/source duration change
   useEffect(() => {
-    keptRangesRef.current = buildKeptRanges(
+    const ranges = buildKeptRanges(
       project.edl?.segments ?? [],
       project.word_cuts ?? [],
       duration,
     )
+    keptRangesRef.current = ranges
+    setOutputDuration(ranges.reduce((sum, r) => sum + r.end - r.start, 0))
   }, [project.edl, project.word_cuts, duration])
 
   useEffect(() => {
@@ -515,6 +518,8 @@ export default function Editor({ project, onChange, onBack }: Props) {
           <Timeline
             duration={duration}
             currentTime={currentTime}
+            outputDuration={outputDuration}
+            outputCurrentTime={sourceToOutputTime(currentTime, keptRangesRef.current)}
             wordCuts={wordCuts}
             edlSegments={project.edl?.segments ?? []}
             segments={project.merged_transcript}
@@ -852,6 +857,8 @@ type DragMode = 'none' | 'selecting' | 'left-handle' | 'right-handle'
 function Timeline({
   duration,
   currentTime,
+  outputDuration,
+  outputCurrentTime,
   wordCuts,
   edlSegments,
   segments,
@@ -862,6 +869,8 @@ function Timeline({
 }: {
   duration: number
   currentTime: number
+  outputDuration: number
+  outputCurrentTime: number
   wordCuts: WordCut[]
   edlSegments: EDLSegment[]
   segments: import('../api/types').TranscriptSegment[]
@@ -1000,7 +1009,9 @@ function Timeline({
         <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
           {selection
             ? `${fmt(selection.start)} → ${fmt(selection.end)}  (${(selection.end - selection.start).toFixed(2)}s selected)`
-            : duration > 0 ? `${fmt(currentTime)} / ${fmt(duration)}` : '--:-- / --:--'
+            : outputDuration > 0
+              ? `${fmt(outputCurrentTime)} / ${fmt(outputDuration)}${outputDuration < duration ? ` · ${fmt(duration - outputDuration)} cut` : ''}`
+              : '--:-- / --:--'
           }
         </span>
       </div>
