@@ -9,6 +9,8 @@ import type { EDLSegment, WordCut, WordMute } from '../../api/types'
 export interface VideoPreviewHandle {
   /** Seek the video to a specific time (seconds). */
   seekTo: (time: number) => void
+  /** Toggle play/pause. */
+  togglePlayPause: () => void
 }
 
 interface Props {
@@ -69,6 +71,11 @@ const VideoPreview = forwardRef<VideoPreviewHandle, Props>(
     useImperativeHandle(ref, () => ({
       seekTo(time: number) {
         if (mediaRef.current) mediaRef.current.currentTime = time
+      },
+      togglePlayPause() {
+        const media = mediaRef.current
+        if (!media) return
+        media.paused ? media.play() : media.pause()
       },
     }))
 

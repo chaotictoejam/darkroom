@@ -91,6 +91,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
   const [previewLayout, setPreviewLayout] = useState<PreviewLayout>('multi')
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
+  const [cleanView, setCleanView] = useState(false)
   const videoRef = useRef<VideoPreviewHandle>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -163,6 +164,15 @@ export default function Editor({ project, onChange, onBack }: Props) {
       proxyRef.current.currentTime = sourceToOutputTime(sourceTime, keptRangesRef.current)
     } else {
       videoRef.current?.seekTo(sourceTime)
+    }
+  }
+
+  /** Toggle play/pause on whichever player is active. */
+  function togglePlayPause() {
+    if (proxyRef.current) {
+      proxyRef.current.paused ? proxyRef.current.play() : proxyRef.current.pause()
+    } else {
+      videoRef.current?.togglePlayPause()
     }
   }
 
@@ -333,9 +343,26 @@ export default function Editor({ project, onChange, onBack }: Props) {
                 borderBottom: '1px solid var(--border)',
                 background: 'var(--bg-elevated)',
                 fontSize: 12, color: 'var(--text-muted)',
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               }}>
-                {project.merged_transcript.length} segments
-                {wordCuts.length > 0 && ` · ${wordCuts.length} cut${wordCuts.length !== 1 ? 's' : ''}`}
+                <span>
+                  {project.merged_transcript.length} segments
+                  {wordCuts.length > 0 && ` · ${wordCuts.length} cut${wordCuts.length !== 1 ? 's' : ''}`}
+                </span>
+                <button
+                  onClick={() => setCleanView((v) => !v)}
+                  title={cleanView ? 'Show all words including cuts' : 'Hide cut words (clean view)'}
+                  style={{
+                    background: cleanView ? 'var(--accent)' : 'var(--bg-card)',
+                    color: cleanView ? '#fff' : 'var(--text-muted)',
+                    border: `1px solid ${cleanView ? 'var(--accent)' : 'var(--border)'}`,
+                    borderRadius: 5, padding: '2px 8px',
+                    fontSize: 11, fontWeight: cleanView ? 600 : 400,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {cleanView ? 'Clean' : 'Raw'}
+                </button>
               </div>
               <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px' }}>
                 {project.merged_transcript.length > 0 ? (
@@ -345,9 +372,11 @@ export default function Editor({ project, onChange, onBack }: Props) {
                     wordMutes={wordMutes}
                     edlSegments={project.edl?.segments ?? []}
                     currentTime={currentTime}
+                    cleanView={cleanView}
                     onSeek={seekTo}
                     onCutsChange={handleCutsChange}
                     onMutesChange={handleMutesChange}
+                    onTogglePlay={togglePlayPause}
                   />
                 ) : (
                   <p style={{ color: 'var(--text-muted)' }}>No transcript yet.</p>
