@@ -138,11 +138,11 @@ def start_transcription(project_id: str):
             language = p.get("transcribe_language") or None
             total = len(p["speakers"])
 
-            def _progress(i, _total, name):
-                pct = int(10 + (i / _total) * 55)
+            def _progress(overall_frac: float, name: str, i: int, total: int) -> None:
+                pct = int(10 + overall_frac * 55)  # 10 % → 65 %
                 _update_progress(
                     project_id,
-                    progress={"step": "transcribing", "percent": pct, "message": f"Transcribing {name} ({i + 1}/{_total})…"},
+                    progress={"step": "transcribing", "percent": pct, "message": f"Transcribing {name} ({i + 1}/{total})…"},
                 )
 
             transcripts = transcribe_all(p["speakers"], model_name, _progress, language=language)

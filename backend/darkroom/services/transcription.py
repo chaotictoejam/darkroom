@@ -7,11 +7,21 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 import wave
 from collections import Counter
 
 import numpy as np
 import whisper
+
+# Conservative CPU-based estimates of audio-seconds processed per wall-clock second.
+# GPU will be faster; the bar will just finish early rather than overshoot.
+_MODEL_SPEED: dict[str, float] = {
+    "base": 12.0, "small": 8.0, "medium": 5.0,
+    "large": 2.5, "large-v2": 2.5, "large-v3": 2.5,
+    "turbo": 12.0,
+}
 
 
 def _extract_audio(video_path: str) -> str:
@@ -44,12 +54,40 @@ def _wav_to_numpy(wav_path: str) -> np.ndarray:
     return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
 
 
-def transcribe_file(file_path: str, speaker_id: str, speaker_name: str, model_name: str = "base", language: str | None = None) -> list[dict]:
-    """Transcribe a single video/audio file using Whisper. Returns list of segment dicts."""
+def transcribe_file(
+    file_path: str,
+    speaker_id: str,
+    speaker_name: str,
+    model_name: str = "base",
+    language: str | None = None,
+    progress_callback=None,
+) -> list[dict]:
+    """Transcribe a single video/audio file using Whisper. Returns list of segment dicts.
+
+    progress_callback(frac: float) is called every ~1.5 s with an estimated
+    0.0–0.95 fraction of this speaker's audio processed. The caller maps this
+    onto the overall job percentage.
+    """
     audio_path = _extract_audio(file_path)
+    stop_event = threading.Event()
     try:
         audio_np = _wav_to_numpy(audio_path)
+        audio_duration = len(audio_np) / 16000.0
         model = whisper.load_model(model_name)
+
+        if progress_callback and audio_duration > 0:
+            speed = _MODEL_SPEED.get(model_name, 5.0)
+            estimated_wall = audio_duration / speed
+            start = time.monotonic()
+
+            def _tick() -> None:
+                # stop_event.wait(timeout) returns True when set, False on timeout
+                while not stop_event.wait(1.5):
+                    elapsed = time.monotonic() - start
+                    progress_callback(min(0.95, elapsed / max(estimated_wall, 1.0)))
+
+            threading.Thread(target=_tick, daemon=True).start()
+
         result = model.transcribe(
             audio_np,
             word_timestamps=True,
@@ -65,6 +103,7 @@ def transcribe_file(file_path: str, speaker_id: str, speaker_name: str, model_na
             compression_ratio_threshold=2.4,
         )
     finally:
+        stop_event.set()
         try:
             os.unlink(audio_path)
         except OSError:
@@ -94,13 +133,25 @@ def transcribe_file(file_path: str, speaker_id: str, speaker_name: str, model_na
 
 
 def transcribe_all(speakers: list[dict], model_name: str, progress_callback=None, language: str | None = None) -> dict[str, list]:
-    """Transcribe all speaker files. Returns {speaker_id: [segments]}."""
+    """Transcribe all speaker files. Returns {speaker_id: [segments]}.
+
+    progress_callback(overall_frac: float, name: str, index: int, total: int)
+    is called at the start of each speaker and then every ~1.5 s during
+    transcription, with overall_frac in [0, 1).
+    """
     transcripts = {}
     total = len(speakers)
 
     for i, speaker in enumerate(speakers):
+        # Fire immediately so the UI shows the speaker name before the first tick
         if progress_callback:
-            progress_callback(i, total, speaker["name"])
+            progress_callback(i / total, speaker["name"], i, total)
+
+        # Capture loop variables in defaults to avoid closure-over-loop-variable bugs
+        def _inner(frac: float, *, _i: int = i, _name: str = speaker["name"]) -> None:
+            if progress_callback:
+                overall = (_i + frac) / total
+                progress_callback(overall, _name, _i, total)
 
         segments = transcribe_file(
             speaker["file_path"],
@@ -108,6 +159,7 @@ def transcribe_all(speakers: list[dict], model_name: str, progress_callback=None
             speaker["name"],
             model_name,
             language=language,
+            progress_callback=_inner,
         )
         transcripts[speaker["id"]] = segments
 
