@@ -75,6 +75,7 @@ export default function Setup({ project, onBack, onProcessing }: Props) {
         form.append('names', s.name || `Speaker ${speakers.indexOf(s) + 1}`)
       }
       form.append('model', model)
+      form.append('name', name.trim() || project.name)
       if (language) form.append('language', language)
 
       // Upload files (Content-Type is set automatically by FormData)

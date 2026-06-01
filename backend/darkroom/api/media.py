@@ -22,6 +22,7 @@ async def upload_files(
     names: list[str] = Form(...),
     language: Optional[str] = Form(default=None),
     model: str = Form(default="medium"),
+    name: Optional[str] = Form(default=None),
 ):
     proj = get_project(project_id)
     if not proj:
@@ -31,7 +32,7 @@ async def upload_files(
     project_dir.mkdir(exist_ok=True)
 
     speakers = []
-    for i, (f, name) in enumerate(zip(files, names)):
+    for i, (f, speaker_name) in enumerate(zip(files, names)):
         cam_id = _CAM_IDS[i]
         safe_name = "".join(c for c in (f.filename or "") if c.isalnum() or c in "._- ").strip()
         filename = f"cam_{cam_id}_{safe_name}"
@@ -40,12 +41,14 @@ async def upload_files(
         filepath.write_bytes(content)
         speakers.append({
             "id": cam_id,
-            "name": name.strip() or f"Speaker {cam_id}",
+            "name": speaker_name.strip() or f"Speaker {cam_id}",
             "file": filename,
             "file_path": str(filepath),
         })
 
     proj["speakers"] = speakers
+    if name and name.strip():
+        proj["name"] = name.strip()
     proj["transcribe_language"] = language or None
     proj["transcribe_model"] = model
     proj["status"] = "uploaded"
