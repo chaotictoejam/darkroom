@@ -1,28 +1,44 @@
-# Secrets
+# ── Secrets ───────────────────────────────────────────────────────────────────
 .env
 
-# Python
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
 .Python
 *.egg-info/
-dist/
+*.dist-info/
 build/
 .eggs/
+# Keep frontend/dist (Vite build output) but ignore Python build artifacts
+backend/dist/
+backend/build/
 venv/
 .venv/
 env/
+# Whisper model cache (can be several GB)
+backend/.whisper/
+.whisper/
 
-# Projects (user data)
+# ── Frontend ──────────────────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+# Local Vite env overrides
+frontend/.env.local
+frontend/.env.*.local
+
+# ── User data ─────────────────────────────────────────────────────────────────
+# Project files (video uploads + renders) — can be very large
 projects/
 
-# OS
+# ── OS ────────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# IDE
+# ── IDE ───────────────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp

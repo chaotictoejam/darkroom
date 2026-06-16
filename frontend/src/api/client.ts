@@ -1,0 +1,160 @@
+/**
+ * Typed API client for the Darkroom backend.
+ * All requests go to the same origin — Vite proxies /api/* in dev,
+ * FastAPI serves everything from the same port in production.
+ */
+import type { EDL, Project, ProjectSummary, RenderShortParams } from './types'
+
+class ApiError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(path, {
+    headers: {
+      'Content-Type': 'application/json',
+      ...options?.headers,
+    },
+    ...options,
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new ApiError(res.status, body.detail ?? body.error ?? `HTTP ${res.status}`)
+  }
+  return res.json() as Promise<T>
+}
+
+// ── Projects ──────────────────────────────────────────────────────────────────
+
+export const api = {
+  status: () => request<{ ffmpeg_available: boolean; anthropic_configured: boolean }>('/api/status'),
+
+  listProjects: () => request<ProjectSummary[]>('/api/projects'),
+
+  createProject: (name: string, project_type: 'video' | 'podcast' = 'video') =>
+    request<Project>('/api/projects', { method: 'POST', body: JSON.stringify({ name, project_type }) }),
+
+  getProject: (id: string) => request<Project>(`/api/projects/${id}`),
+
+  deleteProject: (id: string) =>
+    request<{ ok: boolean }>(`/api/projects/${id}`, { method: 'DELETE' }),
+
+  resetEdl: (id: string) =>
+    request<Project>(`/api/projects/${id}/reset-edl`, { method: 'POST' }),
+
+  resetProject: (id: string) =>
+    request<Project>(`/api/projects/${id}/reset`, { method: 'POST' }),
+
+  // ── Jobs ────────────────────────────────────────────────────────────────────
+
+  transcribe: (id: string) =>
+    request<{ message: string }>(`/api/projects/${id}/transcribe`, { method: 'POST' }),
+
+  analyze: (id: string) =>
+    request<{ message: string }>(`/api/projects/${id}/analyze`, { method: 'POST' }),
+
+  skipAnalysis: (id: string) =>
+    request<Project>(`/api/projects/${id}/skip-analysis`, { method: 'POST' }),
+
+  importEdl: (id: string, edl: EDL) =>
+    request<Project>(`/api/projects/${id}/import-edl`, {
+      method: 'POST',
+      body: JSON.stringify({ edl }),
+    }),
+
+  getPrompt: (id: string) =>
+    request<{ prompt: string }>(`/api/projects/${id}/prompt`),
+
+  updateEdl: (id: string, edl: EDL) =>
+    request<Project>(`/api/projects/${id}/edl`, {
+      method: 'PUT',
+      body: JSON.stringify(edl),
+    }),
+
+  updateTranscriptSegment: (id: string, segIndex: number, text: string) =>
+    request<{ ok: boolean; segment: unknown }>(`/api/projects/${id}/transcript/${segIndex}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ text }),
+    }),
+
+  saveWordCuts: (id: string, wordCuts: import('./types').WordCut[]) =>
+    request<{ ok: boolean }>(`/api/projects/${id}/word-cuts`, {
+      method: 'PUT',
+      body: JSON.stringify({ word_cuts: wordCuts }),
+    }),
+
+  saveWordMutes: (id: string, wordMutes: import('./types').WordMute[]) =>
+    request<{ ok: boolean }>(`/api/projects/${id}/word-mutes`, {
+      method: 'PUT',
+      body: JSON.stringify({ word_mutes: wordMutes }),
+    }),
+
+  render: (
+    id: string,
+    targets: string[],
+    opts: { camera_layout?: string; cam_order?: string[] } = {},
+  ) =>
+    request<{ message: string }>(`/api/projects/${id}/render`, {
+      method: 'POST',
+      body: JSON.stringify({ targets, ...opts }),
+    }),
+
+  renderShort: (id: string, params: RenderShortParams) =>
+    request<{ message: string }>(`/api/projects/${id}/render-short`, {
+      method: 'POST',
+      body: JSON.stringify(params),
+    }),
+
+  faceCenters: (id: string) =>
+    request<Record<string, [number, number]>>(`/api/projects/${id}/face-centers`),
+
+  generatePreview: (id: string) =>
+    request<{ message: string }>(`/api/projects/${id}/preview`, { method: 'POST' }),
+
+  getWaveform: (id: string, speaker: string, buckets = 400) =>
+    request<{ waveform: number[] }>(
+      `/api/projects/${id}/waveform?speaker=${encodeURIComponent(speaker)}&buckets=${buckets}`,
+    ),
+}
+
+// ── WebSocket progress ────────────────────────────────────────────────────────
+
+export interface ProgressEvent {
+  type?: 'ping' | 'preview_generating' | 'preview_ready' | 'preview_error'
+  status?: string
+  progress?: { step: string; percent: number; message: string }
+  /** Present on preview_ready events */
+  url?: string
+  /** Present on preview_error events */
+  message?: string
+}
+
+/**
+ * Open a WebSocket to stream progress events for a project job.
+ * Returns an unsubscribe function.
+ */
+export function subscribeToProgress(
+  projectId: string,
+  onEvent: (evt: ProgressEvent) => void,
+): () => void {
+  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+  const ws = new WebSocket(`${protocol}://${window.location.host}/api/ws/${projectId}`)
+
+  ws.onmessage = (e) => {
+    try {
+      onEvent(JSON.parse(e.data) as ProgressEvent)
+    } catch {
+      // ignore malformed frames
+    }
+  }
+
+  return () => ws.close()
+}
+
+export { ApiError }
