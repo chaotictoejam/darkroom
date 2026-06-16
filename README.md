@@ -74,16 +74,11 @@ sudo apt update && sudo apt install -y ffmpeg
 
 **Linux (Fedora/dnf)**
 
-Fedora's official repos don't ship ffmpeg, so enable RPM Fusion first:
+Fedora ships a limited `ffmpeg-free` package by default, which lacks libass (needed for subtitle burn-in). Enable RPM Fusion and install the full build, allowing it to replace `ffmpeg-free`:
 
 ```bash
 sudo dnf install -y https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm
-sudo dnf install -y ffmpeg
-```
-
-**Linux (dnf/yum)**
-```bash
-sudo dnf install ffmpeg
+sudo dnf install -y --allowerasing ffmpeg
 ```
 
 Verify: `ffmpeg -version`
