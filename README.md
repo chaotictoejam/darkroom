@@ -72,6 +72,15 @@ Or add it permanently via *System Properties → Environment Variables*.
 sudo apt update && sudo apt install -y ffmpeg
 ```
 
+**Linux (Fedora/dnf)**
+
+Fedora's official repos don't ship ffmpeg, so enable RPM Fusion first:
+
+```bash
+sudo dnf install -y https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm
+sudo dnf install -y ffmpeg
+```
+
 **Linux (dnf/yum)**
 ```bash
 sudo dnf install ffmpeg
