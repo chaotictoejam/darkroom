@@ -237,7 +237,6 @@ darkroom/
 │   ├── requirements.txt
 │   └── cdk.json
 ├── projects/                # auto-created; stores project JSON + media + outputs
-├── static/                  # legacy vanilla JS UI (deprecated)
 ├── Makefile
 ├── .env                     # AI_PROVIDER + keys
 └── .env.example
