@@ -24,6 +24,27 @@ _MODEL_SPEED: dict[str, float] = {
 }
 
 
+def _whisper_model_kwargs() -> dict:
+    """
+    Hardware tuning for the underlying CTranslate2 model, read from the
+    environment so it's a machine-level setting rather than a per-project
+    one — see the "Tuning local performance" section in the README.
+
+    All three default to CTranslate2's own defaults (device="auto",
+    compute_type="default", cpu_threads=0 i.e. autodetect), so leaving
+    these unset reproduces the exact behavior before this was configurable.
+    """
+    try:
+        cpu_threads = int(os.getenv("WHISPER_CPU_THREADS", "0") or "0")
+    except ValueError:
+        cpu_threads = 0
+    return {
+        "device": os.getenv("WHISPER_DEVICE", "auto"),
+        "compute_type": os.getenv("WHISPER_COMPUTE_TYPE", "default"),
+        "cpu_threads": cpu_threads,
+    }
+
+
 def _extract_audio(video_path: str) -> str:
     """
     Extract mono 16 kHz WAV from a video file using ffmpeg.
@@ -86,7 +107,7 @@ def transcribe_file(
     try:
         audio_np = _wav_to_numpy(audio_path)
         audio_duration = len(audio_np) / 16000.0
-        model = WhisperModel(model_name, device="auto")
+        model = WhisperModel(model_name, **_whisper_model_kwargs())
 
         if progress_callback and audio_duration > 0:
             speed = _MODEL_SPEED.get(model_name, 5.0)

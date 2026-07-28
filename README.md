@@ -167,6 +167,24 @@ Cloud transcription is one path to better accuracy, but the local path has real 
 
   Alignment models download per-language on first use (a few hundred MB to ~1GB from Hugging Face/torchaudio, depending on language) and add real processing time — expect it to roughly double per-track transcription time on CPU.
 
+#### Tuning local performance
+
+The local faster-whisper path reads three optional machine-level settings from `.env` (not per-project — these describe your hardware, not your content):
+
+```env
+# WHISPER_DEVICE=auto           # "auto" | "cpu" | "cuda"
+# WHISPER_COMPUTE_TYPE=int8     # "default" | "int8" | "int8_float32" | "float32" | "float16" (GPU only) | ...
+# WHISPER_CPU_THREADS=0         # 0 = autodetect; otherwise your physical core count
+```
+
+**GPU (`WHISPER_DEVICE=cuda`) only helps on NVIDIA hardware.** faster-whisper's backend (CTranslate2) supports CUDA exclusively — there's no ROCm/OpenCL path, so AMD and Intel GPUs can't accelerate this step no matter what you set here; `auto` will just keep using the CPU on those systems, same as today. If you do have an NVIDIA GPU, you'll also need CUDA/cuBLAS/cuDNN installed — see [faster-whisper's GPU setup notes](https://github.com/SYSTRAN/faster-whisper#gpu) if `cuda` fails to initialize.
+
+**On CPU, `WHISPER_COMPUTE_TYPE=int8`** is usually the best speed/accuracy tradeoff (int8 quantization, minimal quality loss). `float32` is slower but maximum precision if you ever suspect quantization is hurting a specific recording.
+
+**`WHISPER_CPU_THREADS`** defaults to autodetect (`0`), which is usually fine — set it explicitly only if you notice faster-whisper isn't using your CPU well (e.g. pin it to your physical core count, not hyperthreaded/SMT thread count, to avoid oversubscription if something else on the machine is also CPU-heavy).
+
+These are the same three values passed straight through to `WhisperModel(...)` — [faster-whisper's own docs](https://github.com/SYSTRAN/faster-whisper) cover every valid combination in more depth than is worth duplicating here.
+
 ---
 
 ## Run
@@ -374,8 +392,11 @@ projects/
 | `BEDROCK_MODEL_ID` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | Bedrock model ID override |
 | `TRANSCRIBE_PROVIDER` | `local` | `local` for faster-whisper; `aws` to default new projects to Amazon Transcribe |
 | `TRANSCRIBE_S3_BUCKET` | — | **Required when using Amazon Transcribe.** Scratch bucket for uploaded audio + job output; created by `cdk deploy` in `infra/` |
+| `WHISPER_DEVICE` | `auto` | `auto` \| `cpu` \| `cuda` — see [Tuning local performance](#tuning-local-performance). GPU is NVIDIA-only. |
+| `WHISPER_COMPUTE_TYPE` | `default` | CTranslate2 quantization mode, e.g. `int8` (fast CPU default recommendation) or `float32` |
+| `WHISPER_CPU_THREADS` | `0` (autodetect) | Threads faster-whisper uses on CPU |
 
-Whisper model, language, and transcription provider are set per-project in the upload UI (defaulting from `.env`), not fixed globally.
+Whisper model, language, and transcription provider are set per-project in the upload UI (defaulting from `.env`); `WHISPER_DEVICE`/`WHISPER_COMPUTE_TYPE`/`WHISPER_CPU_THREADS` are machine-level hardware settings, not per-project.
 
 ---
 
