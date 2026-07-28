@@ -11,7 +11,7 @@ A local-first video and podcast editor. Upload your pre-aligned camera or audio 
 | Layer | Technology |
 |-------|-----------|
 | Backend | Python · FastAPI |
-| Transcription | OpenAI Whisper (local) |
+| Transcription | faster-whisper (local) |
 | AI editing | Anthropic Claude (`claude-sonnet-4-6`) or AWS Bedrock (`claude-sonnet-4-5`) |
 | Rendering | FFmpeg |
 | Frontend | React · TypeScript · Vite |

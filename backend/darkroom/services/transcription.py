@@ -13,7 +13,7 @@ import wave
 from collections import Counter
 
 import numpy as np
-import whisper
+from faster_whisper import WhisperModel
 
 # Conservative CPU-based estimates of audio-seconds processed per wall-clock second.
 # GPU will be faster; the bar will just finish early rather than overshoot.
@@ -73,7 +73,7 @@ def transcribe_file(
     try:
         audio_np = _wav_to_numpy(audio_path)
         audio_duration = len(audio_np) / 16000.0
-        model = whisper.load_model(model_name)
+        model = WhisperModel(model_name, device="auto")
 
         if progress_callback and audio_duration > 0:
             speed = _MODEL_SPEED.get(model_name, 5.0)
@@ -88,7 +88,7 @@ def transcribe_file(
 
             threading.Thread(target=_tick, daemon=True).start()
 
-        result = model.transcribe(
+        segments_iter, _info = model.transcribe(
             audio_np,
             word_timestamps=True,
             language=language,
@@ -99,9 +99,13 @@ def transcribe_file(
             condition_on_previous_text=False,
             # Whisper's own thresholds for dropping likely-silence segments
             no_speech_threshold=0.5,
-            logprob_threshold=-1.0,
+            log_prob_threshold=-1.0,
             compression_ratio_threshold=2.4,
         )
+        # transcribe() returns a lazy generator — consume it now, inside the
+        # try block, so the progress-ticker thread is stopped once decoding
+        # actually finishes.
+        whisper_segments = list(segments_iter)
     finally:
         stop_event.set()
         try:
@@ -110,22 +114,22 @@ def transcribe_file(
             pass
 
     segments = []
-    for seg in result["segments"]:
+    for seg in whisper_segments:
         # Skip segments Whisper itself flagged as likely silence
-        if seg.get("no_speech_prob", 0) > 0.5:
+        if seg.no_speech_prob > 0.5:
             continue
         # Skip segments with suspiciously high compression ratio (repetitive text)
-        if seg.get("compression_ratio", 0) > 2.4:
+        if seg.compression_ratio > 2.4:
             continue
         segments.append({
             "speaker_id": speaker_id,
             "speaker_name": speaker_name,
-            "start": round(seg["start"], 3),
-            "end": round(seg["end"], 3),
-            "text": seg["text"].strip(),
+            "start": round(float(seg.start), 3),
+            "end": round(float(seg.end), 3),
+            "text": seg.text.strip(),
             "words": [
-                {"word": w["word"], "start": round(w["start"], 3), "end": round(w["end"], 3)}
-                for w in seg.get("words", [])
+                {"word": w.word, "start": round(float(w.start), 3), "end": round(float(w.end), 3)}
+                for w in (seg.words or [])
             ],
         })
 
