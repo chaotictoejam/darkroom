@@ -9,6 +9,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from . import audio_engine
+
 
 # ---------------------------------------------------------------------------
 # FFmpeg availability
@@ -16,6 +18,42 @@ from pathlib import Path
 
 def check_ffmpeg() -> bool:
     return shutil.which("ffmpeg") is not None
+
+
+# ---------------------------------------------------------------------------
+# Export resolutions
+# ---------------------------------------------------------------------------
+
+RESOLUTIONS = {
+    "1080p": {"landscape": (1920, 1080), "portrait": (1080, 1920)},
+    "4k": {"landscape": (3840, 2160), "portrait": (2160, 3840)},
+}
+
+
+def _resolution_dims(resolution: str, vertical: bool) -> tuple[int, int]:
+    res = RESOLUTIONS.get(resolution, RESOLUTIONS["1080p"])
+    return res["portrait"] if vertical else res["landscape"]
+
+
+def check_source_resolution(speakers_dict: dict, resolution: str, vertical: bool = False) -> list[str]:
+    """
+    Return human-readable warnings for any camera whose source resolution is
+    below the requested export target — the export will still work, it'll
+    just upscale that camera rather than deliver true extra detail.
+    """
+    target_w, target_h = _resolution_dims(resolution, vertical)
+    target_max = max(target_w, target_h)
+    warnings = []
+    for cam_id, sp in speakers_dict.items():
+        info = get_video_info(sp["file_path"])
+        src_max = max(info["width"], info["height"])
+        if src_max < target_max:
+            warnings.append(
+                f"Camera {cam_id} source is {info['width']}x{info['height']}, below the "
+                f"requested {target_w}x{target_h} export — it will be upscaled, not true "
+                f"{resolution}."
+            )
+    return warnings
 
 
 def get_video_info(file_path: str) -> dict:
@@ -186,7 +224,8 @@ def _smart_crop_filter(video_path: str, target_w: int, target_h: int, zoom: floa
 # ---------------------------------------------------------------------------
 
 def render_project(project: dict, targets: list[str], projects_dir: Path,
-                   camera_layout: str = "edl", cam_order: list = None) -> dict:
+                   camera_layout: str = "edl", cam_order: list = None,
+                   resolution: str = "1080p") -> dict:
     """Render a project to the requested targets. Returns {target: result_dict}."""
     project_dir = Path(projects_dir) / project["id"]
     output_dir = project_dir / "output"
@@ -207,9 +246,10 @@ def render_project(project: dict, targets: list[str], projects_dir: Path,
         try:
             if target == "fullEdit":
                 out = str(output_dir / "fullEdit.mp4")
+                warnings = check_source_resolution(speakers_dict, resolution, vertical=False)
                 if camera_layout == "split":
                     input_args, filter_complex = _build_splitscreen_filter_landscape(
-                        speakers_dict, edl["segments"]
+                        speakers_dict, edl["segments"], resolution=resolution
                     )
                     cmd = ["ffmpeg", "-y"] + input_args + [
                         "-filter_complex", filter_complex,
@@ -220,20 +260,23 @@ def render_project(project: dict, targets: list[str], projects_dir: Path,
                     ]
                     _run_ffmpeg(cmd)
                 else:
-                    _render_fulledit(edl["segments"], speakers_dict, out)
+                    _render_fulledit(edl["segments"], speakers_dict, out, resolution=resolution)
                 results["fullEdit"] = {
                     "status": "done",
                     "url": f"/projects/{project['id']}/files/output/fullEdit.mp4",
                     "filename": "fullEdit.mp4",
+                    "warnings": warnings,
                 }
 
             elif target == "vertical":
                 out = str(output_dir / "vertical.mp4")
-                _render_vertical(edl["segments"], speakers_dict, out)
+                warnings = check_source_resolution(speakers_dict, resolution, vertical=True)
+                _render_vertical(edl["segments"], speakers_dict, out, resolution=resolution)
                 results["vertical"] = {
                     "status": "done",
                     "url": f"/projects/{project['id']}/files/output/vertical.mp4",
                     "filename": "vertical.mp4",
+                    "warnings": warnings,
                 }
 
             elif target == "short":
@@ -243,11 +286,13 @@ def render_project(project: dict, targets: list[str], projects_dir: Path,
                     continue
                 clip = clips[0]
                 out = str(output_dir / "short.mp4")
-                _render_clip(clip, edl["segments"], speakers_dict, out, vertical=True)
+                warnings = check_source_resolution(speakers_dict, resolution, vertical=True)
+                _render_clip(clip, edl["segments"], speakers_dict, out, vertical=True, resolution=resolution)
                 results["short"] = {
                     "status": "done",
                     "url": f"/projects/{project['id']}/files/output/short.mp4",
                     "filename": "short.mp4",
+                    "warnings": warnings,
                 }
 
         except subprocess.CalledProcessError as exc:
@@ -262,7 +307,8 @@ def render_project(project: dict, targets: list[str], projects_dir: Path,
 # Render helpers
 # ---------------------------------------------------------------------------
 
-def _build_concat_filter(kept_segments: list[dict], speakers_dict: dict, vertical: bool = False):
+def _build_concat_filter(kept_segments: list[dict], speakers_dict: dict, vertical: bool = False,
+                          resolution: str = "1080p", normalize_audio: bool = True):
     """
     Return (input_args, filter_complex, n_segments) for an ffmpeg concat.
 
@@ -300,11 +346,11 @@ def _build_concat_filter(kept_segments: list[dict], speakers_dict: dict, vertica
         out_fps = 25
 
     # Pre-compute crop for cameras that appear in segments (video only)
+    target_w, target_h = _resolution_dims(resolution, vertical)
     crop_cache: dict[str, str] = {}
     for cam in seg_cams:
         fp = speakers_dict[cam]["file_path"]
-        crop_cache[cam] = _smart_crop_filter(fp, 1080 if vertical else 1920,
-                                              1920 if vertical else 1080)
+        crop_cache[cam] = _smart_crop_filter(fp, target_w, target_h)
 
     # Seek directly to each segment. FFmpeg's default -accurate_seek decodes
     # from the keyframe to the exact position internally, so the first output
@@ -351,22 +397,26 @@ def _build_concat_filter(kept_segments: list[dict], speakers_dict: dict, vertica
 
     n = len(kept_segments)
     concat_str = "".join(stream_labels) + f"concat=n={n}:v=1:a=1[outv][outa_raw]"
-    norm_str = "[outa_raw]loudnorm=I=-16:TP=-1.5:LRA=11[outa]"
-    filter_complex = ";".join(filter_parts) + ";" + concat_str + ";" + norm_str
+    audio_str = (
+        audio_engine.normalize_audio_filter("outa_raw", "outa")
+        if normalize_audio
+        else audio_engine.passthrough_audio_filter("outa_raw", "outa")
+    )
+    filter_complex = ";".join(filter_parts) + ";" + concat_str + ";" + audio_str
 
     return input_args, filter_complex, n
 
 
-def _build_splitscreen_filter_landscape(speakers_dict: dict, segments: list[dict]):
+def _build_splitscreen_filter_landscape(speakers_dict: dict, segments: list[dict], resolution: str = "1080p"):
     """
     Build a 16:9 split-screen filter showing all cameras side-by-side for the
     full duration of all kept segments (EDL cuts still applied to timing, but all
     cams visible simultaneously).
 
-    Layout for 1920×1080:
-      2 cams → side by side, each 960×1080
-      3 cams → three columns,  each 640×1080
-      4 cams → 2×2 grid,       each 960×540
+    Layout (1080p canvas 1920×1080, scales proportionally at 4K):
+      2 cams → side by side
+      3 cams → three columns
+      4 cams → 2×2 grid
     """
     cam_ids = list(speakers_dict.keys())
     n_cams = len(cam_ids)
@@ -377,15 +427,16 @@ def _build_splitscreen_filter_landscape(speakers_dict: dict, segments: list[dict
     if not kept:
         raise ValueError("No kept segments to render")
 
-    # Tile dimensions (total canvas 1920×1080)
+    # Tile dimensions (total canvas scales with requested resolution)
+    canvas_w, canvas_h = _resolution_dims(resolution, vertical=False)
     if n_cams == 1:
-        per_w, per_h = 1920, 1080
+        per_w, per_h = canvas_w, canvas_h
     elif n_cams == 2:
-        per_w, per_h = 960, 1080
+        per_w, per_h = canvas_w // 2, canvas_h
     elif n_cams == 3:
-        per_w, per_h = 640, 1080
+        per_w, per_h = canvas_w // 3, canvas_h
     else:  # 4
-        per_w, per_h = 960, 540
+        per_w, per_h = canvas_w // 2, canvas_h // 2
 
     filter_parts = []
     concat_v_labels = []
@@ -441,36 +492,35 @@ def _build_splitscreen_filter_landscape(speakers_dict: dict, segments: list[dict
     n = len(kept)
     all_labels = "".join(concat_v_labels[i] + concat_a_labels[i] for i in range(n))
     filter_parts.append(f"{all_labels}concat=n={n}:v=1:a=1[outv][outa_raw]")
-    filter_parts.append("[outa_raw]loudnorm=I=-16:TP=-1.5:LRA=11[outa]")
+    filter_parts.append(audio_engine.normalize_audio_filter("outa_raw", "outa"))
 
     return input_args, ";".join(filter_parts)
 
 
-def _build_splitscreen_filter(clips: list[dict], speakers_dict: dict):
+def _build_splitscreen_filter(clips: list[dict], speakers_dict: dict, resolution: str = "1080p"):
     """
     Build an FFmpeg filter that shows ALL cameras simultaneously, stacked/tiled
     for each clip window, then concatenates the clips.
 
-    Layout for 9:16 (1080×1920):
-      1 cam  → 1080×1920 full
-      2 cams → stacked vertically, each 1080×960
-      3 cams → stacked vertically, each 1080×640
-      4 cams → 2×2 grid, each 540×960
+    Layout (9:16 canvas 1080×1920, scales proportionally at 4K):
+      1 cam  → full canvas
+      2 cams → stacked vertically
+      3 cams → stacked vertically
+      4 cams → 2×2 grid
     """
     cam_ids = list(speakers_dict.keys())
     n_cams = len(cam_ids)
     if n_cams == 0:
         raise ValueError("No cameras in project")
 
-    # Per-cam tile dimensions
+    # Per-cam tile dimensions (canvas scales with requested resolution)
+    canvas_w, canvas_h = _resolution_dims(resolution, vertical=True)
     if n_cams == 1:
-        per_w, per_h = 1080, 1920
-    elif n_cams == 2:
-        per_w, per_h = 1080, 960
-    elif n_cams == 3:
-        per_w, per_h = 1080, 640
+        per_w, per_h = canvas_w, canvas_h
+    elif n_cams in (2, 3):
+        per_w, per_h = canvas_w, canvas_h // n_cams
     else:  # 4+
-        per_w, per_h = 540, 960
+        per_w, per_h = canvas_w // 2, canvas_h // 2
 
     filter_parts = []
     concat_v_labels = []
@@ -536,7 +586,7 @@ def _build_splitscreen_filter(clips: list[dict], speakers_dict: dict):
     n_clips = len(clips)
     all_labels = "".join(concat_v_labels[i] + concat_a_labels[i] for i in range(n_clips))
     filter_parts.append(f"{all_labels}concat=n={n_clips}:v=1:a=1[outv][outa_raw]")
-    filter_parts.append("[outa_raw]loudnorm=I=-16:TP=-1.5:LRA=11[outa]")
+    filter_parts.append(audio_engine.normalize_audio_filter("outa_raw", "outa"))
 
     return input_args, ";".join(filter_parts)
 
@@ -554,12 +604,13 @@ def _run_ffmpeg(cmd: list[str]) -> None:
         raise subprocess.CalledProcessError(result.returncode, cmd, result.stderr)
 
 
-def _render_fulledit(segments: list[dict], speakers_dict: dict, output_path: str) -> None:
+def _render_fulledit(segments: list[dict], speakers_dict: dict, output_path: str,
+                      resolution: str = "1080p") -> None:
     kept = [s for s in segments if s["keep"]]
     if not kept:
         raise ValueError("No kept segments to render")
 
-    input_args, filter_complex, _ = _build_concat_filter(kept, speakers_dict, vertical=False)
+    input_args, filter_complex, _ = _build_concat_filter(kept, speakers_dict, vertical=False, resolution=resolution)
 
     cmd = ["ffmpeg", "-y"]
     cmd.extend(input_args)
@@ -579,12 +630,13 @@ def _render_fulledit(segments: list[dict], speakers_dict: dict, output_path: str
     _run_ffmpeg(cmd)
 
 
-def _render_vertical(segments: list[dict], speakers_dict: dict, output_path: str) -> None:
+def _render_vertical(segments: list[dict], speakers_dict: dict, output_path: str,
+                      resolution: str = "1080p") -> None:
     kept = [s for s in segments if s["keep"]]
     if not kept:
         raise ValueError("No kept segments to render")
 
-    input_args, filter_complex, _ = _build_concat_filter(kept, speakers_dict, vertical=True)
+    input_args, filter_complex, _ = _build_concat_filter(kept, speakers_dict, vertical=True, resolution=resolution)
 
     cmd = ["ffmpeg", "-y"]
     cmd.extend(input_args)
@@ -983,6 +1035,7 @@ def render_short_custom(
     accent_color: str = "#FFFF00",
     sub_position: str = "auto",
     box_alpha: int = 0,
+    resolution: str = "1080p",
 ) -> None:
     """
     Render a short from one or more user-defined clip windows.
@@ -997,7 +1050,7 @@ def render_short_custom(
         # Show all cameras simultaneously stacked/tiled — use full clip windows, no EDL cuts
         if not clips:
             raise ValueError("No clips provided for split-screen render.")
-        input_args, filter_complex = _build_splitscreen_filter(clips, speakers_dict)
+        input_args, filter_complex = _build_splitscreen_filter(clips, speakers_dict, resolution=resolution)
     else:
         # Use transcript speaker assignments to drive camera switching.
         # Falls back to EDL camera assignments if transcript yields nothing.
@@ -1018,7 +1071,7 @@ def render_short_custom(
         if not all_clip_segs:
             raise ValueError("No kept segments found within the specified clip range(s).")
 
-        input_args, filter_complex, _ = _build_concat_filter(all_clip_segs, speakers_dict, vertical=True)
+        input_args, filter_complex, _ = _build_concat_filter(all_clip_segs, speakers_dict, vertical=True, resolution=resolution)
 
     # Subtitle burn-in
     if subtitle_style and subtitle_style != "none":
@@ -1122,13 +1175,11 @@ def render_preview(project: dict, projects_dir) -> dict:
         raise ValueError("No segments remain after applying cuts")
 
     # ── Build filter complex (reuse existing helper) ──────────────────────────
-    input_args, filter_complex, _ = _build_concat_filter(kept, speakers_dict, vertical=False)
-
-    # For preview: skip loudnorm (slow) and scale to 960p
-    filter_complex = filter_complex.replace(
-        "[outa_raw]loudnorm=I=-16:TP=-1.5:LRA=11[outa]",
-        "[outa_raw]anull[outa]",
+    # For preview: skip loudness normalization (slow) and scale to 960p
+    input_args, filter_complex, _ = _build_concat_filter(
+        kept, speakers_dict, vertical=False, normalize_audio=False,
     )
+
     # [outv] appears exactly once in the concat output; rename it so we can scale
     filter_complex = filter_complex.replace("[outv]", "[outv_raw]", 1)
     filter_complex += ";[outv_raw]scale=960:-2[outv]"
@@ -1157,7 +1208,8 @@ def render_preview(project: dict, projects_dir) -> dict:
     }
 
 
-def _render_clip(clip: dict, segments: list[dict], speakers_dict: dict, output_path: str, vertical: bool = True) -> None:
+def _render_clip(clip: dict, segments: list[dict], speakers_dict: dict, output_path: str,
+                  vertical: bool = True, resolution: str = "1080p") -> None:
     """Render a specific clip (e.g. Shorts candidate) by finding overlapping segments."""
     clip_start = clip["start"]
     clip_end = clip["end"]
@@ -1175,7 +1227,7 @@ def _render_clip(clip: dict, segments: list[dict], speakers_dict: dict, output_p
     if not clip_segs:
         raise ValueError(f"No kept segments overlap with clip window {clip_start}–{clip_end}")
 
-    input_args, filter_complex, _ = _build_concat_filter(clip_segs, speakers_dict, vertical=vertical)
+    input_args, filter_complex, _ = _build_concat_filter(clip_segs, speakers_dict, vertical=vertical, resolution=resolution)
 
     cmd = ["ffmpeg", "-y"]
     cmd.extend(input_args)

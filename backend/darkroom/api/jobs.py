@@ -3,6 +3,7 @@ Job endpoints — transcription, AI analysis, rendering.
 WebSocket /api/ws/{project_id} streams progress to the frontend.
 """
 import asyncio
+import importlib.util
 import os
 import re
 import shutil
@@ -18,11 +19,13 @@ from ..services.editor import build_prompt, generate_edl, generate_skip_edl, val
 from ..services.renderer import (
     _detect_face_center_ratio,
     check_ffmpeg,
+    check_source_resolution,
     render_preview,
     render_project,
     render_short_custom,
 )
 from ..services.transcription import merge_transcripts, transcribe_all
+from ..services.transcription_aws import transcribe_all_aws
 from ..storage import PROJECTS_DIR, get_project, save_project
 
 router = APIRouter()
@@ -96,9 +99,14 @@ def _update_progress(project_id: str, **kwargs) -> None:
 @router.get("/status")
 def api_status():
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    align_available = all(
+        importlib.util.find_spec(m) is not None for m in ("torch", "torchaudio", "transformers")
+    )
     return {
         "ffmpeg_available": check_ffmpeg(),
         "anthropic_configured": bool(api_key and api_key not in ("", "your_anthropic_api_key_here")),
+        "aws_transcribe_configured": bool(os.getenv("TRANSCRIBE_S3_BUCKET")),
+        "align_available": align_available,
     }
 
 
@@ -136,6 +144,8 @@ def start_transcription(project_id: str):
             p = get_project(project_id)
             model_name = p.get("transcribe_model") or "medium"
             language = p.get("transcribe_language") or None
+            provider = p.get("transcribe_provider") or os.getenv("TRANSCRIBE_PROVIDER", "local")
+            align = bool(p.get("align_transcript"))
             total = len(p["speakers"])
 
             def _progress(overall_frac: float, name: str, i: int, total: int) -> None:
@@ -145,7 +155,12 @@ def start_transcription(project_id: str):
                     progress={"step": "transcribing", "percent": pct, "message": f"Transcribing {name} ({i + 1}/{total})…"},
                 )
 
-            transcripts = transcribe_all(p["speakers"], model_name, _progress, language=language)
+            if provider == "aws":
+                # Amazon Transcribe's own word timestamps are already forced-aligned
+                # server-side, so the wav2vec2 alignment pass doesn't apply here.
+                transcripts = transcribe_all_aws(p["speakers"], language=language, progress_callback=_progress)
+            else:
+                transcripts = transcribe_all(p["speakers"], model_name, _progress, language=language, align=align)
 
             _update_progress(
                 project_id,
@@ -265,10 +280,21 @@ def update_edl(project_id: str, edl: dict):
 
 # ── Rendering ─────────────────────────────────────────────────────────────────
 
+@router.get("/projects/{project_id}/resolution-check")
+def resolution_check(project_id: str, resolution: str = "1080p"):
+    """Warn the frontend before a render if any source camera is below the requested export resolution."""
+    proj = get_project(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    speakers_dict = {s["id"]: s for s in proj.get("speakers", [])}
+    return {"warnings": check_source_resolution(speakers_dict, resolution)}
+
+
 class RenderBody(BaseModel):
     targets: list[str] = ["fullEdit"]
     camera_layout: str = "edl"
     cam_order: Optional[list[str]] = None
+    resolution: str = "1080p"
 
 
 @router.post("/projects/{project_id}/render")
@@ -293,7 +319,8 @@ def start_render(project_id: str, body: RenderBody):
             p = get_project(project_id)
             results = render_project(p, body.targets, PROJECTS_DIR,
                                      camera_layout=body.camera_layout,
-                                     cam_order=body.cam_order)
+                                     cam_order=body.cam_order,
+                                     resolution=body.resolution)
             p = get_project(project_id)
             p["renders"].update(results)
             errors = [t for t, r in results.items() if r.get("status") == "error"]
@@ -326,6 +353,7 @@ class RenderShortBody(BaseModel):
     sub_position: str = "auto"
     output_name: str = "short_01"
     box_opacity: int = 100
+    resolution: str = "1080p"
 
 
 @router.post("/projects/{project_id}/render-short")
@@ -381,6 +409,7 @@ def start_render_short(project_id: str, body: RenderShortBody):
                 output_path=out_path,
                 output_dir=output_dir,
                 box_alpha=box_alpha,
+                resolution=body.resolution,
             )
             p = get_project(project_id)
             p["renders"][output_name] = {

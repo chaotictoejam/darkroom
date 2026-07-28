@@ -3,7 +3,7 @@
  * All requests go to the same origin — Vite proxies /api/* in dev,
  * FastAPI serves everything from the same port in production.
  */
-import type { EDL, Project, ProjectSummary, RenderShortParams } from './types'
+import type { EDL, Project, ProjectSummary, RenderShortParams, Resolution } from './types'
 
 class ApiError extends Error {
   constructor(
@@ -33,7 +33,13 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 // ── Projects ──────────────────────────────────────────────────────────────────
 
 export const api = {
-  status: () => request<{ ffmpeg_available: boolean; anthropic_configured: boolean }>('/api/status'),
+  status: () =>
+    request<{
+      ffmpeg_available: boolean
+      anthropic_configured: boolean
+      aws_transcribe_configured: boolean
+      align_available: boolean
+    }>('/api/status'),
 
   listProjects: () => request<ProjectSummary[]>('/api/projects'),
 
@@ -98,7 +104,7 @@ export const api = {
   render: (
     id: string,
     targets: string[],
-    opts: { camera_layout?: string; cam_order?: string[] } = {},
+    opts: { camera_layout?: string; cam_order?: string[]; resolution?: Resolution } = {},
   ) =>
     request<{ message: string }>(`/api/projects/${id}/render`, {
       method: 'POST',
@@ -110,6 +116,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(params),
     }),
+
+  resolutionCheck: (id: string, resolution: Resolution) =>
+    request<{ warnings: string[] }>(
+      `/api/projects/${id}/resolution-check?resolution=${resolution}`,
+    ),
 
   faceCenters: (id: string) =>
     request<Record<string, [number, number]>>(`/api/projects/${id}/face-centers`),

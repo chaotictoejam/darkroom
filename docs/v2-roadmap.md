@@ -30,9 +30,11 @@ A desktop app (built on Electron) that can capture your webcam, one or more moni
 - Compose a screen-share track with a webcam picture-in-picture, or drop a static image/logo overlay into your edit.
 - An asset library for logos, title cards, and other images you reuse across projects.
 
-### 3. Choice of transcription engine
+### 3. Choice of transcription engine — and better local accuracy
 
 Pick **local (faster-whisper)** or **cloud (Amazon Transcribe)** per project, same as today's per-project Whisper model/language choice. Cloud is available once you've configured AWS credentials; local stays the zero-cost, zero-setup default.
+
+Cloud isn't the only lever for accuracy, though — the local path improved directly: Silero VAD filtering runs by default (strips silence/breathing before the model ever sees it, which cuts hallucinations more than any post-hoc cleanup), `large-v3` is available as the best-accuracy model choice, and there's an optional forced-alignment pass (wav2vec2, opt-in per project) that tightens word-level timing beyond what Whisper's own timestamps give you — the part that actually matters for word-level cuts and karaoke subtitles. Diarization is intentionally absent throughout: every track is already speaker-tagged by camera/mic at upload, which is more accurate than guessing speaker identity from a mixed signal.
 
 ### 4. Higher-resolution exports
 
@@ -89,7 +91,7 @@ This is the full assessment of every tool in the target panel — how feasible i
 
 ## Rollout plan
 
-1. **Foundations** — 4K/1080p export option, Amazon Transcribe as an alternative transcription engine, audio engine groundwork.
+1. **Foundations** ✅ — 4K/1080p export option, Amazon Transcribe as an alternative transcription engine, audio engine groundwork. Also converted the CDK deployment stack to TypeScript.
 2. **Recording** — the Electron desktop app and multi-track capture.
 3. **Richer editing** — asset library, screen-share/image overlays, manual per-segment layout control.
 4. **AI Tools panel** — the cost-estimate UI, plus the tools that are already high-feasibility and low/no-cost: real filler-word removal, chapters, highlight reels, translation, and the Publish-section drafting tools (description, title, show notes, summary, social post, blog post).

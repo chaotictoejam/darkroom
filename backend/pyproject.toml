@@ -23,8 +23,13 @@ dev = [
     "pytest>=8.0",
     "httpx>=0.27",
 ]
-bedrock = [
+aws = [
     "boto3>=1.34.0",
+]
+align = [
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
+    "transformers>=4.30.0",
 ]
 
 [project.scripts]

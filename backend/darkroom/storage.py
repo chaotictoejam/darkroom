@@ -24,6 +24,8 @@ _DEFAULTS = {
     "word_mutes": [],
     "renders": {},
     "progress": {"step": "", "percent": 0, "message": ""},
+    "transcribe_provider": "local",
+    "align_transcript": False,
 }
 
 

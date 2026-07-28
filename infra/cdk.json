@@ -1,13 +1,17 @@
 {
-  "app": "python app.py",
+  "app": "npx ts-node --prefer-ts-exts bin/darkroom.ts",
   "watch": {
     "include": ["**"],
     "exclude": [
       "README.md",
       "cdk*.json",
-      "**/__pycache__/**",
-      ".venv/**",
-      "**/*.egg-info/**"
+      "**/*.d.ts",
+      "**/*.js",
+      "tsconfig.json",
+      "package*.json",
+      "node_modules/**",
+      "cdk.out/**",
+      "**/__pycache__/**"
     ]
   },
   "context": {

@@ -53,10 +53,13 @@ export interface EDL {
   clips: Clip[]
 }
 
+export type Resolution = '1080p' | '4k'
+
 export interface Render {
   status: 'done' | 'error'
   url: string
   filename: string
+  warnings?: string[]
 }
 
 export type ProjectStatus =
@@ -97,6 +100,8 @@ export interface Project {
   progress: Progress
   transcribe_model?: string
   transcribe_language?: string | null
+  transcribe_provider?: 'local' | 'aws'
+  align_transcript?: boolean
 }
 
 export interface ProjectSummary {
@@ -117,4 +122,5 @@ export interface RenderShortParams {
   sub_position?: 'auto' | 'top' | 'bottom'
   output_name?: string
   box_opacity?: number
+  resolution?: Resolution
 }

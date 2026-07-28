@@ -1,6 +1,7 @@
 """
 File upload and transcript editing routes.
 """
+import os
 import subprocess
 
 import numpy as np
@@ -23,6 +24,8 @@ async def upload_files(
     language: Optional[str] = Form(default=None),
     model: str = Form(default="medium"),
     name: Optional[str] = Form(default=None),
+    transcribe_provider: Optional[str] = Form(default=None),
+    align_transcript: bool = Form(default=False),
 ):
     proj = get_project(project_id)
     if not proj:
@@ -51,6 +54,8 @@ async def upload_files(
         proj["name"] = name.strip()
     proj["transcribe_language"] = language or None
     proj["transcribe_model"] = model
+    proj["transcribe_provider"] = transcribe_provider or os.getenv("TRANSCRIBE_PROVIDER", "local")
+    proj["align_transcript"] = align_transcript
     proj["status"] = "uploaded"
     proj["progress"] = {"step": "uploaded", "percent": 0, "message": "Files uploaded"}
     save_project(proj)

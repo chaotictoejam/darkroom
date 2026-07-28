@@ -60,9 +60,22 @@ def transcribe_file(
     speaker_name: str,
     model_name: str = "base",
     language: str | None = None,
+    align: bool = False,
     progress_callback=None,
 ) -> list[dict]:
     """Transcribe a single video/audio file using Whisper. Returns list of segment dicts.
+
+    speaker_id/speaker_name are passed in directly, not detected — Darkroom's
+    projects already separate speakers by camera/track, so there's no
+    diarization step here. Guessing speaker identity from a mixed signal
+    (e.g. pyannote) would be strictly less accurate than the track assignment
+    the user already gave us.
+
+    align=True runs a wav2vec2 forced-alignment pass (services/align_engine.py)
+    over the word timestamps afterward — tighter word boundaries than Whisper's
+    own cross-attention timestamps, at the cost of extra processing time.
+    Requires the `align` extra (torch/torchaudio/transformers); silently no-ops
+    if it isn't installed or the resolved language has no alignment model.
 
     progress_callback(frac: float) is called every ~1.5 s with an estimated
     0.0–0.95 fraction of this speaker's audio processed. The caller maps this
@@ -88,7 +101,7 @@ def transcribe_file(
 
             threading.Thread(target=_tick, daemon=True).start()
 
-        segments_iter, _info = model.transcribe(
+        segments_iter, info = model.transcribe(
             audio_np,
             word_timestamps=True,
             language=language,
@@ -101,6 +114,10 @@ def transcribe_file(
             no_speech_threshold=0.5,
             log_prob_threshold=-1.0,
             compression_ratio_threshold=2.4,
+            # Run Silero VAD first so silence/breathing never reaches the model —
+            # this is a bigger accuracy win than the no_speech/log_prob thresholds
+            # above, which only catch hallucinations after the fact.
+            vad_filter=True,
         )
         # transcribe() returns a lazy generator — consume it now, inside the
         # try block, so the progress-ticker thread is stopped once decoding
@@ -133,10 +150,23 @@ def transcribe_file(
             ],
         })
 
-    return _filter_hallucinations(segments)
+    segments = _filter_hallucinations(segments)
+
+    if align and segments:
+        from .align_engine import align_segment_words, alignment_available, default_device
+        resolved_lang = (language or getattr(info, "language", None) or "en").lower()
+        if alignment_available(resolved_lang):
+            device = default_device()
+            for seg in segments:
+                if seg["words"]:
+                    seg["words"] = align_segment_words(
+                        seg["words"], seg["start"], seg["end"], audio_np, resolved_lang, device=device,
+                    )
+
+    return segments
 
 
-def transcribe_all(speakers: list[dict], model_name: str, progress_callback=None, language: str | None = None) -> dict[str, list]:
+def transcribe_all(speakers: list[dict], model_name: str, progress_callback=None, language: str | None = None, align: bool = False) -> dict[str, list]:
     """Transcribe all speaker files. Returns {speaker_id: [segments]}.
 
     progress_callback(overall_frac: float, name: str, index: int, total: int)
@@ -163,6 +193,7 @@ def transcribe_all(speakers: list[dict], model_name: str, progress_callback=None
             speaker["name"],
             model_name,
             language=language,
+            align=align,
             progress_callback=_inner,
         )
         transcripts[speaker["id"]] = segments

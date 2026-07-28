@@ -13,7 +13,7 @@ A local-first video and podcast editor. Upload your pre-aligned camera or audio 
 | Layer | Technology |
 |-------|-----------|
 | Backend | Python · FastAPI |
-| Transcription | faster-whisper (local) |
+| Transcription | faster-whisper (local, VAD-filtered) or Amazon Transcribe (cloud, optional) |
 | AI editing | Anthropic Claude (`claude-sonnet-4-6`) or AWS Bedrock (`claude-sonnet-4-5`) |
 | Rendering | FFmpeg |
 | Frontend | React · TypeScript · Vite |
@@ -131,8 +131,41 @@ AWS_REGION=us-east-1
 
 Also install the `boto3` extra:
 ```bash
-pip install -e "backend/[bedrock]"
+pip install -e "backend/[aws]"
 ```
+
+---
+
+### 5 — Transcription provider (optional)
+
+By default Darkroom transcribes locally with faster-whisper — free, no AWS needed. You can optionally transcribe via **Amazon Transcribe** instead, per-project, from the upload screen.
+
+```env
+TRANSCRIBE_PROVIDER=local        # default
+# TRANSCRIBE_PROVIDER=aws
+# TRANSCRIBE_S3_BUCKET=darkroom-transcribe-xxxxxxxx  # created by `cdk deploy` in infra/, or bring your own
+# AWS_REGION=us-east-1
+```
+
+Requires the same `boto3` extra as Bedrock above, plus a scratch S3 bucket (deploy `infra/` — see [Optional: CDK deployment](#optional-cdk-deployment) — or point `TRANSCRIBE_S3_BUCKET` at your own) and AWS credentials with `transcribe:StartTranscriptionJob` / `transcribe:GetTranscriptionJob` and `s3:PutObject`/`GetObject`/`DeleteObject` on that bucket.
+
+#### Improving local accuracy
+
+Cloud transcription is one path to better accuracy, but the local path has real headroom too — Darkroom's faster-whisper pipeline includes:
+
+- **Silero VAD filtering** (always on) — strips silence/breathing before it ever reaches the model, which is a bigger source of hallucinated words than any post-hoc filtering can fully clean up.
+- **`large-v3`** as a selectable Whisper model (Setup screen) — the current best-accuracy faster-whisper checkpoint, slower than `medium`/`turbo`.
+- **Optional forced alignment** — a wav2vec2 CTC pass (`services/align_engine.py`) that re-times each word against the raw audio, tightening word boundaries beyond what Whisper's own cross-attention timestamps give you. This is what actually matters for word-level cuts and karaoke subtitles, as opposed to plain transcript accuracy. Enable per-project via the "Improve word-timing accuracy" checkbox on the Setup screen (local provider only).
+
+  Requires the `align` extra:
+  ```bash
+  pip install -e "backend/[align]"
+  ```
+  This pulls in `torch`/`torchaudio`/`transformers` — a meaningfully heavier install than the base app. It's deliberately **not** the `whisperx` package: that package hard-pins `faster-whisper==1.0.0`/`ctranslate2==4.4.0` (which would downgrade the versions this project uses) and unconditionally imports its diarization module (`pyannote.audio` and its own dependency tree) even when only alignment is needed. `align_engine.py` ports just the forced-alignment algorithm itself (BSD-2-Clause, adapted from [WhisperX](https://github.com/m-bain/whisperX)) without either of those costs.
+
+  Darkroom intentionally has no diarization step anywhere — every track is already speaker-tagged by camera/mic at upload, which is more accurate than guessing speaker identity from a mixed signal.
+
+  Alignment models download per-language on first use (a few hundred MB to ~1GB from Hugging Face/torchaudio, depending on language) and add real processing time — expect it to roughly double per-track transcription time on CPU.
 
 ---
 
@@ -175,12 +208,12 @@ Compiles the React app into `frontend/dist`. FastAPI then serves the full app at
 ## Workflow
 
 1. **New Project** — choose **Video** (multi-camera interview/talking head) or **Podcast** (audio-only recording).
-2. **Upload files** — add up to 4 pre-aligned camera or audio files, one per speaker. Assign a name to each. Choose the transcript **language** (defaults to English) and **Whisper model** (defaults to `medium`).
+2. **Upload files** — add up to 4 pre-aligned camera or audio files, one per speaker. Assign a name to each. Choose the transcript **language** (defaults to English), **transcription engine** (local faster-whisper or Amazon Transcribe), **Whisper model** (defaults to `medium`; `large-v3` for best accuracy), and optionally **forced alignment** for tighter word timing — see [Improving local accuracy](#improving-local-accuracy).
 3. **Transcribe** — Whisper runs locally on each file's audio track.
 4. **Analyse** — Claude receives the merged transcript and returns an EDL (edit decision list) as JSON with segments and 3–5 suggested Shorts clips.
 5. **Review** — video/audio previews, transcript panel, per-segment controls. Toggle cuts, change camera assignments, edit transcript text inline, mute individual words.
 6. **Shorts Builder** — pick any AI-suggested clip or define a custom range. Choose subtitle style, accent colour, opacity, and camera layout. Preview the clip before rendering.
-7. **Render** — choose export targets (16:9 full edit, 9:16 vertical, or a named Short) and FFmpeg renders them with audio normalised to –16 LUFS.
+7. **Render** — choose export targets (16:9 full edit, 9:16 vertical, or a named Short), an export resolution (1080p or 4K), and FFmpeg renders them with audio normalised to –16 LUFS. If a source camera is below the requested resolution, Darkroom warns you before rendering rather than silently upscaling.
 8. **Redo EDL** — re-run the AI analysis on the existing transcript without re-transcribing (sidebar danger zone).
 
 ---
@@ -217,9 +250,12 @@ darkroom/
 │       │   ├── jobs.py      # transcription, analysis, render routes + WebSocket
 │       │   └── media.py     # file serving helpers
 │       ├── services/
-│       │   ├── transcriber.py  # Whisper transcription
-│       │   ├── editor.py       # Claude EDL generation (Anthropic API or Bedrock)
-│       │   └── renderer.py     # FFmpeg rendering
+│       │   ├── transcription.py     # Whisper transcription (local, VAD-filtered)
+│       │   ├── transcription_aws.py # Amazon Transcribe adapter (cloud, optional)
+│       │   ├── align_engine.py      # optional wav2vec2 forced alignment (word timing)
+│       │   ├── editor.py            # Claude EDL generation (Anthropic API or Bedrock)
+│       │   ├── audio_engine.py      # audio-specific FFmpeg filters (loudness, ...)
+│       │   └── renderer.py          # FFmpeg rendering / compositing
 │       └── storage.py       # project JSON persistence
 ├── frontend/
 │   └── src/
@@ -231,12 +267,13 @@ darkroom/
 │       └── api/
 │           ├── client.ts    # typed API client + WebSocket helper
 │           └── types.ts     # shared TypeScript types
-├── infra/                   # optional CDK deployment (Bedrock Lambda)
-│   ├── app.py               # CDK entry point
-│   ├── darkroom_stack.py    # Lambda + IAM + Function URL
+├── infra/                   # optional CDK deployment (TypeScript)
+│   ├── bin/darkroom.ts      # CDK entry point
+│   ├── lib/darkroom-stack.ts # Bedrock Lambda + Transcribe S3 bucket
 │   ├── lambda/
-│   │   └── handler.py       # async Lambda → Bedrock
-│   ├── requirements.txt
+│   │   └── handler.py       # async Lambda → Bedrock (Lambda runtime stays Python)
+│   ├── package.json
+│   ├── tsconfig.json
 │   └── cdk.json
 ├── projects/                # auto-created; stores project JSON + media + outputs
 ├── Makefile
@@ -318,8 +355,9 @@ projects/
 | PATCH | `/api/projects/:id/transcript/:index` | Edit a transcript segment's text |
 | PUT | `/api/projects/:id/word-cuts` | Save word-level cut list |
 | PUT | `/api/projects/:id/word-mutes` | Save word-level mute list |
-| POST | `/api/projects/:id/render` | Start FFmpeg render `{targets:[…]}` |
-| POST | `/api/projects/:id/render-short` | Render a named Short with subtitle options |
+| GET | `/api/projects/:id/resolution-check` | Warn if source cameras are below a requested export resolution `?resolution=1080p\|4k` |
+| POST | `/api/projects/:id/render` | Start FFmpeg render `{targets:[…], resolution?}` |
+| POST | `/api/projects/:id/render-short` | Render a named Short with subtitle options `{…, resolution?}` |
 | POST | `/api/projects/:id/preview` | Generate proxy preview video (async) |
 | GET | `/api/ws/:id` | WebSocket — stream job progress events |
 | GET | `/projects/:id/files/:path` | Serve project file (video / output) |
@@ -332,24 +370,30 @@ projects/
 |----------|---------|-------------|
 | `AI_PROVIDER` | `anthropic` | `anthropic` to use the Anthropic API; `bedrock` to use AWS Bedrock |
 | `ANTHROPIC_API_KEY` | — | **Required when `AI_PROVIDER=anthropic`.** Your Anthropic API key. |
-| `AWS_REGION` | `us-east-1` | AWS region for Bedrock calls (used when `AI_PROVIDER=bedrock`) |
+| `AWS_REGION` | `us-east-1` | AWS region for Bedrock/Transcribe calls |
 | `BEDROCK_MODEL_ID` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | Bedrock model ID override |
+| `TRANSCRIBE_PROVIDER` | `local` | `local` for faster-whisper; `aws` to default new projects to Amazon Transcribe |
+| `TRANSCRIBE_S3_BUCKET` | — | **Required when using Amazon Transcribe.** Scratch bucket for uploaded audio + job output; created by `cdk deploy` in `infra/` |
 
-Whisper model and language are set per-project in the upload UI, not in `.env`.
+Whisper model, language, and transcription provider are set per-project in the upload UI (defaulting from `.env`), not fixed globally.
 
 ---
 
-## Optional: CDK deployment (Bedrock Lambda)
+## Optional: CDK deployment
 
-The `infra/` directory contains an [AWS CDK](https://aws.amazon.com/cdk/) Python stack that deploys an async Lambda function wired to Bedrock. This is useful for serverless or multi-user deployments where you want the EDL generation to run in the cloud rather than locally.
+The `infra/` directory contains an [AWS CDK](https://aws.amazon.com/cdk/) **TypeScript** stack (`cdk-lib` + `constructs` — no Docker required to synth or deploy) that provisions:
+
+- an async Lambda function wired to Bedrock, for serverless/multi-user deployments where you want EDL generation to run in the cloud rather than locally
+- an S3 scratch bucket for **Amazon Transcribe** (see [Transcription provider](#5--transcription-provider-optional))
 
 ```
 infra/
-├── app.py              # CDK entry point
-├── darkroom_stack.py   # Stack: Lambda + IAM + Function URL
+├── bin/darkroom.ts        # CDK entry point
+├── lib/darkroom-stack.ts  # Stack: Lambda + IAM + Function URL + Transcribe bucket
 ├── lambda/
-│   └── handler.py      # Async Lambda handler → Bedrock
-├── requirements.txt    # aws-cdk-lib, constructs
+│   └── handler.py         # Async Lambda handler → Bedrock (Lambda runtime stays Python)
+├── package.json           # aws-cdk-lib, constructs, aws-cdk, ts-node, typescript
+├── tsconfig.json
 └── cdk.json
 ```
 
@@ -357,17 +401,16 @@ infra/
 
 ```bash
 cd infra
-python -m venv .venv && .venv/Scripts/Activate.ps1   # Windows
-# source .venv/bin/activate                           # macOS/Linux
-pip install -r requirements.txt
+npm install
 
-cdk bootstrap   # first time only, per account/region
-cdk deploy
+npx cdk bootstrap   # first time only, per account/region
+npx cdk deploy
 ```
 
 The stack outputs:
 - **`EdlFunctionArn`** — invoke via `boto3.client("lambda").invoke(...)`
 - **`EdlFunctionUrl`** — HTTPS endpoint (IAM-authenticated)
+- **`TranscribeBucketName`** — copy into `.env` as `TRANSCRIBE_S3_BUCKET` to enable `TRANSCRIBE_PROVIDER=aws`
 
 The Lambda accepts `{ "prompt": "<formatted prompt>", "retry": false }` and returns `{ "edl_raw": "<json string>" }`.
 
@@ -375,7 +418,11 @@ The Lambda accepts `{ "prompt": "<formatted prompt>", "retry": false }` and retu
 
 ## Costs
 
-Whisper transcription and FFmpeg rendering run locally and are always free. The only billable step is **Analyse** — the single Claude call that generates the EDL.
+Local Whisper transcription and FFmpeg rendering run locally and are always free. The only billable steps are **Analyse** (the Claude call that generates the EDL) and, if you opt into it per-project, **cloud transcription via Amazon Transcribe** instead of local Whisper.
+
+### Amazon Transcribe pricing (optional, only if `TRANSCRIBE_PROVIDER=aws`)
+
+Amazon Transcribe bills per second of audio processed, roughly **$0.024/minute** (standard tier, first 250k minutes/month — verify current rates on the [Transcribe pricing page](https://aws.amazon.com/transcribe/pricing/) before budgeting). A 30-minute, 2-speaker episode transcribes two ~30-minute audio tracks ≈ $1.44 total. Local faster-whisper remains $0.
 
 ### Model pricing
 
@@ -400,16 +447,17 @@ These are rough estimates. A dense multi-speaker episode produces more EDL segme
 
 Shorts clips and re-renders do **not** generate additional AI calls — they reuse the existing EDL.
 
-### CDK Lambda costs (infra/)
+### CDK stack costs (infra/)
 
 | Component | Cost |
 |-----------|------|
 | Lambda at idle | **$0.00** |
 | Lambda per invocation (512 MB × up to 5 min) | < $0.001 |
 | Bedrock model call | Same per-token rates as above |
+| Transcribe scratch S3 bucket (audio deleted after each job; 1-day lifecycle backstop) | Negligible — pennies/month even under regular use |
 | CDK bootstrap S3 storage (deployment artifact) | < $0.001 / month |
 
-The Lambda adds effectively zero overhead on top of the Bedrock model cost.
+The Lambda and Transcribe bucket add effectively zero overhead on top of the Bedrock/Transcribe usage cost itself.
 
 ---
 

@@ -13,7 +13,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, subscribeToProgress } from '../api/client'
-import type { EDL, EDLSegment, Project, WordCut, WordMute } from '../api/types'
+import type { EDL, EDLSegment, Project, Resolution, WordCut, WordMute } from '../api/types'
 import VideoPreview, { type VideoPreviewHandle } from '../components/VideoPreview/VideoPreview'
 import TranscriptEditor from '../components/TranscriptEditor/TranscriptEditor'
 
@@ -804,11 +804,19 @@ function download(filename: string, content: string, mime: string) {
 
 function RenderContent({ project, onChange }: { project: Project; onChange: (p: Project) => void }) {
   const [rendering, setRendering] = useState(false)
+  const [resolution, setResolution] = useState<Resolution>('1080p')
 
   async function handleRender() {
+    const { warnings } = await api.resolutionCheck(project.id, resolution)
+    if (warnings.length > 0) {
+      const proceed = window.confirm(
+        `${warnings.join('\n')}\n\nRender anyway?`,
+      )
+      if (!proceed) return
+    }
     setRendering(true)
     try {
-      await api.render(project.id, ['fullEdit'])
+      await api.render(project.id, ['fullEdit'], { resolution })
       onChange({ ...project, status: 'rendering' })
     } finally {
       setRendering(false)
@@ -822,6 +830,26 @@ function RenderContent({ project, onChange }: { project: Project; onChange: (p: 
           Run AI analysis first to generate an EDL.
         </p>
       )}
+
+      <div style={{ display: 'flex', gap: 4, marginBottom: 10 }}>
+        {(['1080p', '4k'] as const).map((res) => (
+          <button
+            key={res}
+            onClick={() => setResolution(res)}
+            style={{
+              flex: 1,
+              background: resolution === res ? 'var(--accent)' : 'var(--bg-card)',
+              color: resolution === res ? '#fff' : 'var(--text-muted)',
+              border: `1px solid ${resolution === res ? 'var(--accent)' : 'var(--border)'}`,
+              borderRadius: 6, padding: '4px 8px', fontSize: 12,
+              cursor: 'pointer', fontWeight: resolution === res ? 600 : 400,
+            }}
+          >
+            {res === '4k' ? '4K' : '1080p'}
+          </button>
+        ))}
+      </div>
+
       <button
         onClick={handleRender}
         disabled={!project.edl || rendering}
@@ -841,6 +869,11 @@ function RenderContent({ project, onChange }: { project: Project; onChange: (p: 
           <a href={render.url} download style={{ color: 'var(--accent)', fontSize: 12 }}>
             Download
           </a>
+          {render.warnings && render.warnings.length > 0 && (
+            <div style={{ marginTop: 6, color: '#c96', fontSize: 11, lineHeight: 1.4 }}>
+              {render.warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
+            </div>
+          )}
         </div>
       ))}
     </div>

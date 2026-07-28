@@ -2,7 +2,7 @@
  * Setup view — configure cameras/speakers, upload files, kick off transcription.
  * Mirrors the existing setup card from index.html.
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api/client'
 import type { Project } from '../api/types'
 
@@ -18,11 +18,11 @@ interface Props {
 }
 
 const WHISPER_MODELS = [
-  { value: 'base',   label: 'base — fast, less accurate' },
-  { value: 'small',  label: 'small — balanced' },
-  { value: 'medium', label: 'medium — good accuracy' },
-  { value: 'large',  label: 'large — best, slowest' },
-  { value: 'turbo',  label: 'turbo — fast + accurate' },
+  { value: 'base',     label: 'base — fast, less accurate' },
+  { value: 'small',    label: 'small — balanced' },
+  { value: 'medium',   label: 'medium — good accuracy' },
+  { value: 'turbo',    label: 'turbo — fast + accurate' },
+  { value: 'large-v3', label: 'large-v3 — best accuracy, slowest' },
 ]
 
 const LANGUAGES = [
@@ -48,8 +48,19 @@ export default function Setup({ project, onBack, onProcessing }: Props) {
   const [speakers, setSpeakers] = useState<SpeakerSlot[]>([{ name: '', file: null }])
   const [model, setModel] = useState('medium')
   const [language, setLanguage] = useState('en')
+  const [transcribeProvider, setTranscribeProvider] = useState<'local' | 'aws'>('local')
+  const [awsTranscribeConfigured, setAwsTranscribeConfigured] = useState(false)
+  const [alignAvailable, setAlignAvailable] = useState(false)
+  const [alignTranscript, setAlignTranscript] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    api.status().then((s) => {
+      setAwsTranscribeConfigured(s.aws_transcribe_configured)
+      setAlignAvailable(s.align_available)
+    })
+  }, [])
 
   function addSpeaker() {
     if (speakers.length < 4) setSpeakers((prev) => [...prev, { name: '', file: null }])
@@ -76,6 +87,8 @@ export default function Setup({ project, onBack, onProcessing }: Props) {
       }
       form.append('model', model)
       form.append('name', name.trim() || project.name)
+      form.append('transcribe_provider', transcribeProvider)
+      form.append('align_transcript', String(transcribeProvider === 'local' && alignTranscript))
       if (language) form.append('language', language)
 
       // Upload files (Content-Type is set automatically by FormData)
@@ -143,6 +156,20 @@ export default function Setup({ project, onBack, onProcessing }: Props) {
           )}
         </div>
 
+        <div style={{ marginBottom: 16 }}>
+          <span style={{ color: 'var(--text-muted)', fontSize: 12, display: 'block', marginBottom: 4 }}>Transcription engine</span>
+          <select
+            value={transcribeProvider}
+            onChange={(e) => setTranscribeProvider(e.target.value as 'local' | 'aws')}
+            style={{ width: '100%' }}
+          >
+            <option value="local">Local — faster-whisper (free, runs on this machine)</option>
+            <option value="aws" disabled={!awsTranscribeConfigured}>
+              Cloud — Amazon Transcribe{!awsTranscribeConfigured ? ' (not configured — see .env)' : ''}
+            </option>
+          </select>
+        </div>
+
         <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
           <label style={{ flex: 1 }}>
             <span style={{ color: 'var(--text-muted)', fontSize: 12, display: 'block', marginBottom: 4 }}>Language</span>
@@ -150,13 +177,32 @@ export default function Setup({ project, onBack, onProcessing }: Props) {
               {LANGUAGES.map((l) => <option key={l.value} value={l.value}>{l.label}</option>)}
             </select>
           </label>
-          <label style={{ flex: 1 }}>
-            <span style={{ color: 'var(--text-muted)', fontSize: 12, display: 'block', marginBottom: 4 }}>Whisper model</span>
-            <select value={model} onChange={(e) => setModel(e.target.value)} style={{ width: '100%' }}>
-              {WHISPER_MODELS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
-            </select>
-          </label>
+          {transcribeProvider === 'local' && (
+            <label style={{ flex: 1 }}>
+              <span style={{ color: 'var(--text-muted)', fontSize: 12, display: 'block', marginBottom: 4 }}>Whisper model</span>
+              <select value={model} onChange={(e) => setModel(e.target.value)} style={{ width: '100%' }}>
+                {WHISPER_MODELS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </select>
+            </label>
+          )}
         </div>
+
+        {transcribeProvider === 'local' && (
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 24, cursor: alignAvailable ? 'pointer' : 'default' }}>
+            <input
+              type="checkbox"
+              checked={alignTranscript}
+              disabled={!alignAvailable}
+              onChange={(e) => setAlignTranscript(e.target.checked)}
+              style={{ marginTop: 2 }}
+            />
+            <span style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.4 }}>
+              Improve word-timing accuracy with forced alignment (wav2vec2) — tighter word boundaries
+              for cuts/subtitles, adds processing time.
+              {!alignAvailable && ' Not installed — see README (pip install -e "backend/[align]").'}
+            </span>
+          </label>
+        )}
 
         {error && <p style={{ color: '#f55', marginBottom: 12 }}>{error}</p>}
 
