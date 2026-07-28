@@ -4,6 +4,8 @@
 
 A local-first video and podcast editor. Upload your pre-aligned camera or audio files, get an AI-generated edit decision list from Claude, review and tweak cuts in the browser, then render final exports via FFmpeg. Nothing leaves your machine.
 
+> **Darkroom v2 is in planning** — native recording, richer compositing, a choice of local/cloud transcription, 4K exports, and an AI Tools panel with per-project cost estimates. See [docs/v2-roadmap.md](docs/v2-roadmap.md).
+
 ---
 
 ## Stack
