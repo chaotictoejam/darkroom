@@ -9,6 +9,7 @@
  *   Delete / Backspace    → cuts the selected words' time range
  *   Space                 → toggles video play/pause
  *   Ctrl+Z / Cmd+Z        → undoes the last cut
+ *   Click a pause squiggle → selects it + shows toolbar (Cut pause / Restore)
  *
  * Visual states:
  *   Normal                → plain text
@@ -17,9 +18,26 @@
  *   EDL-cut               → gray strikethrough + dimmed (or hidden in clean view)
  *   Active (playing)      → accent underline
  *   Gap chip              → [x.xs] inline badge shown in clean view where cuts were made
+ *   Pause squiggle        → 〜 between words with a natural gap ≥0.4s; a longer pause renders
+ *                           as one 〜 per ~0.4s chunk, each independently selectable/cuttable —
+ *                           hover for that slice's duration, click to cut just it, red
+ *                           strikethrough once cut
  */
 import { useEffect, useRef, useState } from 'react'
 import type { EDLSegment, TranscriptSegment, WordCut, WordMute } from '../../api/types'
+
+// Mirrors the Timeline's pause markers in Editor.tsx — same threshold, same
+// light/heavy visual split, so a pause reads as the same thing in both places.
+const PAUSE_THRESHOLD = 0.4 // seconds
+
+// faster-whisper's word timestamps aren't frame-accurate at boundaries, so a
+// pause's detected [prevWord.end, nextWord.start] range can still contain a
+// sliver of the adjacent words' actual audio. Cutting the full range flush
+// clips them; leaving this much silence on each side instead is inaudible
+// but keeps the cut safely inside the true gap. (Forced alignment, if
+// enabled for the project, tightens word boundaries enough that this
+// matters less — but the padding is cheap insurance either way.)
+const PAUSE_CUT_PADDING = 0.1 // seconds
 
 // ── Flat word model ───────────────────────────────────────────────────────────
 
@@ -81,6 +99,7 @@ function mergeAndSort(cuts: WordCut[]): WordCut[] {
 type RenderItem =
   | { kind: 'word'; w: FlatWord }
   | { kind: 'gap'; startTime: number; endTime: number; gapKey: string }
+  | { kind: 'pause'; start: number; end: number; padStart: boolean; padEnd: boolean; pauseKey: string }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -108,8 +127,10 @@ interface Props {
 interface ToolbarState {
   x: number        // fixed screen x (center of toolbar)
   y: number        // fixed screen y (top of anchor word — toolbar renders above)
-  selStart: number // global word index start of selection
-  selEnd: number   // global word index end of selection (inclusive)
+  selStart: number // global word index start of selection (-1 when pauseRange is set)
+  selEnd: number   // global word index end of selection, inclusive (-1 when pauseRange is set)
+  /** Set when the toolbar targets a pause slice instead of a word selection. */
+  pauseRange?: { start: number; end: number; padStart: boolean; padEnd: boolean }
 }
 
 export default function TranscriptEditor({
@@ -165,8 +186,33 @@ export default function TranscriptEditor({
     })
   }
 
+  function openPauseToolbar(el: HTMLElement, start: number, end: number, padStart: boolean, padEnd: boolean) {
+    const rect = el.getBoundingClientRect()
+    setToolbar({
+      x: rect.left + rect.width / 2,
+      y: rect.top,
+      selStart: -1,
+      selEnd: -1,
+      pauseRange: { start, end, padStart, padEnd },
+    })
+    setSelRange(null)
+  }
+
   function cutToolbarSelection() {
     if (!toolbar) return
+    if (toolbar.pauseRange) {
+      // Only pad the edge(s) of this slice that actually border real word
+      // audio — an internal slice (part of a longer pause split into several
+      // squiggles) borders other silence on both sides, so it can be cut flush.
+      const { start, end, padStart, padEnd } = toolbar.pauseRange
+      const paddedStart = padStart ? start + PAUSE_CUT_PADDING : start
+      const paddedEnd = padEnd ? end - PAUSE_CUT_PADDING : end
+      if (paddedEnd > paddedStart) {
+        onCutsChange(mergeAndSort([...wordCuts, { start: paddedStart, end: paddedEnd }]))
+      }
+      setToolbar(null)
+      return
+    }
     const selected = words.current.filter(
       (w) => w.globalIndex >= toolbar.selStart && w.globalIndex <= toolbar.selEnd,
     )
@@ -179,6 +225,12 @@ export default function TranscriptEditor({
 
   function restoreToolbarSelection() {
     if (!toolbar) return
+    if (toolbar.pauseRange) {
+      const { start, end } = toolbar.pauseRange
+      onCutsChange(wordCuts.filter((c) => c.end <= start || c.start >= end))
+      setToolbar(null)
+      return
+    }
     const selected = words.current.filter(
       (w) => w.globalIndex >= toolbar.selStart && w.globalIndex <= toolbar.selEnd,
     )
@@ -220,15 +272,22 @@ export default function TranscriptEditor({
       const tag = (e.target as HTMLElement).tagName
       if (['INPUT', 'TEXTAREA', 'VIDEO', 'AUDIO'].includes(tag)) return
 
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selRange !== null) {
-        e.preventDefault()
-        const selected = words.current.filter((w) => isSelected(w.globalIndex))
-        if (selected.length === 0) return
-        const newCut: WordCut = { start: selected[0].start, end: selected[selected.length - 1].end }
-        onCutsChange(mergeAndSort([...wordCuts, newCut]))
-        setSelRange(null)
-        setToolbar(null)
-        return
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (toolbar?.pauseRange) {
+          e.preventDefault()
+          cutToolbarSelection()
+          return
+        }
+        if (selRange !== null) {
+          e.preventDefault()
+          const selected = words.current.filter((w) => isSelected(w.globalIndex))
+          if (selected.length === 0) return
+          const newCut: WordCut = { start: selected[0].start, end: selected[selected.length - 1].end }
+          onCutsChange(mergeAndSort([...wordCuts, newCut]))
+          setSelRange(null)
+          setToolbar(null)
+          return
+        }
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && wordCuts.length > 0) {
         e.preventDefault()
@@ -247,7 +306,7 @@ export default function TranscriptEditor({
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [selRange, wordCuts, onCutsChange, onTogglePlay])
+  }, [selRange, toolbar, wordCuts, onCutsChange, onTogglePlay]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Close toolbar / selection on outside click ─────────────────────────────
   useEffect(() => {
@@ -343,6 +402,10 @@ export default function TranscriptEditor({
   const grouped: { segIndex: number; label: string; items: RenderItem[] }[] = []
   let cutRunFirst: FlatWord | null = null
   let cutRunLast:  FlatWord | null = null
+  // Last word actually rendered (in either view) — pause gaps are measured
+  // against this, not the literal previous word, so a pause spanning hidden
+  // cut/EDL-cut words in clean view still shows up before the next visible word.
+  let lastRenderedWord: FlatWord | null = null
 
   function flushCutRun(group: { items: RenderItem[] }) {
     if (cutRunFirst && cutRunLast) {
@@ -355,6 +418,32 @@ export default function TranscriptEditor({
     }
     cutRunFirst = null
     cutRunLast  = null
+  }
+
+  // Splits a pause into one squiggle per PAUSE_THRESHOLD-sized chunk (the
+  // final chunk absorbs whatever remainder doesn't divide evenly), so a
+  // longer pause reads as a run of individually clickable/cuttable squiggles
+  // instead of one glyph representing the whole gap.
+  function pushPauseIfNeeded(group: { items: RenderItem[] }, w: FlatWord) {
+    if (!lastRenderedWord) return
+    const gapStart = lastRenderedWord.end
+    const gapEnd = w.start
+    const dur = gapEnd - gapStart
+    if (dur < PAUSE_THRESHOLD) return
+
+    const count = Math.max(1, Math.floor(dur / PAUSE_THRESHOLD))
+    for (let i = 0; i < count; i++) {
+      const sliceStart = gapStart + i * PAUSE_THRESHOLD
+      const sliceEnd = i === count - 1 ? gapEnd : sliceStart + PAUSE_THRESHOLD
+      group.items.push({
+        kind: 'pause',
+        start: sliceStart,
+        end: sliceEnd,
+        padStart: i === 0,
+        padEnd: i === count - 1,
+        pauseKey: `pause-${w.globalIndex}-${i}`,
+      })
+    }
   }
 
   for (const w of words.current) {
@@ -376,10 +465,16 @@ export default function TranscriptEditor({
         cutRunLast = w
       } else {
         flushCutRun(group)
-        if (!edlCut) group.items.push({ kind: 'word', w })
+        if (!edlCut) {
+          pushPauseIfNeeded(group, w)
+          group.items.push({ kind: 'word', w })
+          lastRenderedWord = w
+        }
       }
     } else {
+      pushPauseIfNeeded(group, w)
       group.items.push({ kind: 'word', w })
+      lastRenderedWord = w
     }
   }
   // Flush any trailing cut run in the last segment
@@ -393,6 +488,9 @@ export default function TranscriptEditor({
   const allWordCut   = toolbarWords.length > 0 && toolbarWords.every((w) => isCut(w, wordCuts))
   const anyWordMuted = toolbarWords.some((w) => isMuted(w, wordMutes))
   const anchorEdlSeg = toolbarWords.length > 0 ? getEdlSegment(toolbarWords[0], edlSegments) : null
+  const pauseAlreadyCut = toolbar?.pauseRange
+    ? wordCuts.some((c) => c.start < toolbar.pauseRange!.end && c.end > toolbar.pauseRange!.start)
+    : false
 
   return (
     <>
@@ -440,7 +538,11 @@ export default function TranscriptEditor({
           )}
 
           {/* Cut / Restore */}
-          {allWordCut ? (
+          {toolbar.pauseRange ? (
+            pauseAlreadyCut
+              ? <ToolbarBtn label="Restore" onClick={restoreToolbarSelection} color="#4db87a" />
+              : <ToolbarBtn label="Cut pause" onClick={cutToolbarSelection} />
+          ) : allWordCut ? (
             <ToolbarBtn label="Restore" onClick={restoreToolbarSelection} color="#4db87a" />
           ) : anyWordCut ? (
             <>
@@ -451,13 +553,16 @@ export default function TranscriptEditor({
             <ToolbarBtn label="Cut" onClick={cutToolbarSelection} />
           )}
 
-          <div style={{ width: 1, background: '#3a3a3a', alignSelf: 'stretch', margin: '3px 2px' }} />
-
-          {/* Mute / Unmute */}
-          {anyWordMuted
-            ? <ToolbarBtn label="🔊 Unmute" onClick={unmuteToolbarSelection} />
-            : <ToolbarBtn label="🔇 Mute" onClick={muteToolbarSelection} />
-          }
+          {/* Mute / Unmute — not applicable to a pause (there's nothing to mute) */}
+          {!toolbar.pauseRange && (
+            <>
+              <div style={{ width: 1, background: '#3a3a3a', alignSelf: 'stretch', margin: '3px 2px' }} />
+              {anyWordMuted
+                ? <ToolbarBtn label="🔊 Unmute" onClick={unmuteToolbarSelection} />
+                : <ToolbarBtn label="🔇 Mute" onClick={muteToolbarSelection} />
+              }
+            </>
+          )}
         </div>
       )}
 
@@ -493,6 +598,41 @@ export default function TranscriptEditor({
             </div>
             <div>
               {group.items.map((item) => {
+                if (item.kind === 'pause') {
+                  const isPauseSelected = toolbar?.pauseRange?.start === item.start && toolbar?.pauseRange?.end === item.end
+                  const isPauseCut = wordCuts.some((c) => c.start < item.end && c.end > item.start)
+                  const sliceDur = item.end - item.start
+                  return (
+                    <span
+                      key={item.pauseKey}
+                      title={isPauseCut ? `${sliceDur.toFixed(2)}s of pause — cut (click to restore)` : `${sliceDur.toFixed(2)}s of pause — click to cut`}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        openPauseToolbar(e.currentTarget, item.start, item.end, item.padStart, item.padEnd)
+                      }}
+                      style={{
+                        display: 'inline-block',
+                        marginRight: 4,
+                        padding: '0 3px',
+                        borderRadius: 3,
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                        color: isPauseCut ? '#e05555' : 'var(--text-muted)',
+                        opacity: isPauseCut ? 0.6 : 0.55,
+                        textDecoration: isPauseCut ? 'line-through' : 'none',
+                        background: isPauseSelected ? 'rgba(59,130,246,0.35)' : 'transparent',
+                        verticalAlign: 'middle',
+                        cursor: 'pointer',
+                        userSelect: 'none',
+                      }}
+                      onMouseEnter={(e) => { if (!isPauseSelected) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.08)' }}
+                      onMouseLeave={(e) => { if (!isPauseSelected) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+                    >
+                      〜
+                    </span>
+                  )
+                }
+
                 if (item.kind === 'gap') {
                   const dur = item.endTime - item.startTime
                   return (
