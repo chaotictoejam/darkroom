@@ -96,7 +96,7 @@ interface Props {
   onBack: () => void
 }
 
-type SidePanel = 'edl' | 'shorts' | 'render' | 'manual' | 'advanced'
+type SidePanel = 'edl' | 'shorts' | 'speakers' | 'render' | 'manual' | 'advanced'
 type PreviewLayout = 'multi' | 'solo'
 
 export default function Editor({ project, onChange, onBack }: Props) {
@@ -324,6 +324,14 @@ export default function Editor({ project, onChange, onBack }: Props) {
               />
             </SidebarSection>
           )}
+
+          <SidebarSection
+            label="Speakers"
+            open={openPanels.has('speakers')}
+            onToggle={() => togglePanel('speakers')}
+          >
+            <SpeakersContent project={project} onChange={onChange} />
+          </SidebarSection>
 
           <SidebarSection
             label="Render"
@@ -798,6 +806,67 @@ function download(filename: string, content: string, mime: string) {
   const a = Object.assign(document.createElement('a'), { href: url, download: filename })
   a.click()
   URL.revokeObjectURL(url)
+}
+
+// ── Speakers content (sidebar) ───────────────────────────────────────────────────
+
+function SpeakersContent({ project, onChange }: { project: Project; onChange: (p: Project) => void }) {
+  const [names, setNames] = useState<Record<string, string>>(
+    () => Object.fromEntries(project.speakers.map((s) => [s.id, s.name])),
+  )
+  const [savingId, setSavingId] = useState<string | null>(null)
+
+  // Keep local edit buffer in sync if the project reloads from elsewhere
+  // (e.g. after a rename lands and onChange replaces the whole project).
+  useEffect(() => {
+    setNames(Object.fromEntries(project.speakers.map((s) => [s.id, s.name])))
+  }, [project.speakers])
+
+  async function commit(speakerId: string) {
+    const name = (names[speakerId] ?? '').trim()
+    const current = project.speakers.find((s) => s.id === speakerId)
+    if (!current || !name || name === current.name) {
+      // Revert an empty/unchanged edit back to the saved name
+      setNames((prev) => ({ ...prev, [speakerId]: current?.name ?? prev[speakerId] }))
+      return
+    }
+    setSavingId(speakerId)
+    try {
+      const updated = await api.renameSpeaker(project.id, speakerId, name)
+      onChange(updated)
+    } finally {
+      setSavingId(null)
+    }
+  }
+
+  if (project.speakers.length === 0) {
+    return (
+      <p style={{ padding: 14, color: 'var(--text-muted)', fontSize: 13, margin: 0 }}>
+        No speakers yet.
+      </p>
+    )
+  }
+
+  return (
+    <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {project.speakers.map((s) => (
+        <label key={s.id} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Camera {s.id}</span>
+          <input
+            value={names[s.id] ?? ''}
+            onChange={(e) => setNames((prev) => ({ ...prev, [s.id]: e.target.value }))}
+            onBlur={() => commit(s.id)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+              if (e.key === 'Escape') setNames((prev) => ({ ...prev, [s.id]: s.name }))
+            }}
+            disabled={savingId === s.id}
+            style={{ fontSize: 13, width: '100%' }}
+          />
+        </label>
+      ))}
+    </div>
+  )
 }
 
 // ── Render content (sidebar) ───────────────────────────────────────────────────

@@ -51,6 +51,12 @@ export const api = {
   deleteProject: (id: string) =>
     request<{ ok: boolean }>(`/api/projects/${id}`, { method: 'DELETE' }),
 
+  renameSpeaker: (id: string, speakerId: string, name: string) =>
+    request<Project>(`/api/projects/${id}/speakers/${speakerId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+
   resetEdl: (id: string) =>
     request<Project>(`/api/projects/${id}/reset-edl`, { method: 'POST' }),
 

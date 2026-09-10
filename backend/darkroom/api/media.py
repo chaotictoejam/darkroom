@@ -62,6 +62,39 @@ async def upload_files(
     return proj
 
 
+class RenameSpeakerBody(BaseModel):
+    name: str
+
+
+@router.patch("/projects/{project_id}/speakers/{speaker_id}")
+def rename_speaker(project_id: str, speaker_id: str, body: RenameSpeakerBody):
+    proj = get_project(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    new_name = body.name.strip()
+    if not new_name:
+        raise HTTPException(400, "Speaker name cannot be empty")
+
+    speaker = next((s for s in proj.get("speakers", []) if s["id"] == speaker_id), None)
+    if not speaker:
+        raise HTTPException(404, "Speaker not found")
+
+    speaker["name"] = new_name
+
+    # Speaker name is also denormalized onto every transcript segment (both
+    # the raw per-speaker transcripts and the merged chronological list) —
+    # keep them in sync rather than looking the name up by id at render time.
+    for seg in proj.get("transcripts", {}).get(speaker_id, []):
+        seg["speaker_name"] = new_name
+    for seg in proj.get("merged_transcript", []):
+        if seg.get("speaker_id") == speaker_id:
+            seg["speaker_name"] = new_name
+
+    save_project(proj)
+    return proj
+
+
 class WordCutItem(BaseModel):
     start: float
     end: float
