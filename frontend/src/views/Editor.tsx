@@ -680,6 +680,43 @@ function AdvancedTools({
     download(`${project.name}-transcript.txt`, lines.join('\n\n'), 'text/plain')
   }
 
+  function exportTimedTranscript() {
+    const lines = project.merged_transcript.map(
+      (seg) => `[${clockTime(seg.start)} → ${clockTime(seg.end)}] ${seg.speaker_name}: ${seg.text}`,
+    )
+    download(`${project.name}-transcript-timed.txt`, lines.join('\n'), 'text/plain')
+  }
+
+  function exportSrt() {
+    const body = project.merged_transcript
+      .map(
+        (seg, i) =>
+          `${i + 1}\n${stampTime(seg.start, ',')} --> ${stampTime(seg.end, ',')}\n` +
+          `${seg.speaker_name}: ${seg.text}`,
+      )
+      .join('\n\n')
+    download(`${project.name}-transcript.srt`, body + '\n', 'text/plain')
+  }
+
+  function exportVtt() {
+    const body = project.merged_transcript
+      .map(
+        (seg) =>
+          `${stampTime(seg.start, '.')} --> ${stampTime(seg.end, '.')}\n` +
+          `<v ${seg.speaker_name}>${seg.text}`,
+      )
+      .join('\n\n')
+    download(`${project.name}-transcript.vtt`, `WEBVTT\n\n${body}\n`, 'text/vtt')
+  }
+
+  function exportTranscriptJson() {
+    download(
+      `${project.name}-transcript.json`,
+      JSON.stringify(project.merged_transcript, null, 2),
+      'application/json',
+    )
+  }
+
   function exportEdl() {
     if (!project.edl) return
     download(
@@ -706,7 +743,11 @@ function AdvancedTools({
   return (
     <>
       <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <AdvBtn label="Export Transcript" onClick={exportTranscript} />
+        <AdvBtn label="Export Transcript (.txt)" onClick={exportTranscript} />
+        <AdvBtn label="Export Timed Transcript (.txt)" onClick={exportTimedTranscript} />
+        <AdvBtn label="Export Subtitles (.srt)" onClick={exportSrt} />
+        <AdvBtn label="Export Subtitles (.vtt)" onClick={exportVtt} />
+        <AdvBtn label="Export Transcript + Word Timings (.json)" onClick={exportTranscriptJson} />
         <AdvBtn label="Export EDL" onClick={exportEdl} disabled={!project.edl} />
         <div style={{ height: 1, background: 'rgba(180,50,50,0.2)', margin: '4px 0' }} />
         <AdvBtn label="Redo Manual Analysis" onClick={() => setConfirming(true)} warning />
@@ -799,6 +840,24 @@ function AdvBtn({
       {label}
     </button>
   )
+}
+
+/** HH:MM:SS.mmm — `sep` is ',' for SRT, '.' for WebVTT. */
+function stampTime(seconds: number, sep: ',' | '.'): string {
+  const ms = Math.max(0, Math.round(seconds * 1000))
+  const p = (n: number, w = 2) => String(n).padStart(w, '0')
+  return (
+    `${p(Math.floor(ms / 3_600_000))}:` +
+    `${p(Math.floor((ms % 3_600_000) / 60_000))}:` +
+    `${p(Math.floor((ms % 60_000) / 1000))}${sep}${p(ms % 1000, 3)}`
+  )
+}
+
+/** HH:MM:SS for human-readable timed transcripts. */
+function clockTime(seconds: number): string {
+  const t = Math.max(0, Math.round(seconds))
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(Math.floor(t / 3600))}:${p(Math.floor((t % 3600) / 60))}:${p(t % 60)}`
 }
 
 function download(filename: string, content: string, mime: string) {
