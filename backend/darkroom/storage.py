@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Allow override via env var so tests can redirect to a temp directory.
+# Allow override via env var (e.g. Docker mounts projects at /app/projects).
 PROJECTS_DIR = Path(os.getenv("DARKROOM_PROJECTS_DIR", str(Path(__file__).parent.parent.parent / "projects")))
 
 

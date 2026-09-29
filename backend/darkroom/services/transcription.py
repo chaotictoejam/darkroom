@@ -1,9 +1,8 @@
 """
-processor.py — Whisper transcription and transcript merge
+transcription.py — Whisper transcription and transcript merge
 """
 
 import os
-import re
 import shutil
 import subprocess
 import tempfile

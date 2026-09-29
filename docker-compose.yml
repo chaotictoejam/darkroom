@@ -1,5 +1,3 @@
-version: "3.9"
-
 # Docker Compose is optional — primarily useful for CI or reproducible demos.
 # For day-to-day dev, use `make dev` directly (Whisper model downloads on first run
 # and is cached in the venv, not inside the container).

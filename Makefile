@@ -16,7 +16,7 @@ VENV_PYTHON := $(if $(wildcard .venv/Scripts/python.exe),.venv/Scripts/python.ex
 
 install:
 	@echo "→ Installing Python backend..."
-	$(VENV_PYTHON) -m pip install -e "backend/[dev]"
+	$(VENV_PYTHON) -m pip install -e backend/
 	@echo "→ Installing frontend dependencies..."
 	cd frontend && npm install
 	@echo ""

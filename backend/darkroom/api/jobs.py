@@ -6,11 +6,10 @@ import asyncio
 import importlib.util
 import os
 import re
-import shutil
 import threading
 import traceback
 from collections import defaultdict
-from typing import Any, Optional
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel

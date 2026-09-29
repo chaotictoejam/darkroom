@@ -19,10 +19,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=8.0",
-    "httpx>=0.27",
-]
 aws = [
     "boto3>=1.34.0",
 ]
