@@ -13,6 +13,7 @@ Requires boto3 (installed via the `aws` extra) and:
 """
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -20,6 +21,10 @@ import tempfile
 import time
 import urllib.request
 import uuid
+
+from .aws_errors import AWSCredentialsError, credentials_message, find_credential_error
+
+logger = logging.getLogger(__name__)
 
 # Amazon Transcribe wants BCP-47 codes; Darkroom's language picker (see
 # Setup.tsx's LANGUAGES list) uses the same short ISO codes faster-whisper does.
@@ -36,6 +41,18 @@ _PAUSE_GAP_SECONDS = 0.7
 
 def _bcp47(language: str | None) -> str:
     return _LANGUAGE_MAP.get((language or "en").lower(), "en-US")
+
+
+def _check_credentials(region: str) -> None:
+    """Fail fast on missing/expired credentials, before spending time extracting audio."""
+    import boto3
+    try:
+        boto3.client("sts", region_name=region).get_caller_identity()
+    except Exception as exc:
+        cred = find_credential_error(exc)
+        if cred:
+            raise AWSCredentialsError(credentials_message("Amazon Transcribe", cred)) from exc
+        raise
 
 
 def _extract_audio_flac(file_path: str) -> str:
@@ -125,6 +142,7 @@ def transcribe_file_aws(
     audio_path = _extract_audio_flac(file_path)
     key = f"darkroom-transcribe/{uuid.uuid4().hex}.flac"
     job_name = f"darkroom-{uuid.uuid4().hex}"
+    job_started = False
 
     try:
         s3.upload_file(audio_path, bucket, key)
@@ -137,6 +155,7 @@ def transcribe_file_aws(
             MediaFormat="flac",
             LanguageCode=_bcp47(language),
         )
+        job_started = True
 
         while True:
             resp = transcribe.get_transcription_job(TranscriptionJobName=job_name)
@@ -158,6 +177,20 @@ def transcribe_file_aws(
             progress_callback(0.95)
 
         return _map_transcribe_result(result, speaker_id, speaker_name)
+    except Exception as exc:
+        cred = find_credential_error(exc)
+        if not cred:
+            raise
+        msg = credentials_message("Amazon Transcribe", cred)
+        if job_started:
+            # Credentials expired mid-job (long episodes can outlast an SSO session):
+            # AWS keeps running — and billing — the job even though we've lost track of it.
+            msg += (
+                f"\n\nTranscribe job '{job_name}' had already started and may still finish "
+                f"(and be billed) — check the Amazon Transcribe console in {region}. "
+                f"The uploaded audio (s3://{bucket}/{key}) is removed by the bucket's 1-day lifecycle rule."
+            )
+        raise AWSCredentialsError(msg) from exc
     finally:
         try:
             os.unlink(audio_path)
@@ -165,12 +198,13 @@ def transcribe_file_aws(
             pass
         try:
             s3.delete_object(Bucket=bucket, Key=key)
-        except Exception:
-            pass
-        try:
-            transcribe.delete_transcription_job(TranscriptionJobName=job_name)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Couldn't delete s3://%s/%s: %s", bucket, key, exc)
+        if job_started:
+            try:
+                transcribe.delete_transcription_job(TranscriptionJobName=job_name)
+            except Exception as exc:
+                logger.warning("Couldn't delete Transcribe job %s: %s", job_name, exc)
 
 
 def transcribe_all_aws(speakers: list[dict], language: str | None = None, progress_callback=None) -> dict[str, list]:
@@ -181,6 +215,7 @@ def transcribe_all_aws(speakers: list[dict], language: str | None = None, progre
     """
     transcripts = {}
     total = len(speakers)
+    _check_credentials(os.getenv("AWS_REGION", "us-east-1"))
 
     for i, speaker in enumerate(speakers):
         if progress_callback:

@@ -6,6 +6,7 @@ import json
 import os
 import re
 
+from .aws_errors import AWSCredentialsError, credentials_message, find_credential_error
 from .transcription import format_for_claude
 
 
@@ -107,40 +108,43 @@ def generate_skip_edl(merged_transcript: list[dict], speakers: list[dict]) -> di
     return {"segments": segments, "clips": []}
 
 
-def _call_anthropic(prompt: str) -> str:
+DEFAULT_MODEL = "claude-opus-5-5"
+
+
+def _client_and_model(provider: str):
+    """Return (client, model_id) for the configured provider — both expose the same messages API."""
     import anthropic
+    model = os.getenv("CLAUDE_MODEL", DEFAULT_MODEL)
+    if provider == "bedrock":
+        client = anthropic.AnthropicBedrockMantle(aws_region=os.getenv("AWS_REGION", "us-east-1"))
+        # Bedrock model IDs are the Anthropic ID with an "anthropic." prefix
+        return client, os.getenv("BEDROCK_MODEL_ID", f"anthropic.{model}")
+
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key or api_key == "your_anthropic_api_key_here":
         raise ValueError("ANTHROPIC_API_KEY is not set in .env")
-    client = anthropic.Anthropic(api_key=api_key)
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=8192,
+    return anthropic.Anthropic(api_key=api_key), model
+
+
+def _call_claude(prompt: str, provider: str) -> str:
+    client, model = _client_and_model(provider)
+    # Streamed so long transcripts can't hit the HTTP timeout; max_tokens leaves
+    # room for the model's thinking on top of a large EDL.
+    with client.messages.stream(
+        model=model,
+        max_tokens=64000,
+        output_config={"effort": "medium"},
         system=_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
-    )
-    return message.content[0].text.strip()
+    ) as stream:
+        message = stream.get_final_message()
 
-
-def _call_bedrock(prompt: str) -> str:
-    import boto3
-    model_id = os.getenv("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
-    region = os.getenv("AWS_REGION", "us-east-1")
-    client = boto3.client("bedrock-runtime", region_name=region)
-    body = json.dumps({
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 8192,
-        "system": _SYSTEM,
-        "messages": [{"role": "user", "content": prompt}],
-    })
-    response = client.invoke_model(
-        modelId=model_id,
-        body=body,
-        contentType="application/json",
-        accept="application/json",
-    )
-    result = json.loads(response["body"].read())
-    return result["content"][0]["text"].strip()
+    if message.stop_reason == "refusal":
+        raise ValueError("Claude declined to generate an EDL for this transcript")
+    if message.stop_reason == "max_tokens":
+        raise ValueError("Claude's response was cut off (max_tokens) before the EDL was complete")
+    # Thinking blocks come first — only the text blocks hold the EDL
+    return "".join(b.text for b in message.content if b.type == "text").strip()
 
 
 def generate_edl(merged_transcript: list[dict], speakers: list[dict], retry: bool = False) -> dict:
@@ -161,10 +165,13 @@ def generate_edl(merged_transcript: list[dict], speakers: list[dict], retry: boo
     if retry:
         prompt += _STRICT_SUFFIX
 
-    if provider == "bedrock":
-        raw = _call_bedrock(prompt)
-    else:
-        raw = _call_anthropic(prompt)
+    try:
+        raw = _call_claude(prompt, provider)
+    except Exception as exc:
+        cred = find_credential_error(exc) if provider == "bedrock" else None
+        if cred:
+            raise AWSCredentialsError(credentials_message("Bedrock", cred)) from exc
+        raise
 
     # Strip accidental markdown fences
     if raw.startswith("```"):

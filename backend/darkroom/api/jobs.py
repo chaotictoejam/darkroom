@@ -6,6 +6,7 @@ import asyncio
 import importlib.util
 import os
 import re
+import sys
 import threading
 import traceback
 from collections import defaultdict
@@ -14,6 +15,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
+from ..services.aws_errors import AWSCredentialsError
 from ..services.editor import build_prompt, generate_edl, generate_skip_edl, validate_edl
 from ..services.renderer import (
     _detect_face_center_ratio,
@@ -81,6 +83,13 @@ async def ws_progress(websocket: WebSocket, project_id: str) -> None:
                 _queues[project_id].remove(q)
             except ValueError:
                 pass
+
+
+def _error_message() -> str:
+    """Progress message for the exception being handled — plain text for errors the user can fix."""
+    if isinstance(sys.exc_info()[1], AWSCredentialsError):
+        return str(sys.exc_info()[1])
+    return traceback.format_exc()
 
 
 def _update_progress(project_id: str, **kwargs) -> None:
@@ -179,7 +188,7 @@ def start_transcription(project_id: str):
             _update_progress(
                 project_id,
                 status="error",
-                progress={"step": "error", "percent": 0, "message": traceback.format_exc()},
+                progress={"step": "error", "percent": 0, "message": _error_message()},
             )
 
     threading.Thread(target=_run, daemon=True).start()
@@ -213,7 +222,7 @@ def analyze_project(project_id: str):
             _update_progress(
                 project_id,
                 status="error",
-                progress={"step": "error", "percent": 0, "message": traceback.format_exc()},
+                progress={"step": "error", "percent": 0, "message": _error_message()},
             )
 
     threading.Thread(target=_run, daemon=True).start()
@@ -334,7 +343,7 @@ def start_render(project_id: str, body: RenderBody):
             _update_progress(
                 project_id,
                 status="error",
-                progress={"step": "error", "percent": 0, "message": traceback.format_exc()},
+                progress={"step": "error", "percent": 0, "message": _error_message()},
             )
         finally:
             lock.release()
@@ -426,7 +435,7 @@ def start_render_short(project_id: str, body: RenderShortBody):
             _update_progress(
                 project_id,
                 status="error",
-                progress={"step": "error", "percent": 0, "message": traceback.format_exc()},
+                progress={"step": "error", "percent": 0, "message": _error_message()},
             )
         finally:
             lock.release()

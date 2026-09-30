@@ -14,7 +14,7 @@ A local-first video and podcast editor. Upload your pre-aligned camera or audio 
 |-------|-----------|
 | Backend | Python · FastAPI |
 | Transcription | faster-whisper (local, VAD-filtered) or Amazon Transcribe (cloud, optional) |
-| AI editing | Anthropic Claude (`claude-sonnet-4-6`) or AWS Bedrock (`claude-sonnet-4-5`) |
+| AI editing | Anthropic Claude (`claude-opus-5-5`) via the Anthropic API or AWS Bedrock |
 | Rendering | FFmpeg |
 | Frontend | React · TypeScript · Vite |
 | State | JSON files in `projects/` |
@@ -28,7 +28,7 @@ A local-first video and podcast editor. Upload your pre-aligned camera or audio 
 - FFmpeg (full build — required for rendering)
 - An Anthropic API key  
   **or**  
-  AWS credentials with access to Bedrock model `us.anthropic.claude-sonnet-4-5-20250929-v1:0`
+  AWS credentials with access to the configured Claude model on Bedrock
 
 ---
 
@@ -121,12 +121,12 @@ Get a key at <https://console.anthropic.com> → API Keys → Create Key.
 
 #### Option B — AWS Bedrock
 
-Requires AWS credentials available in the environment (via `AWS_PROFILE`, `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, or an IAM role) and the model `us.anthropic.claude-sonnet-4-5-20250929-v1:0` enabled in your Bedrock console.
+Requires AWS credentials (a Bedrock API key is recommended — see [AWS credentials](#6--aws-credentials-bedrock--amazon-transcribe-only)) and access to the configured Claude model in your Bedrock console. Darkroom calls Bedrock through the Anthropic SDK's Bedrock client, so both providers run the same request.
 
 ```env
 AI_PROVIDER=bedrock
 AWS_REGION=us-east-1
-# BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0  # default, override if needed
+# BEDROCK_MODEL_ID=anthropic.claude-opus-5-5  # default: "anthropic." + CLAUDE_MODEL
 ```
 
 Also install the `boto3` extra:
@@ -147,7 +147,7 @@ TRANSCRIBE_PROVIDER=local        # default
 # AWS_REGION=us-east-1
 ```
 
-Requires the same `boto3` extra as Bedrock above, plus a scratch S3 bucket (deploy `infra/` — see [Optional: CDK deployment](#optional-cdk-deployment) — or point `TRANSCRIBE_S3_BUCKET` at your own) and AWS credentials with `transcribe:StartTranscriptionJob` / `transcribe:GetTranscriptionJob` and `s3:PutObject`/`GetObject`/`DeleteObject` on that bucket.
+Requires the same `boto3` extra as Bedrock above, plus a scratch S3 bucket (deploy `infra/` — see [Optional: CDK deployment](#optional-cdk-deployment) — or point `TRANSCRIBE_S3_BUCKET` at your own) and AWS credentials that can run Transcribe jobs and read/write that bucket — see [AWS credentials](#6--aws-credentials-bedrock--amazon-transcribe-only) for a ready-made IAM policy.
 
 #### Improving local accuracy
 
@@ -184,6 +184,59 @@ The local faster-whisper path reads three optional machine-level settings from `
 **`WHISPER_CPU_THREADS`** defaults to autodetect (`0`), which is usually fine — set it explicitly only if you notice faster-whisper isn't using your CPU well (e.g. pin it to your physical core count, not hyperthreaded/SMT thread count, to avoid oversubscription if something else on the machine is also CPU-heavy).
 
 These are the same three values passed straight through to `WhisperModel(...)` — [faster-whisper's own docs](https://github.com/SYSTRAN/faster-whisper) cover every valid combination in more depth than is worth duplicating here.
+
+---
+
+### 6 — AWS credentials (Bedrock / Amazon Transcribe only)
+
+Skip this if you use the Anthropic API and local Whisper.
+
+Darkroom uses whatever AWS credentials are in its environment, including an `aws sso login` session. SSO and other temporary logins expire, typically after 1–12 hours. That's fine at a terminal, but a long Transcribe job can outlast the session, and Analyse fails if you come back after it has expired. For Darkroom, long-lived credentials scoped to exactly what it needs work better:
+
+**Bedrock — use a Bedrock API key.** In the Bedrock console, open **API keys** and generate a long-term key (pick an expiry you're comfortable with). Add it to `.env`:
+
+```env
+AWS_BEARER_TOKEN_BEDROCK=your_bedrock_api_key
+```
+
+When it's set, Darkroom's Bedrock client uses it instead of your AWS login. Model access for the configured Claude model still has to be enabled in the Bedrock console. The key only works for Bedrock, not for Transcribe.
+
+**Amazon Transcribe — use a dedicated IAM user.** Create an IAM user with no console access and attach this policy (replace the bucket name with your `TRANSCRIBE_S3_BUCKET`):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "transcribe:StartTranscriptionJob",
+        "transcribe:GetTranscriptionJob",
+        "transcribe:DeleteTranscriptionJob"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::darkroom-transcribe-xxxxxxxx/*"
+    }
+  ]
+}
+```
+
+Create an access key for the user and add it to `.env`:
+
+```env
+AWS_ACCESS_KEY_ID=AKIA...
+AWS_SECRET_ACCESS_KEY=...
+```
+
+Access keys in `.env` take precedence over an SSO session. If you use Bedrock **without** an API key, add `bedrock:InvokeModel` for your model to the same user.
+
+These credentials don't expire, so treat them like any other secret: `.env` is gitignored, keep the file private, and rotate the keys periodically.
+
+**If credentials expire or are rejected**, Darkroom stops the job with a message saying so, instead of a stack trace, and checks your Transcribe credentials before it spends time extracting audio. If the credentials expire while a Transcribe job is already running, the message names the job, because AWS may still finish (and bill) it. Check the Amazon Transcribe console if that happens.
 
 ---
 
@@ -287,9 +340,7 @@ darkroom/
 │           └── types.ts     # shared TypeScript types
 ├── infra/                   # optional CDK deployment (TypeScript)
 │   ├── bin/darkroom.ts      # CDK entry point
-│   ├── lib/darkroom-stack.ts # Bedrock Lambda + Transcribe S3 bucket
-│   ├── lambda/
-│   │   └── handler.py       # async Lambda → Bedrock (Lambda runtime stays Python)
+│   ├── lib/darkroom-stack.ts # Transcribe S3 bucket
 │   ├── package.json
 │   ├── tsconfig.json
 │   └── cdk.json
@@ -389,7 +440,8 @@ projects/
 | `AI_PROVIDER` | `anthropic` | `anthropic` to use the Anthropic API; `bedrock` to use AWS Bedrock |
 | `ANTHROPIC_API_KEY` | — | **Required when `AI_PROVIDER=anthropic`.** Your Anthropic API key. |
 | `AWS_REGION` | `us-east-1` | AWS region for Bedrock/Transcribe calls |
-| `BEDROCK_MODEL_ID` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | Bedrock model ID override |
+| `CLAUDE_MODEL` | `claude-opus-5-5` | Claude model used for EDL generation, on either provider |
+| `BEDROCK_MODEL_ID` | `anthropic.` + `CLAUDE_MODEL` | Bedrock model ID override |
 | `TRANSCRIBE_PROVIDER` | `local` | `local` for faster-whisper; `aws` to default new projects to Amazon Transcribe |
 | `TRANSCRIBE_S3_BUCKET` | — | **Required when using Amazon Transcribe.** Scratch bucket for uploaded audio + job output; created by `cdk deploy` in `infra/` |
 | `WHISPER_DEVICE` | `auto` | `auto` \| `cpu` \| `cuda` — see [Tuning local performance](#tuning-local-performance). GPU is NVIDIA-only. |
@@ -402,21 +454,22 @@ Whisper model, language, and transcription provider are set per-project in the u
 
 ## Optional: CDK deployment
 
-The `infra/` directory contains an [AWS CDK](https://aws.amazon.com/cdk/) **TypeScript** stack (`cdk-lib` + `constructs` — no Docker required to synth or deploy) that provisions:
-
-- an async Lambda function wired to Bedrock, for serverless/multi-user deployments where you want EDL generation to run in the cloud rather than locally
-- an S3 scratch bucket for **Amazon Transcribe** (see [Transcription provider](#5--transcription-provider-optional))
+The `infra/` directory contains an [AWS CDK](https://aws.amazon.com/cdk/) **TypeScript** stack (`cdk-lib` + `constructs` — no Docker required to synth or deploy) that provisions an S3 scratch bucket for **Amazon Transcribe** (see [Transcription provider](#5--transcription-provider-optional)). You only need it if you use `TRANSCRIBE_PROVIDER=aws`; Bedrock needs no infrastructure.
 
 ```
 infra/
 ├── bin/darkroom.ts        # CDK entry point
-├── lib/darkroom-stack.ts  # Stack: Lambda + IAM + Function URL + Transcribe bucket
-├── lambda/
-│   └── handler.py         # Async Lambda handler → Bedrock (Lambda runtime stays Python)
+├── lib/darkroom-stack.ts  # Stack: Transcribe bucket
 ├── package.json           # aws-cdk-lib, constructs, aws-cdk, ts-node, typescript
 ├── tsconfig.json
 └── cdk.json
 ```
+
+### Prerequisites
+
+- **Node.js** — the CDK CLI is installed locally by `npm install`, so no global `aws-cdk` is needed.
+- **AWS credentials** — the CDK uses the same credentials as the AWS CLI: run `aws configure` (or `aws sso login`), or set `AWS_PROFILE` / `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`. Run `aws sts get-caller-identity` to confirm which account you're about to deploy into.
+- **Region** — the stack deploys to your AWS CLI's default region (or `AWS_REGION` / `AWS_DEFAULT_REGION` if set). Deploy to the same region as `AWS_REGION` in `.env`, because Amazon Transcribe needs the bucket in the region where the jobs run.
 
 ### Deploy
 
@@ -428,12 +481,7 @@ npx cdk bootstrap   # first time only, per account/region
 npx cdk deploy
 ```
 
-The stack outputs:
-- **`EdlFunctionArn`** — invoke via `boto3.client("lambda").invoke(...)`
-- **`EdlFunctionUrl`** — HTTPS endpoint (IAM-authenticated)
-- **`TranscribeBucketName`** — copy into `.env` as `TRANSCRIBE_S3_BUCKET` to enable `TRANSCRIBE_PROVIDER=aws`
-
-The Lambda accepts `{ "prompt": "<formatted prompt>", "retry": false }` and returns `{ "edl_raw": "<json string>" }`.
+The stack outputs **`TranscribeBucketName`** — copy it into `.env` as `TRANSCRIBE_S3_BUCKET` to enable `TRANSCRIBE_PROVIDER=aws`.
 
 ---
 
@@ -449,20 +497,20 @@ Amazon Transcribe bills per second of audio processed, roughly **$0.024/minute**
 
 | Provider | Model | Input | Output |
 |----------|-------|-------|--------|
-| Anthropic API | `claude-sonnet-4-6` | $3.00 / M tokens | $15.00 / M tokens |
-| AWS Bedrock | `claude-sonnet-4-5` (cross-region) | $3.00 / M tokens | $15.00 / M tokens |
+| Anthropic API | `claude-opus-5-5` | $4.00 / M tokens | $20.00 / M tokens |
+| AWS Bedrock | `claude-opus-5-5` | See [Bedrock pricing](https://aws.amazon.com/bedrock/pricing/) | |
 
 > Prices are per million tokens and subject to change. Verify current rates at the Anthropic and AWS Bedrock pricing pages before budgeting.
 
 ### Typical per-edit cost
 
-Token consumption scales with episode length. The transcript is the dominant input cost; the EDL JSON segments are the dominant output cost.
+Token consumption scales with episode length. The transcript is the dominant input cost; the EDL JSON segments are the dominant output cost. The model also thinks before answering, and thinking is billed as output tokens, so real costs run somewhat above these figures.
 
-| Episode length | Input tokens | Output tokens | Estimated cost |
+| Episode length | Input tokens | EDL output tokens | Estimated cost (before thinking) |
 |----------------|-------------|---------------|---------------|
-| 15 min (1 speaker) | ~4,000 | ~1,500 | ~$0.03 |
-| 30 min (2 speakers) | ~7,500 | ~3,500 | ~$0.07 |
-| 60 min (2–4 speakers) | ~14,000 | ~6,500 | ~$0.13 |
+| 15 min (1 speaker) | ~4,000 | ~1,500 | ~$0.05 |
+| 30 min (2 speakers) | ~7,500 | ~3,500 | ~$0.10 |
+| 60 min (2–4 speakers) | ~14,000 | ~6,500 | ~$0.19 |
 
 These are rough estimates. A dense multi-speaker episode produces more EDL segments (more output tokens); a solo monologue produces fewer.
 
@@ -472,13 +520,10 @@ Shorts clips and re-renders do **not** generate additional AI calls — they reu
 
 | Component | Cost |
 |-----------|------|
-| Lambda at idle | **$0.00** |
-| Lambda per invocation (512 MB × up to 5 min) | < $0.001 |
-| Bedrock model call | Same per-token rates as above |
 | Transcribe scratch S3 bucket (audio deleted after each job; 1-day lifecycle backstop) | Negligible — pennies/month even under regular use |
 | CDK bootstrap S3 storage (deployment artifact) | < $0.001 / month |
 
-The Lambda and Transcribe bucket add effectively zero overhead on top of the Bedrock/Transcribe usage cost itself.
+The Transcribe bucket adds effectively zero overhead on top of the Transcribe usage cost itself.
 
 ---
 
