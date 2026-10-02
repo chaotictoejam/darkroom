@@ -1,7 +1,9 @@
 """
 File upload and transcript editing routes.
 """
+import asyncio
 import subprocess
+from pathlib import Path
 
 import numpy as np
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
@@ -13,6 +15,42 @@ from ..storage import PROJECTS_DIR, get_project, save_project
 router = APIRouter()
 
 _CAM_IDS = ["A", "B", "C", "D"]
+
+# Containers MediaRecorder produces. Its output is streamed, so the header has
+# no duration and no seek index, which breaks ffprobe durations and scrubbing.
+_RECORDING_SUFFIXES = {".webm", ".weba", ".ogg"}
+
+
+def _has_duration(path: Path) -> bool:
+    cmd = ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+           "-of", "default=noprint_wrappers=1:nokey=1", str(path)]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30).stdout.strip()
+        return float(out) > 0
+    except (ValueError, subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+def _normalize_recording(path: Path) -> Path:
+    """
+    Transcode an in-app recording (WebM/Opus without a duration) to FLAC so the
+    rest of the pipeline sees a normal, seekable, lossless audio file.
+    Returns the path to use; the original is removed on success.
+    """
+    if path.suffix.lower() not in _RECORDING_SUFFIXES or _has_duration(path):
+        return path
+    out = path.with_suffix(".flac")
+    cmd = ["ffmpeg", "-y", "-nostdin", "-i", str(path), "-vn", "-c:a", "flac", str(out)]
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=600)
+    except FileNotFoundError:
+        raise HTTPException(500, "ffmpeg not found")
+    if result.returncode != 0:
+        out.unlink(missing_ok=True)
+        raise HTTPException(500, f"Could not convert recording {path.name}: "
+                                 f"{result.stderr.decode(errors='replace')[-500:]}")
+    path.unlink(missing_ok=True)
+    return out
 
 
 @router.post("/projects/{project_id}/upload")
@@ -39,6 +77,9 @@ async def upload_files(
         filepath = project_dir / filename
         content = await f.read()
         filepath.write_bytes(content)
+        # Off the event loop: an hour-long recording takes a while to transcode.
+        filepath = await asyncio.to_thread(_normalize_recording, filepath)
+        filename = filepath.name
         speakers.append({
             "id": cam_id,
             "name": speaker_name.strip() or f"Speaker {cam_id}",

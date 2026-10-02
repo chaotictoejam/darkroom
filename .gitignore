@@ -25,6 +25,9 @@ backend/.whisper/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+# Desktop (Electron)
+desktop/node_modules/
+desktop/out/
 # Local Vite env overrides
 frontend/.env.local
 frontend/.env.*.local
