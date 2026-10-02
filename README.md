@@ -4,6 +4,8 @@
 
 A local-first video and podcast editor. Upload your pre-aligned camera or audio files (or record a podcast right in the app), get an AI-generated edit decision list from Claude, review and tweak cuts in the browser, then render final exports via FFmpeg. Nothing leaves your machine.
 
+See [ROADMAP.md](ROADMAP.md) for what's done and what's planned next.
+
 ---
 
 ## Stack
@@ -248,6 +250,7 @@ darkroom/
 │       └── api/
 │           ├── client.ts    # typed API client + WebSocket helper
 │           └── types.ts     # shared TypeScript types
+├── ROADMAP.md               # done, next and future ideas
 ├── infra/                   # optional CDK deployment (Bedrock Lambda)
 │   ├── app.py               # CDK entry point
 │   ├── darkroom_stack.py    # Lambda + IAM + Function URL
