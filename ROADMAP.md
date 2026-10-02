@@ -49,6 +49,14 @@ Darkroom runs as an Electron app (`make desktop`) that starts its own backend an
 
 **Involves:** letting a recorder track pick a channel of a multi-channel device (split with a Web Audio `ChannelSplitterNode`, or with FFmpeg on upload), so each input becomes its own participant.
 
+### 5. Remote guests
+
+**Why:** many podcasts have guests who aren't in the room. Today every participant needs a mic plugged into the host's computer.
+
+**Involves:** a "double-ender": guests join from a link in their browser, talk to the host over a live WebRTC call, and each side records locally at full quality. Guest tracks upload encrypted while recording, then the host's app downloads, aligns and adds them to the project. The cloud side exists only for the session and runs in the user's own AWS account (serverless recommended, ephemeral instance as an alternative).
+
+Full plan, options comparison and TODO list: **[docs/remote-guests.md](docs/remote-guests.md)**
+
 ---
 
 ## Ideas
@@ -59,4 +67,3 @@ Not scheduled yet. Add to this list freely.
 - **Pause and resume** during a recording, keeping tracks aligned.
 - **Input gain and monitoring:** per-track gain, clip warnings, and optional headphone monitoring.
 - **Auto-update** for the desktop app.
-- **Remote guests:** record a guest over the network with each side recording locally and uploading afterwards (needs a lot of design; at odds with "nothing leaves your machine" unless peer-to-peer).

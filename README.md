@@ -251,6 +251,7 @@ darkroom/
 │           ├── client.ts    # typed API client + WebSocket helper
 │           └── types.ts     # shared TypeScript types
 ├── ROADMAP.md               # done, next and future ideas
+├── docs/                    # design docs for planned features
 ├── infra/                   # optional CDK deployment (Bedrock Lambda)
 │   ├── app.py               # CDK entry point
 │   ├── darkroom_stack.py    # Lambda + IAM + Function URL
