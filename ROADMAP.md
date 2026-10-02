@@ -53,7 +53,7 @@ Darkroom runs as an Electron app (`make desktop`) that starts its own backend an
 
 **Why:** many podcasts have guests who aren't in the room. Today every participant needs a mic plugged into the host's computer.
 
-**Involves:** a "double-ender": guests join from a link in their browser, talk to the host over a live WebRTC call, and each side records locally at full quality. Guest tracks upload encrypted while recording, then the host's app downloads, aligns and adds them to the project. The cloud side exists only for the session and runs in the user's own AWS account (serverless recommended, ephemeral instance as an alternative).
+**Involves:** a "double-ender": guests join from a link in their browser, talk to the host over a live WebRTC call, and each side records locally at full quality. Guest tracks upload encrypted while recording, with a live % uploaded for each guest and for the host across all participants; then the host's app downloads, aligns and adds them to the project. The cloud side exists only for the session and runs in the user's own AWS account (serverless recommended, ephemeral instance as an alternative).
 
 Full plan, options comparison and TODO list: **[docs/remote-guests.md](docs/remote-guests.md)**
 

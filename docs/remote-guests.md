@@ -11,6 +11,7 @@ Let a host record a podcast with guests who are somewhere else, while keeping Da
 - A guest joins from a link in a normal browser. No install, no account.
 - Each participant's track is recorded **locally on their own machine** at full quality, so a bad connection only affects the live conversation, never the recording.
 - Guest tracks arrive in the host's project already aligned, ready to transcribe like any other track.
+- Everyone can see upload progress: each guest sees their own %, and the host sees every participant's % in one place.
 - The cloud side **exists only for the session**: created when the host starts one, torn down when it ends, and hard-expired if the host disappears.
 - Infrastructure is deployed by the user into **their own cloud account** (like the existing `infra/` CDK stack). There is no shared Darkroom server.
 
@@ -43,10 +44,67 @@ This is a "double-ender": the live call and the recording are separate.
 2. **Guest opens the link**, grants mic access, and lands in a lobby with a mic check. Host sees the guest's name and level meter.
 3. **Live call** runs over WebRTC (Opus, low latency). Signaling goes through the session's signaling endpoint; media goes peer to peer, falling back to a TURN relay when NAT blocks a direct path.
 4. **Host presses Record.** A start message goes to every participant over the WebRTC data channel and everyone starts their local recorder (the existing `Recorder` component).
-5. **Guest uploads while recording.** Chunks are encrypted in the browser and uploaded every few seconds, so a closed tab or crash loses seconds, not the episode.
-6. **Host presses Stop.** Guests finish uploading (their page shows progress and asks them not to close it).
-7. **Host imports.** The desktop app downloads and decrypts the chunks, assembles each guest track, aligns it (see below) and adds it to the project as a normal participant track.
+5. **Guest uploads while recording.** Chunks are encrypted in the browser and uploaded every few seconds, so a closed tab or crash loses seconds, not the episode. The guest sees how much of their recording is backed up; the host sees the same for every participant (see [Upload progress](#upload-progress)).
+6. **Host presses Stop.** Guests finish uploading. Each guest sees a % uploaded and is asked to keep the tab open; the host watches every participant's % reach 100.
+7. **Host imports** once everyone shows 100%. The desktop app downloads and decrypts the chunks, assembles each guest track, aligns it (see below) and adds it to the project as a normal participant track.
 8. **Session ends.** The host ends it, or it hits its expiry time; either way every session resource is deleted.
+
+### Upload progress
+
+#### How the % is calculated
+
+The total size of a recording isn't known until it stops, so the % means slightly different things before and after Stop:
+
+| | Meaning of the % | What it usually looks like |
+|---|---|---|
+| **While recording** | Share of the audio recorded *so far* that has safely reached storage | Hovers near 100% on a good connection; drops if the guest's upload falls behind |
+| **After Stop** | Share of the *finished* recording that has reached storage | Climbs to 100% as the remaining backlog uploads |
+
+In both cases: **% = confirmed uploaded bytes ÷ recorded bytes**.
+
+- **Recorded bytes** are counted by the guest's browser after encryption, so both numbers are in the same unit (ciphertext) and the server never needs the plaintext size.
+- **Confirmed uploaded bytes** only count chunks that have actually landed in storage, never a chunk that is still sending. The host's numbers therefore never overstate what is safe.
+- The guest's own bar can also include the chunk currently in flight (using the browser's upload progress events) so it moves smoothly, but it only reports 100% once the server has confirmed every chunk.
+
+#### Where the numbers come from
+
+```
+ Guest browser                     Session backend                         Host app
+ ─────────────                     ───────────────                         ────────
+ heartbeat every 2 s ──────────►  stores recorded bytes,
+   (recorded bytes, state)          last-seen time
+ PUT chunk ─────► storage ──────► storage event → adds to
+                                    confirmed bytes
+                                  pushes per-participant ─────────────►  updates progress panel
+                                    progress over WebSocket
+```
+
+- Progress travels through the **session backend**, not the peer-to-peer call, so the host keeps getting updates even if the call has dropped while a guest is still uploading.
+- The backend is the source of truth. On reconnect, the host and guests fetch the current state instead of relying on what they last saw.
+
+#### What the guest sees
+
+- **While recording:** a small "Backed up: 99%" indicator next to the recording timer, which turns amber if the upload falls behind.
+- **After Stop:** a large progress bar with **% uploaded**, "34 of 58 MB", estimated time left, and "Please keep this tab open".
+- **Done:** "All uploaded. You can close this tab."
+- Closing the tab before 100% triggers the browser's "Leave site?" warning. If they reload, the upload resumes and the % carries on from where it was.
+
+#### What the host sees
+
+A participants panel in the Record tab, with one row per participant:
+
+| Column | Example |
+|---|---|
+| Name | Sam (guest) |
+| State | Recording · Uploading · Complete · Stalled · Offline |
+| Progress | bar + **% uploaded** |
+| Size | 42 of 58 MB |
+| Time left | about 1 min |
+
+- The host's own track appears as a row too, shown as **Local · 100%**, since it never uploads.
+- An **overall** bar above the rows combines everyone's bytes.
+- **Stalled:** no confirmed progress for 30 s while there is still data to send. **Offline:** no heartbeat for 30 s. Both show the last confirmed % and a hint (e.g. "Ask Sam to keep the tab open" or "Waiting for Sam to reconnect").
+- **Import** becomes available when every participant is Complete. If someone is stuck, the host can choose "Import available tracks" after a confirmation that names who is missing.
 
 ### Alignment
 
@@ -116,7 +174,10 @@ A small Lambda launches one container per session (ECS Fargate, or a Fly.io Mach
 
 ### Phase 1: Session infrastructure (`infra/`)
 - [ ] CDK stack: HTTP API, WebSocket API, Lambdas, DynamoDB table with TTL, S3 bucket with lifecycle rules, CloudFront for the guest page
-- [ ] Session API: `create`, `join`, `end`, `upload-url`, `list-uploads`, with host and guest tokens
+- [ ] Session API: `create`, `join`, `end`, `upload-url`, `list-uploads`, `progress`, with host and guest tokens
+- [ ] Per-participant progress record in DynamoDB: recorded bytes, confirmed bytes, chunk count, state, last heartbeat
+- [ ] Storage event (S3 `ObjectCreated`) Lambda that adds each landed chunk to the participant's confirmed bytes, idempotent per chunk number so a retried upload is never counted twice
+- [ ] Push progress changes to the host over the WebSocket API; `progress` endpoint returns the full state for reconnects
 - [ ] TURN credential endpoint (short-lived credentials per participant)
 - [ ] Hard expiry and teardown: everything for a session is deleted on `end` or after the TTL, even if the host never returns
 - [ ] Stack outputs the session API URL; desktop app reads it from `.env` (e.g. `DARKROOM_SESSION_API`)
@@ -131,8 +192,15 @@ A small Lambda launches one container per session (ECS Fargate, or a Fly.io Mach
 - [ ] Start/stop broadcast over the data channel; all participants start their local `Recorder`
 - [ ] Host also records each guest's incoming call audio as a reference track
 - [ ] Guest-side AES-GCM encryption with the key from the URL fragment
-- [ ] Chunked upload during recording, with retries and an upload progress screen after Stop
-- [ ] Resume uploads if the guest reloads the page mid-session
+- [ ] Chunked upload during recording, with retries
+- [ ] Guest heartbeat every 2 s with recorded bytes and state (recording, uploading, complete)
+- [ ] Guest "Backed up: %" indicator while recording, amber when falling behind
+- [ ] Guest upload screen after Stop: % uploaded, MB, time left, keep-tab-open notice, done message
+- [ ] "Leave site?" warning while below 100%
+- [ ] Resume uploads if the guest reloads the page mid-session, with the % continuing from the confirmed bytes
+- [ ] Host participants panel: per-participant state, % bar, MB, time left; overall bar; host's own row as Local · 100%
+- [ ] Stalled and Offline detection (30 s thresholds) with hints in the host panel
+- [ ] Gate Import on everyone Complete, with a confirmed "Import available tracks" override
 
 ### Phase 4: Import and alignment
 - [ ] Desktop app downloads, decrypts and assembles guest chunks
@@ -143,6 +211,7 @@ A small Lambda launches one container per session (ECS Fargate, or a Fly.io Mach
 
 ### Phase 5: Hardening and docs
 - [ ] Failure handling: guest drops mid-recording, host app crashes, upload never completes
+- [ ] Test that the % stays correct through reconnects, duplicate chunk uploads (retries must not count twice) and page reloads
 - [ ] Security review of tokens, presigned URL scope, CORS and expiry
 - [ ] Cost estimate from real sessions, added to the README Costs section
 - [ ] README: deploying the session stack, starting a session, privacy wording
