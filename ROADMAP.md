@@ -28,13 +28,21 @@ Darkroom runs as an Electron app (`make desktop`) that starts its own backend an
 
 Full plan, mockups and TODO list: **[docs/recording-studio.md](docs/recording-studio.md)**
 
-### 2. Unsynced media on the timeline
+### 2. Fast local transcription
+
+**Why:** Descript and Riverside have transcripts ready moments after an upload or recording ends. Darkroom transcribes each mic's whole track one after another on settings that leave a lot of speed unused.
+
+**Involves:** quick wins first (skip silence with VAD, int8 on CPU, keep the model loaded, batched decoding, `turbo` as the default model), then transcribing each mic only where its speaker is talking, transcribing while recording so the transcript is ready seconds after Stop, path-based uploads in the desktop app, and a GPU engine for Apple Silicon. Everything stays local.
+
+Full plan, analysis and TODO list: **[docs/fast-transcription.md](docs/fast-transcription.md)**
+
+### 3. Unsynced media on the timeline
 
 **Why:** Upload only works for files that all start at the same moment. Footage from separate devices, or B-roll and inserts, can't be used today.
 
 **Involves:** uploading files into an existing project and placing them on the timeline: drag to position, auto-sync by audio where possible (cross-correlation, as planned for remote guests), and render support for clips that don't span the whole edit.
 
-### 3. Installable desktop builds
+### 4. Installable desktop builds
 
 **Why:** the desktop app currently needs a repo checkout plus `make install`. Most podcasters won't have Python, Node and FFmpeg set up.
 
@@ -45,19 +53,19 @@ Full plan, mockups and TODO list: **[docs/recording-studio.md](docs/recording-st
 - Storing projects in the OS app-data folder (`app.getPath('userData')`) rather than the repo's `projects/`
 - Packaging with electron-builder or Electron Forge for `.dmg`, `.exe` and `.AppImage`
 
-### 4. macOS signing and notarization
+### 5. macOS signing and notarization
 
 **Why:** a packaged, unsigned app can't reliably get microphone, camera or screen recording permission on macOS, and Gatekeeper blocks it by default.
 
 **Involves:** hardened runtime with the `com.apple.security.device.audio-input` and `com.apple.security.device.camera` entitlements, `NSMicrophoneUsageDescription` and `NSCameraUsageDescription` in `Info.plist`, Screen Recording permission guidance, code signing and notarization in CI. Windows code signing as a follow-on.
 
-### 5. Multi-channel audio interfaces
+### 6. Multi-channel audio interfaces
 
 **Why:** a common podcast setup is one USB interface (e.g. Focusrite Scarlett 2i2) with a mic on each input. The browser sees that as a single stereo device, so both people end up in one track.
 
 **Involves:** letting a recorder track pick a channel of a multi-channel device (split with a Web Audio `ChannelSplitterNode`, or with FFmpeg on upload), so each input becomes its own participant.
 
-### 6. Remote guests
+### 7. Remote guests
 
 **Why:** many podcasts have guests who aren't in the room. Today every participant needs a mic plugged into the host's computer.
 

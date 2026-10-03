@@ -185,7 +185,7 @@ projects/a1b2c3d4/
 - [ ] Studio view (in-app, full window): scrolling waveform lanes via `AudioWorklet` + canvas, level meters with clip indicator, timer
 - [ ] Takes strip: per-take length, transcription progress, delete take
 - [ ] Drag to reorder takes; rebuild joined tracks and transcript offsets in the new order
-- [ ] Per-take transcription job, transcript offset and appended to `merged_transcript`
+- [ ] Per-take transcription job, transcript offset and appended to `merged_transcript` (later: transcribe while recording, see [fast-transcription.md](fast-transcription.md))
 - [ ] Join takes into per-speaker tracks; save take boundaries
 - [ ] **Finish & edit** handles takes still transcribing
 - [ ] **MP3 export** for audio-only projects in the render step
