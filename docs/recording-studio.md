@@ -136,8 +136,8 @@ Each take is stored separately, and the project's tracks are built by joining ta
 ```
 projects/a1b2c3d4/
 ├── takes/
-│   ├── take_001/  mic_A.flac  mic_B.flac  cam_A.mp4  screen_1.mp4
-│   └── take_002/  mic_A.flac  mic_B.flac  cam_A.mp4  screen_1.mp4
+│   ├── take_001/  mic_A.wav  mic_B.wav  cam_A.mp4  screen_1.mp4
+│   └── take_002/  mic_A.wav  mic_B.wav  cam_A.mp4  screen_1.mp4
 └── cam_A_alice.mp4 ...   # joined tracks the editor and renderer already understand
 ```
 
@@ -151,7 +151,7 @@ projects/a1b2c3d4/
 
 - Each source's `MediaRecorder` delivers a chunk every second. Chunks are streamed to the **local backend** (`POST /api/projects/:id/takes/:take/:source/chunk`), which appends them to a file on disk.
 - Using the backend rather than the Electron bridge means the same code works in the browser on `localhost`.
-- On **Stop**, the backend finalises each file: remuxes video to MP4 with a proper duration (no re-encode where the codec allows) and converts audio to FLAC, as uploads already do.
+- On **Stop**, the backend finalises each file: remuxes video to MP4 with a proper duration (no re-encode where the codec allows) and converts audio to WAV (lossless).
 - If the app crashes mid-take, the next launch finds the unfinished take, finalises what was written, and offers to keep it.
 
 ### Keeping sources in sync
@@ -181,20 +181,21 @@ projects/a1b2c3d4/
 - [ ] Store `source: "upload" | "record"` on the project; keep `project_type` (`podcast` for audio only, `video` for video)
 - [ ] Upload path: today's Setup screen with "must be synced" copy; detect video vs audio from the files
 - [ ] Source picker for microphones with names, live meters, duplicate-device warning (reuse from `Recorder`)
-- [ ] Backend: takes data model, chunk append endpoint, finalise-on-stop (FLAC), recover unfinished takes on startup
+- [ ] Backend: takes data model, chunk append endpoint, finalise-on-stop (WAV), recover unfinished takes on startup
 - [ ] Studio view (in-app, full window): scrolling waveform lanes via `AudioWorklet` + canvas, level meters with clip indicator, timer
 - [ ] Takes strip: per-take length, transcription progress, delete take
 - [ ] Drag to reorder takes; rebuild joined tracks and transcript offsets in the new order
 - [ ] Per-take transcription job, transcript offset and appended to `merged_transcript`
 - [ ] Join takes into per-speaker tracks; save take boundaries
 - [ ] **Finish & edit** handles takes still transcribing
+- [ ] **MP3 export** for audio-only projects in the render step
 - [ ] Remove the old Record tab from Setup
 - [ ] Tests: chunk append, finalise, recovery, take joining, transcript offsets
 
 ### Phase 2: Video + audio (cameras)
 - [ ] Camera sources: device, resolution, paired mic, live preview
 - [ ] Desktop permissions for camera; macOS camera prompt
-- [ ] Video chunk recording and finalise to MP4 (remux where possible)
+- [ ] Video chunk recording and finalise to MP4: record H.264 directly where Chromium's MediaRecorder supports it (remux only), otherwise transcode VP9 WebM on Stop
 - [ ] Studio preview grid
 - [ ] Measure and store per-camera A/V offset during source check
 - [ ] Pad missing sources with black/silence when joining takes
@@ -226,8 +227,8 @@ projects/a1b2c3d4/
 | Pop-out window or in-app view? | **In-app** full-window studio; a **pop-out** is offered when recording screens |
 | Do screens count toward the 4-track limit? | **No.** Up to 4 participants (mics), plus any number of screens |
 | Can takes be reordered before editing? | **Yes**, by dragging in the takes strip |
+| Recording file formats? | **MP4** for video takes, **WAV** for audio takes (lossless, so editing and export don't stack quality loss). **MP3** is offered as an export format. The browser records WebM/Opus; the backend converts on Stop |
 
 ## Open questions
 
-- **Recording file formats (pending confirmation):** proposed **MP4** for video takes and **WAV** for audio takes (lossless, so editing and export don't stack quality loss), with **MP3** offered as an export format. The browser records WebM/Opus either way; the backend converts on Stop.
 - **Pause:** is pause/resume within a take needed, or are takes enough? Takes probably cover most of it.
