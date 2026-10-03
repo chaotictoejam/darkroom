@@ -32,6 +32,10 @@ desktop/out/
 frontend/.env.local
 frontend/.env.*.local
 
+# ── Infra (CDK) ───────────────────────────────────────────────────────────────
+infra/cdk.out/
+infra/node_modules/
+
 # ── User data ─────────────────────────────────────────────────────────────────
 # Project files (video uploads + renders) — can be very large
 projects/
