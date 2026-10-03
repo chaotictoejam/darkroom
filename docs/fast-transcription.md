@@ -2,7 +2,7 @@
 
 Status: **planned**, not started. Tracked in [ROADMAP.md](../ROADMAP.md).
 
-Descript and Riverside have transcripts ready within moments of an upload or recording finishing. This plan covers how they get there, where Darkroom's time goes today, and how to get close to that speed **while keeping transcription on the user's machine**.
+Descript and Riverside have transcripts ready within moments of an upload or recording finishing. This plan covers how they get there, where Darkroom's time goes today, and how to get close to that speed **while keeping transcription on the user's machine**, plus an opt-in mode that uses GPUs in the user's **own** cloud account.
 
 ---
 
@@ -93,6 +93,43 @@ A short **benchmark on first run** (a few seconds of bundled audio) measures the
 - **Stream segments to the UI** over the existing WebSocket as they're produced, so the transcript fills in while the job runs.
 - Let the user **start reading and editing the parts already transcribed** while the rest finishes.
 
+### 7. Optional: transcription in the user's own cloud
+
+For people on slow machines, or with very long recordings, an **opt-in** cloud mode can do what Descript and Riverside do: split the audio and transcribe the pieces on several GPUs at once. It follows the roadmap's [principles](../ROADMAP.md#principles): the user deploys it into **their own AWS account (or a similar provider)**, so the data stays in their control, and Darkroom never runs a shared service. Local transcription stays the default and keeps working without it.
+
+**How it works**
+
+```
+ Darkroom (desktop)                         User's own cloud account
+ ──────────────────                         ────────────────────────
+ VAD → speech-only audio, compressed (Opus)
+ split at pauses, encrypt ──── upload ───►  storage bucket (job prefix, auto-expiry)
+                                                 │
+                                            job starts N GPU workers
+                                            each transcribes some chunks
+                                                 │
+ download + decrypt results ◄────────────── results (encrypted)
+ stitch chunks, map timestamps back         job ends: workers stop, objects deleted
+```
+
+- **Only speech is sent:** after VAD and per-mic gating (sections 1–2), and compressed, so uploads are small.
+- **Encrypted end to end:** chunks are encrypted on the user's machine; the GPU worker gets a per-job key, and nothing is stored unencrypted.
+- **Exists only for the job:** workers start for the job and shut down when it's done; uploaded audio and results are deleted after download, with storage expiry rules as a backstop.
+- **Same output as local:** the worker runs the same engine and settings, so the transcript format and quality match local transcription.
+- **Can overlap with recording:** combined with section 3, chunks can be sent during a recording so the transcript is ready at Stop, as Riverside does.
+
+**Hosting options** (decide in a spike; same "only exists for the job" idea as the [remote guests](remote-guests.md) session stack)
+
+| Option | Notes |
+|---|---|
+| GPU instances started per job (EC2 Spot or on-demand, or AWS Batch) | Cheapest per hour; 1–3 min to start; workers terminate themselves when the queue is empty |
+| SageMaker asynchronous inference, scaled to zero | Managed queue and scaling; still has GPU cold starts |
+| Serverless GPU in the user's own account on another provider (e.g. Modal, RunPod) | Fast cold starts and simple setup; for users who don't use AWS |
+
+The deployment is a CDK stack in `infra/` alongside the existing ones, and the app reads its endpoint from `.env`. Local and cloud engines sit behind the same engine interface (section 5), so the rest of the app doesn't change.
+
+**Cost** (to be measured): GPU time is billed per second, and Whisper-class models on a modern GPU run many times faster than real time, so an hour-long episode should cost in the region of cents. Idle cost is zero.
+
 ---
 
 ## Expected impact
@@ -107,6 +144,7 @@ A short **benchmark on first run** (a few seconds of bundled audio) measures the
 | Desktop path-based uploads | Small | Removes the upload wait for large video |
 | Apple Silicon GPU engine | Medium | Large on Macs |
 | Streaming segments to UI | Small | Perceived speed |
+| Optional self-hosted cloud GPUs | Large | Near-instant on any machine, for users who opt in |
 
 All "likely gain" figures are to be confirmed by the Phase 0 benchmark.
 
@@ -155,10 +193,19 @@ All "likely gain" figures are to be confirmed by the Phase 0 benchmark.
 - [ ] Push segments over the WebSocket as they're produced
 - [ ] Editor shows and allows editing of finished parts while transcription continues
 
+### Phase 7: Optional cloud transcription (self-hosted)
+- [ ] Spike: compare per-job GPU instances, SageMaker async and a non-AWS serverless GPU on cold start, speed and cost
+- [ ] CDK stack: storage bucket with expiry rules, job queue, GPU worker image with the same engine as local, IAM scoped to the job
+- [ ] Desktop: split speech-only audio at pauses, compress, encrypt, upload, download and stitch results
+- [ ] Per-job encryption keys; delete uploads and results after download
+- [ ] Workers and any job resources shut down automatically when the job is done or times out
+- [ ] Settings: off by default; clear notice of what is sent and where; fall back to local if the cloud stack is unreachable
+- [ ] Optional: send chunks during recording so the transcript is ready at Stop
+- [ ] Cost estimate from real jobs, added to the README Costs section
+
 ---
 
 ## Open questions
 
 - **Default model:** `turbo` or `distil-large-v3.5`? Distil models are English-focused; `turbo` is multilingual. Decide from the Phase 0 results.
-- **Optional cloud transcription:** should there be an opt-in to run transcription on a GPU in the user's own cloud account (like the remote guests stack) for people on slow machines? It would break "nothing leaves your machine", so it would have to be clearly opt-in.
 - **Live transcript in the studio:** useful to see, or distracting while recording? Could be a toggle.

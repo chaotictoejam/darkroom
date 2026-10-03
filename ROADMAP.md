@@ -6,6 +6,17 @@ Each item says why it matters and roughly what it involves, so it can be picked 
 
 ---
 
+## Principles
+
+Every item below follows these:
+
+- **Local by default.** Recording, transcription, editing and rendering run on the user's machine, and work with no cloud set up at all.
+- **Cloud is opt-in and self-hosted.** Any feature that uses the cloud (remote guests, cloud transcription) runs on infrastructure the user deploys into **their own account**, such as AWS or a similar provider. There is no shared Darkroom service, and Darkroom never holds user data.
+- **Session-scoped and cleaned up.** Cloud resources and data exist only as long as the job or session needs them, then are deleted automatically.
+- **Clear about what leaves the machine.** The app says plainly when something will be sent to the cloud and where. Today that's only the **Analyse** step, which sends transcript text to the AI provider the user configures (the Anthropic API, or Bedrock in their own AWS account).
+
+---
+
 ## Done
 
 ### Desktop app and in-app voice recording
@@ -32,7 +43,7 @@ Full plan, mockups and TODO list: **[docs/recording-studio.md](docs/recording-st
 
 **Why:** Descript and Riverside have transcripts ready moments after an upload or recording ends. Darkroom transcribes each mic's whole track one after another on settings that leave a lot of speed unused.
 
-**Involves:** quick wins first (skip silence with VAD, int8 on CPU, keep the model loaded, batched decoding, `turbo` as the default model), then transcribing each mic only where its speaker is talking, transcribing while recording so the transcript is ready seconds after Stop, path-based uploads in the desktop app, and a GPU engine for Apple Silicon. Everything stays local.
+**Involves:** quick wins first (skip silence with VAD, int8 on CPU, keep the model loaded, batched decoding, `turbo` as the default model), then transcribing each mic only where its speaker is talking, transcribing while recording so the transcript is ready seconds after Stop, path-based uploads in the desktop app, and a GPU engine for Apple Silicon. Everything stays local by default; an opt-in mode can use GPUs in the user's own cloud account (AWS or similar).
 
 Full plan, analysis and TODO list: **[docs/fast-transcription.md](docs/fast-transcription.md)**
 
