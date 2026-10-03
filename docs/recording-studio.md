@@ -67,9 +67,9 @@ One list of sources, each with a live meter or thumbnail so the user can see it'
 
 | Source | Options | Notes |
 |---|---|---|
-| **Microphone** | device, participant name, input channel (for multi-channel interfaces) | Each mic is a participant and gets transcribed |
+| **Microphone** | device, participant name, input channel (for multi-channel interfaces) | Each mic is a participant and gets transcribed. Up to 4 |
 | **Camera** | device, resolution, paired mic | Pairing tells the editor which camera to cut to when that person talks |
-| **Screen** | which display or window | Desktop app can capture several screens at once; browser is limited to one |
+| **Screen** | which display or window | Desktop app can capture several screens at once; browser is limited to one. Screens don't count toward the 4-participant limit |
 
 Audio-only projects only show microphones.
 
@@ -77,7 +77,7 @@ Audio-only projects only show microphones.
 
 ## The studio
 
-A full-window view (the desktop app can pop it into its own window). Everything is visible before, during and after recording, so you always know what is being captured.
+A full-window view inside the main app window. When screens are being recorded, a **pop-out** is offered so the studio can move to its own window (or collapse to the floating control bar) and stay out of the capture. Everything is visible before, during and after recording, so you always know what is being captured.
 
 ### Audio only
 
@@ -123,7 +123,7 @@ A full-window view (the desktop app can pop it into its own window). Everything 
 3. The studio is immediately ready for the next take. Sources stay armed.
 4. **Finish & edit** goes to the editor. If a take is still transcribing, the editor opens once it's done (with progress shown), or the user can wait in the studio.
 5. From the editor, **Record more** reopens the studio with the same sources. New takes are appended to the end of the timeline and to the existing EDL as kept segments, so earlier edits aren't lost.
-6. Takes can be deleted from the takes strip (with confirmation) before or after transcription.
+6. Takes can be **reordered** by dragging in the takes strip, and deleted (with confirmation), before editing. The timeline uses the order in the strip.
 
 ---
 
@@ -142,7 +142,8 @@ projects/a1b2c3d4/
 ```
 
 - Joining takes into the existing per-speaker files (FFmpeg concat, no re-encode where possible) means the **editor, waveform, EDL and renderer keep working unchanged** for the first version.
-- Each take's transcript is shifted by the take's start time on the joined timeline and appended to `merged_transcript`. Only new takes are transcribed.
+- Each take's transcript is stored with the take and shifted by the take's start time on the joined timeline to build `merged_transcript`. Only new takes are transcribed.
+- **Reordering takes** rebuilds the joined tracks and recomputes the transcript offsets in the new order; nothing is re-transcribed.
 - If a source is added or missing in a later take, its track is padded with silence (audio) or black (video) for that take so every track stays the same length.
 - Take boundaries are saved in the project so the editor can show them as dividers on the timeline.
 
@@ -181,8 +182,9 @@ projects/a1b2c3d4/
 - [ ] Upload path: today's Setup screen with "must be synced" copy; detect video vs audio from the files
 - [ ] Source picker for microphones with names, live meters, duplicate-device warning (reuse from `Recorder`)
 - [ ] Backend: takes data model, chunk append endpoint, finalise-on-stop (FLAC), recover unfinished takes on startup
-- [ ] Studio view: scrolling waveform lanes via `AudioWorklet` + canvas, level meters with clip indicator, timer
+- [ ] Studio view (in-app, full window): scrolling waveform lanes via `AudioWorklet` + canvas, level meters with clip indicator, timer
 - [ ] Takes strip: per-take length, transcription progress, delete take
+- [ ] Drag to reorder takes; rebuild joined tracks and transcript offsets in the new order
 - [ ] Per-take transcription job, transcript offset and appended to `merged_transcript`
 - [ ] Join takes into per-speaker tracks; save take boundaries
 - [ ] **Finish & edit** handles takes still transcribing
@@ -202,8 +204,8 @@ projects/a1b2c3d4/
 - [ ] Desktop: `desktopCapturer` source list with thumbnails; several screens at once
 - [ ] Browser fallback: single screen via `getDisplayMedia`
 - [ ] macOS Screen Recording permission flow and explanation
-- [ ] Floating control bar while recording screens; exclude app windows from capture
-- [ ] Data model for screen tracks (video with no speaker)
+- [ ] Offer pop-out studio window when screens are recorded; floating control bar; exclude app windows from capture
+- [ ] Data model for screen tracks (video with no speaker); screens don't count toward the 4-participant limit
 
 ### Phase 4: Record more from the editor
 - [ ] **Record more** button in the editor reopens the studio with the project's sources
@@ -217,10 +219,15 @@ projects/a1b2c3d4/
 
 ---
 
+## Decisions
+
+| Question | Decision |
+|---|---|
+| Pop-out window or in-app view? | **In-app** full-window studio; a **pop-out** is offered when recording screens |
+| Do screens count toward the 4-track limit? | **No.** Up to 4 participants (mics), plus any number of screens |
+| Can takes be reordered before editing? | **Yes**, by dragging in the takes strip |
+
 ## Open questions
 
-- **Pop-out window or in-app view by default?** Recommendation: in-app full-window view, with pop-out offered when screens are being recorded.
+- **Recording file formats (pending confirmation):** proposed **MP4** for video takes and **WAV** for audio takes (lossless, so editing and export don't stack quality loss), with **MP3** offered as an export format. The browser records WebM/Opus either way; the backend converts on Stop.
 - **Pause:** is pause/resume within a take needed, or are takes enough? Takes probably cover most of it.
-- **Take order:** are takes always joined in recording order, or should the user be able to reorder or drop them before editing?
-- **Source limit:** the current limit is 4 tracks. Do screens count towards it, or is it 4 participants plus any number of screens?
-- **Video codec:** record H.264 MP4 directly where Chromium supports it (no remux needed), or VP9 WebM and remux? Decide in Phase 2 after testing file sizes and CPU use.
