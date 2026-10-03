@@ -76,9 +76,11 @@ async def spa_fallback(full_path: str):
 
 
 def run():
-    """Entry point for `darkroom` CLI command."""
+    """Entry point for `darkroom` CLI command. DARKROOM_PORT overrides the port."""
+    import os
     import uvicorn
-    uvicorn.run("darkroom.main:app", host="127.0.0.1", port=8000, reload=False, workers=1)
+    port = int(os.getenv("DARKROOM_PORT", "8000"))
+    uvicorn.run("darkroom.main:app", host="127.0.0.1", port=port, reload=False, workers=1)
 
 
 if __name__ == "__main__":

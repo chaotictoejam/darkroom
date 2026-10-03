@@ -2,7 +2,9 @@
 
 > *Your footage, developed locally.*
 
-A local-first video and podcast editor. Upload your pre-aligned camera or audio files, get an AI-generated edit decision list from Claude, review and tweak cuts in the browser, then render final exports via FFmpeg. Nothing leaves your machine.
+A local-first video and podcast editor. Upload your pre-aligned camera or audio files (or record a podcast right in the app), get an AI-generated edit decision list from Claude, review and tweak cuts in the browser, then render final exports via FFmpeg. Nothing leaves your machine.
+
+See [ROADMAP.md](ROADMAP.md) for what's done and what's planned next.
 
 ---
 
@@ -15,6 +17,7 @@ A local-first video and podcast editor. Upload your pre-aligned camera or audio 
 | AI editing | Anthropic Claude (`claude-sonnet-4-6`) or AWS Bedrock (`claude-sonnet-4-5`) |
 | Rendering | FFmpeg |
 | Frontend | React · TypeScript · Vite |
+| Desktop | Electron (optional shell, adds voice recording) |
 | State | JSON files in `projects/` |
 
 ---
@@ -168,12 +171,27 @@ make build
 
 Compiles the React app into `frontend/dist`. FastAPI then serves the full app at **http://localhost:8000** — no Vite needed.
 
+### Desktop app (Electron)
+
+The desktop app wraps the same frontend and backend in a native window and is the recommended way to record. It uses the `.venv` from `make install` and the same `projects/` folder as the browser version.
+
+```bash
+make desktop-install   # once: installs Electron into desktop/node_modules
+make desktop           # builds the frontend, then opens the app
+```
+
+`make desktop` starts its own backend on a free localhost port and stops it when you close the window. For frontend work with hot reload, use `make desktop-dev`, which runs the backend, Vite and Electron together.
+
+If your Python lives somewhere other than `.venv`, point the app at it with `DARKROOM_PYTHON=/path/to/python make desktop`.
+
+On macOS the first recording triggers the system microphone prompt. If you declined it, re-enable it under **System Settings → Privacy & Security → Microphone**. When running from source, macOS may list the permission under Electron or under the terminal app you launched it from.
+
 ---
 
 ## Workflow
 
 1. **New Project** — choose **Video** (multi-camera interview/talking head) or **Podcast** (audio-only recording).
-2. **Upload files** — add up to 4 pre-aligned camera or audio files, one per speaker. Assign a name to each. Choose the transcript **language** (defaults to English) and **Whisper model** (defaults to `medium`).
+2. **Upload files** — add up to 4 pre-aligned camera or audio files, one per speaker. For podcasts you can instead choose **Record** and capture up to 4 microphones at once; each mic becomes its own aligned track. Assign a name to each. Choose the transcript **language** (defaults to English) and **Whisper model** (defaults to `medium`).
 3. **Transcribe** — Whisper runs locally on each file's audio track.
 4. **Analyse** — Claude receives the merged transcript and returns an EDL (edit decision list) as JSON with segments and 3–5 suggested Shorts clips.
 5. **Review** — video/audio previews, transcript panel, per-segment controls. Toggle cuts, change camera assignments, edit transcript text inline, mute individual words.
@@ -189,7 +207,7 @@ Compiles the React app into `frontend/dist`. FastAPI then serves the full app at
 Multi-camera interviews, talking heads, or any recording with video. Supports camera switching in the EDL. Renders 16:9 full edit and 9:16 vertical Shorts.
 
 ### Podcast
-Audio-only recordings. No camera switching. Renders a mixed-audio MP3/AAC output. The setup and editor UIs automatically adapt — file inputs accept audio formats only, the camera layout toggle is hidden.
+Audio-only recordings, uploaded or recorded in the app. No camera switching. Renders a mixed-audio MP3/AAC output. The setup and editor UIs automatically adapt — file inputs accept audio formats only, the camera layout toggle is hidden.
 
 ---
 
@@ -207,6 +225,9 @@ When rendering a Short in **active camera** mode:
 
 ```
 darkroom/
+├── desktop/                 # Electron shell
+│   ├── main.cjs             # starts the backend, opens the window, mic permissions
+│   └── preload.cjs          # window.darkroom bridge for the renderer
 ├── backend/
 │   └── darkroom/
 │       ├── main.py          # FastAPI app entry point
@@ -225,10 +246,12 @@ darkroom/
 │       │   ├── Welcome.tsx  # project list + new project
 │       │   ├── Setup.tsx    # file upload + settings
 │       │   └── Editor.tsx   # main editor view
-│       ├── components/      # TranscriptEditor, VideoPreview, Timeline, etc.
+│       ├── components/      # TranscriptEditor, VideoPreview, Recorder, etc.
 │       └── api/
 │           ├── client.ts    # typed API client + WebSocket helper
 │           └── types.ts     # shared TypeScript types
+├── ROADMAP.md               # done, next and future ideas
+├── docs/                    # design docs for planned features
 ├── infra/                   # optional CDK deployment (Bedrock Lambda)
 │   ├── app.py               # CDK entry point
 │   ├── darkroom_stack.py    # Lambda + IAM + Function URL
@@ -428,5 +451,9 @@ The Lambda adds effectively zero overhead on top of the Bedrock model cost.
 **MP3 / audio file not selectable in upload dialog** — on Windows, `audio/*` MIME filtering is unreliable. The file input includes explicit extensions (`.mp3`, `.m4a`, `.wav`, etc.) which should allow selection. If a format is missing, rename it to `.mp3` or `.m4a`.
 
 **Seeing the old vanilla JS UI** — make sure you're opening `http://localhost:5173` (the Vite dev server), not port 8000. Port 8000 only serves the React app if you've run `make build` first.
+
+**Recording: "Microphone access was denied"** — on macOS, allow Darkroom in **System Settings → Privacy & Security → Microphone**, then click **Enable microphones** again. In the browser, recording only works on `localhost` (or HTTPS).
+
+**Recording: a mic is missing from the list** — plug it in before clicking **Enable microphones**; the list refreshes on hot-plug, but some USB interfaces only show up after the OS has finished setting them up.
 
 **macOS port 5000 conflict** — not applicable; Darkroom uses ports 8000 and 5173.

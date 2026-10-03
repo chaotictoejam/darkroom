@@ -5,6 +5,7 @@
 import { useState } from 'react'
 import { api } from '../api/client'
 import type { Project } from '../api/types'
+import Recorder, { type RecordedTrack } from '../components/Recorder/Recorder'
 
 interface SpeakerSlot {
   name: string
@@ -50,6 +51,12 @@ export default function Setup({ project, onBack, onProcessing }: Props) {
   const [language, setLanguage] = useState('en')
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [source, setSource] = useState<'upload' | 'record'>('upload')
+  const [recorded, setRecorded] = useState<RecordedTrack[] | null>(null)
+  const [recording, setRecording] = useState(false)
+
+  // Recording is audio-only, so it is offered for podcasts.
+  const canRecord = project.project_type === 'podcast'
 
   function addSpeaker() {
     if (speakers.length < 4) setSpeakers((prev) => [...prev, { name: '', file: null }])
@@ -63,17 +70,23 @@ export default function Setup({ project, onBack, onProcessing }: Props) {
     setSpeakers((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)))
   }
 
-  const canStart = speakers.every((s) => s.file !== null)
+  function handleBack() {
+    if ((recording || recorded) && !window.confirm('Leave without saving? The recording will be lost.')) return
+    onBack()
+  }
+
+  const slots: SpeakerSlot[] = source === 'record' ? (recorded ?? []) : speakers
+  const canStart = slots.length > 0 && slots.every((s) => s.file !== null)
 
   async function handleStart() {
     setError(null)
     setUploading(true)
     try {
       const form = new FormData()
-      for (const s of speakers) {
+      slots.forEach((s, i) => {
         form.append('files', s.file!)
-        form.append('names', s.name || `Speaker ${speakers.indexOf(s) + 1}`)
-      }
+        form.append('names', s.name || `Speaker ${i + 1}`)
+      })
       form.append('model', model)
       form.append('name', name.trim() || project.name)
       if (language) form.append('language', language)
@@ -97,7 +110,7 @@ export default function Setup({ project, onBack, onProcessing }: Props) {
     <div style={{ display: 'flex', justifyContent: 'center', padding: '40px 16px' }}>
       <div style={{ width: '100%', maxWidth: 560, background: 'var(--bg-card)', borderRadius: 12, padding: 28 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
-          <button onClick={onBack} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 18 }}>←</button>
+          <button onClick={handleBack} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 18 }}>←</button>
           <h2 style={{ fontWeight: 600 }}>{name}</h2>
         </div>
 
@@ -106,7 +119,33 @@ export default function Setup({ project, onBack, onProcessing }: Props) {
           <input value={name} onChange={(e) => setName(e.target.value)} style={{ width: '100%' }} />
         </label>
 
-        <div style={{ marginBottom: 16 }}>
+        {canRecord && (
+          <div style={{ display: 'flex', gap: 4, marginBottom: 16, background: 'var(--bg-elevated)', borderRadius: 'var(--radius)', padding: 4 }}>
+            {(['upload', 'record'] as const).map((opt) => (
+              <button
+                key={opt}
+                onClick={() => setSource(opt)}
+                disabled={uploading}
+                style={{
+                  flex: 1, border: 'none', borderRadius: 'var(--radius)', padding: '6px 0',
+                  background: source === opt ? 'var(--bg-card)' : 'none',
+                  color: source === opt ? 'var(--text)' : 'var(--text-muted)',
+                }}
+              >
+                {opt === 'upload' ? 'Upload files' : 'Record'}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Kept mounted while hidden so switching tabs doesn't drop a recording. */}
+        {canRecord && (
+          <div style={{ marginBottom: 16, display: source === 'record' ? 'block' : 'none' }}>
+            <Recorder onChange={setRecorded} onRecordingChange={setRecording} />
+          </div>
+        )}
+
+        <div style={{ marginBottom: 16, display: source === 'upload' ? 'block' : 'none' }}>
           <span style={{ color: 'var(--text-muted)', fontSize: 12, display: 'block', marginBottom: 8 }}>
             {project.project_type === 'podcast' ? 'Audio files & participants' : 'Camera files & speakers'}
           </span>
@@ -169,7 +208,7 @@ export default function Setup({ project, onBack, onProcessing }: Props) {
             padding: '12px 0', fontWeight: 600, fontSize: 15,
           }}
         >
-          {uploading ? 'Uploading…' : 'Upload & Transcribe'}
+          {uploading ? 'Uploading…' : source === 'record' ? 'Save & Transcribe' : 'Upload & Transcribe'}
         </button>
       </div>
     </div>

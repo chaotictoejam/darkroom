@@ -1,0 +1,14 @@
+{
+  "name": "darkroom-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Darkroom desktop app — Electron shell around the local FastAPI backend",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "devDependencies": {
+    "electron": "^44.5.1"
+  }
+}
