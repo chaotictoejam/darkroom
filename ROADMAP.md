@@ -20,7 +20,21 @@ Darkroom runs as an Electron app (`make desktop`) that starts its own backend an
 
 ## Next
 
-### 1. Installable desktop builds
+### 1. Recording studio and new project flow
+
+**Why:** recording is currently a tab on the podcast setup screen, audio only, with no view of what is being captured and one take per project.
+
+**Involves:** New Project asks **Upload** (already-synced files) or **Record**. Record supports audio only or video + audio, with microphones, cameras and multiple screens. Recording happens in a studio view with live scrolling waveforms (and camera/screen previews for video). Each take is written to disk as it records, transcribed as soon as it stops, and you can keep recording more takes, including later from the editor.
+
+Full plan, mockups and TODO list: **[docs/recording-studio.md](docs/recording-studio.md)**
+
+### 2. Unsynced media on the timeline
+
+**Why:** Upload only works for files that all start at the same moment. Footage from separate devices, or B-roll and inserts, can't be used today.
+
+**Involves:** uploading files into an existing project and placing them on the timeline: drag to position, auto-sync by audio where possible (cross-correlation, as planned for remote guests), and render support for clips that don't span the whole edit.
+
+### 3. Installable desktop builds
 
 **Why:** the desktop app currently needs a repo checkout plus `make install`. Most podcasters won't have Python, Node and FFmpeg set up.
 
@@ -31,25 +45,19 @@ Darkroom runs as an Electron app (`make desktop`) that starts its own backend an
 - Storing projects in the OS app-data folder (`app.getPath('userData')`) rather than the repo's `projects/`
 - Packaging with electron-builder or Electron Forge for `.dmg`, `.exe` and `.AppImage`
 
-### 2. macOS signing and notarization
+### 4. macOS signing and notarization
 
-**Why:** a packaged, unsigned app can't reliably get microphone permission on macOS, and Gatekeeper blocks it by default.
+**Why:** a packaged, unsigned app can't reliably get microphone, camera or screen recording permission on macOS, and Gatekeeper blocks it by default.
 
-**Involves:** hardened runtime with the `com.apple.security.device.audio-input` entitlement, `NSMicrophoneUsageDescription` in `Info.plist`, code signing and notarization in CI. Windows code signing as a follow-on.
+**Involves:** hardened runtime with the `com.apple.security.device.audio-input` and `com.apple.security.device.camera` entitlements, `NSMicrophoneUsageDescription` and `NSCameraUsageDescription` in `Info.plist`, Screen Recording permission guidance, code signing and notarization in CI. Windows code signing as a follow-on.
 
-### 3. Crash-safe recording
-
-**Why:** recordings are held in memory until **Stop** (about 57 MB per track per hour). A crash, power loss or accidental quit during a long session loses everything.
-
-**Involves:** streaming `MediaRecorder` chunks to disk as they arrive (via the Electron preload bridge, or a chunked upload endpoint for the browser), and offering to recover an interrupted session on next launch.
-
-### 4. Multi-channel audio interfaces
+### 5. Multi-channel audio interfaces
 
 **Why:** a common podcast setup is one USB interface (e.g. Focusrite Scarlett 2i2) with a mic on each input. The browser sees that as a single stereo device, so both people end up in one track.
 
 **Involves:** letting a recorder track pick a channel of a multi-channel device (split with a Web Audio `ChannelSplitterNode`, or with FFmpeg on upload), so each input becomes its own participant.
 
-### 5. Remote guests
+### 6. Remote guests
 
 **Why:** many podcasts have guests who aren't in the room. Today every participant needs a mic plugged into the host's computer.
 
@@ -63,7 +71,6 @@ Full plan, options comparison and TODO list: **[docs/remote-guests.md](docs/remo
 
 Not scheduled yet. Add to this list freely.
 
-- **Recording for video projects:** capture camera + mic together so video projects can be recorded in-app too.
-- **Pause and resume** during a recording, keeping tracks aligned.
+- **Pause and resume** within a take, keeping tracks aligned (takes in the recording studio may cover most of this).
 - **Input gain and monitoring:** per-track gain, clip warnings, and optional headphone monitoring.
 - **Auto-update** for the desktop app.
