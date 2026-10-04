@@ -227,6 +227,17 @@ def render_project(project: dict, targets: list[str], projects_dir: Path,
                     "filename": "fullEdit.mp4",
                 }
 
+            elif target in _AUDIO_CODECS:
+                filename = f"fullEdit.{target}"
+                _render_audio(edl["segments"], speakers_dict,
+                              project.get("word_cuts") or [], project.get("word_mutes") or [],
+                              str(output_dir / filename), target)
+                results[target] = {
+                    "status": "done",
+                    "url": f"/projects/{project['id']}/files/output/{filename}",
+                    "filename": filename,
+                }
+
             elif target == "vertical":
                 out = str(output_dir / "vertical.mp4")
                 _render_vertical(edl["segments"], speakers_dict, out)
@@ -601,6 +612,59 @@ def _render_vertical(segments: list[dict], speakers_dict: dict, output_path: str
         "-movflags", "+faststart",
         output_path,
     ])
+    _run_ffmpeg(cmd)
+
+
+_AUDIO_CODECS = {
+    "mp3": ["-c:a", "libmp3lame", "-b:a", "192k"],
+    "wav": ["-c:a", "pcm_s16le"],
+}
+
+
+def _render_audio(segments: list[dict], speakers_dict: dict, word_cuts: list[dict],
+                  word_mutes: list[dict], output_path: str, fmt: str) -> None:
+    """
+    Audio-only export for podcast projects: every speaker's track is mixed for
+    each kept segment, with word cuts removed and word mutes silenced, so the
+    file matches what the editor plays back.
+    """
+    kept = _apply_word_cuts([s for s in segments if s["keep"]], word_cuts)
+    if not kept:
+        raise ValueError("No kept segments to render")
+    cams = list(speakers_dict.keys())
+    if not cams:
+        raise ValueError("No audio tracks in project")
+    n = len(cams)
+
+    input_args: list[str] = []
+    filter_parts: list[str] = []
+    for i, seg in enumerate(kept):
+        s, e = seg["start"], seg["end"]
+        for cam in cams:
+            input_args.extend(["-ss", str(s), "-to", str(e), "-i", speakers_dict[cam]["file_path"]])
+        base = i * n
+        for k in range(n):
+            filter_parts.append(f"[{base + k}:a]asetpts=PTS-STARTPTS[am{i}_{k}]")
+        labels = "".join(f"[am{i}_{k}]" for k in range(n))
+        mix = f"amix=inputs={n}:normalize=0:dropout_transition=0" if n > 1 else "anull"
+        # Mute ranges, shifted to be relative to this segment's start
+        mutes = [
+            f"between(t,{max(m['start'], s) - s:.3f},{min(m['end'], e) - s:.3f})"
+            for m in word_mutes if m["end"] > s and m["start"] < e
+        ]
+        if mutes:
+            mix += f",volume=0:enable='{'+'.join(mutes)}'"
+        filter_parts.append(f"{labels}{mix}[a{i}]")
+
+    concat = "".join(f"[a{i}]" for i in range(len(kept))) + f"concat=n={len(kept)}:v=0:a=1[outa_raw]"
+    norm = "[outa_raw]loudnorm=I=-16:TP=-1.5:LRA=11[outa]"
+    cmd = ["ffmpeg", "-y", *input_args,
+           "-filter_complex", ";".join([*filter_parts, concat, norm]),
+           "-map", "[outa]",
+           # loudnorm upsamples to 192 kHz internally; bring it back down
+           "-ar", "48000",
+           *_AUDIO_CODECS[fmt],
+           output_path]
     _run_ffmpeg(cmd)
 
 
@@ -1061,6 +1125,29 @@ def render_short_custom(
     _run_ffmpeg(cmd)
 
 
+def _apply_word_cuts(segments: list[dict], word_cuts: list[dict]) -> list[dict]:
+    """Slice kept segments around word-level cuts, dropping sub-2-frame slivers."""
+    refined: list[dict] = []
+    for seg in segments:
+        pieces = [{"start": seg["start"], "end": seg["end"], "camera": seg.get("camera")}]
+        for cut in word_cuts:
+            new_pieces: list[dict] = []
+            for p in pieces:
+                if cut["end"] <= p["start"] or cut["start"] >= p["end"]:
+                    new_pieces.append(p)
+                else:
+                    if cut["start"] > p["start"]:
+                        new_pieces.append({"start": p["start"], "end": cut["start"],
+                                           "camera": p["camera"]})
+                    if cut["end"] < p["end"]:
+                        new_pieces.append({"start": cut["end"], "end": p["end"],
+                                           "camera": p["camera"]})
+            pieces = new_pieces
+        refined.extend(pieces)
+    _MIN = 2 / 30.0
+    return [s for s in refined if s["end"] - s["start"] >= _MIN]
+
+
 def render_preview(project: dict, projects_dir) -> dict:
     """
     Render a fast low-quality proxy preview that exactly mirrors the final render:
@@ -1094,30 +1181,7 @@ def render_preview(project: dict, projects_dir) -> dict:
         base_segs = [{"start": 0.0, "end": info["duration"],
                       "camera": first_cam, "keep": True}]
 
-    # ── Apply word cuts by slicing kept segments ──────────────────────────────
-    if word_cuts:
-        refined: list[dict] = []
-        for seg in base_segs:
-            pieces = [{"start": seg["start"], "end": seg["end"],
-                       "camera": seg.get("camera")}]
-            for cut in word_cuts:
-                new_pieces: list[dict] = []
-                for p in pieces:
-                    if cut["end"] <= p["start"] or cut["start"] >= p["end"]:
-                        new_pieces.append(p)
-                    else:
-                        if cut["start"] > p["start"]:
-                            new_pieces.append({"start": p["start"], "end": cut["start"],
-                                               "camera": p["camera"]})
-                        if cut["end"] < p["end"]:
-                            new_pieces.append({"start": cut["end"], "end": p["end"],
-                                               "camera": p["camera"]})
-                pieces = new_pieces
-            refined.extend(pieces)
-        base_segs = refined
-
-    _MIN = 2 / 30.0
-    kept = [s for s in base_segs if s["end"] - s["start"] >= _MIN]
+    kept = _apply_word_cuts(base_segs, word_cuts)
     if not kept:
         raise ValueError("No segments remain after applying cuts")
 

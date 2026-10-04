@@ -12,7 +12,9 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
   const [loading, setLoading] = useState(true)
   const [backendDown, setBackendDown] = useState(false)
   const [creating, setCreating] = useState(false)
-  const [showTypePicker, setShowTypePicker] = useState(false)
+  // New project modal: closed, or which step is showing
+  const [newStep, setNewStep] = useState<'closed' | 'source' | 'record-kind'>('closed')
+  const [newName, setNewName] = useState('')
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
 
   useEffect(() => {
@@ -33,11 +35,18 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
     return () => { cancelled = true }
   }, [])
 
-  async function handleNew(type: 'video' | 'podcast') {
-    setShowTypePicker(false)
+  function openNew() {
+    setNewName('')
+    setNewStep('source')
+  }
+
+  async function handleNew(source: 'upload' | 'record') {
     setCreating(true)
     try {
-      const proj = await api.createProject('Untitled Project', type)
+      // Upload works out video vs audio from the files; Record (audio only for now) is a podcast.
+      const type = source === 'record' ? 'podcast' : 'video'
+      const proj = await api.createProject(newName.trim() || 'Untitled Project', type, source)
+      setNewStep('closed')
       onNewProject(proj)
     } finally {
       setCreating(false)
@@ -71,7 +80,7 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
       </div>
 
       <button
-        onClick={() => setShowTypePicker(true)}
+        onClick={openNew}
         disabled={creating}
         style={{
           background: 'var(--accent)', color: '#fff', border: 'none',
@@ -124,10 +133,10 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
         ))}
       </div>
 
-      {/* ── Project type picker modal ────────────────────────────────────── */}
-      {showTypePicker && (
+      {/* ── New project modal: name, then Upload or Record ─────────────────── */}
+      {newStep !== 'closed' && (
         <div
-          onClick={() => setShowTypePicker(false)}
+          onClick={() => setNewStep('closed')}
           style={{
             position: 'fixed', inset: 0,
             background: 'rgba(0,0,0,0.6)',
@@ -140,48 +149,46 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
             style={{
               background: 'var(--bg-card)', border: '1px solid var(--border)',
               borderRadius: 12, padding: '32px 28px',
-              width: 'min(420px, calc(100vw - 32px))',
-              display: 'flex', flexDirection: 'column', gap: 24,
+              width: 'min(440px, calc(100vw - 32px))',
+              display: 'flex', flexDirection: 'column', gap: 20,
             }}
           >
-            <div>
-              <div style={{ fontWeight: 600, fontSize: 17, marginBottom: 6 }}>New project</div>
-              <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>What are you editing?</div>
+            <div style={{ fontWeight: 600, fontSize: 17 }}>
+              {newStep === 'source' ? 'New project' : 'What are you recording?'}
             </div>
 
-            <div style={{ display: 'flex', gap: 12 }}>
-              {([
-                { type: 'video',   icon: '🎬', title: 'Video',   desc: 'Interview, talking head, multi-cam footage' },
-                { type: 'podcast', icon: '🎙', title: 'Podcast', desc: 'Audio-only recording, no video' },
-              ] as const).map(({ type, icon, title, desc }) => (
-                <button
-                  key={type}
-                  onClick={() => handleNew(type)}
-                  style={{
-                    flex: 1, minWidth: 0,
-                    display: 'flex', flexDirection: 'column', alignItems: 'center',
-                    gap: 10, padding: '20px 12px',
-                    background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                    borderRadius: 10, cursor: 'pointer', textAlign: 'center',
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
-                >
-                  <span style={{ fontSize: 32 }}>{icon}</span>
-                  <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--text)' }}>{title}</span>
-                  <span style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.4 }}>{desc}</span>
-                </button>
-              ))}
-            </div>
+            {newStep === 'source' ? (
+              <>
+                <label>
+                  <span style={{ color: 'var(--text-muted)', fontSize: 12, display: 'block', marginBottom: 4 }}>Name</span>
+                  <input
+                    autoFocus
+                    value={newName}
+                    placeholder="Untitled Project"
+                    onChange={(e) => setNewName(e.target.value)}
+                    style={{ width: '100%' }}
+                  />
+                </label>
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <ChoiceCard icon="⬆" title="Upload" desc="Files that are already synced" disabled={creating} onClick={() => { void handleNew('upload') }} />
+                  <ChoiceCard icon="●" title="Record" desc="Record each participant's microphone" disabled={creating} onClick={() => setNewStep('record-kind')} />
+                </div>
+              </>
+            ) : (
+              <div style={{ display: 'flex', gap: 12 }}>
+                <ChoiceCard icon="🎙" title="Audio only" desc="A podcast, one track per microphone" disabled={creating} onClick={() => { void handleNew('record') }} />
+                <ChoiceCard icon="🎬" title="Video + audio" desc="Cameras and screens: coming soon" disabled onClick={() => {}} />
+              </div>
+            )}
 
             <button
-              onClick={() => setShowTypePicker(false)}
+              onClick={() => (newStep === 'record-kind' ? setNewStep('source') : setNewStep('closed'))}
               style={{
                 background: 'none', border: 'none', color: 'var(--text-muted)',
                 fontSize: 13, cursor: 'pointer', alignSelf: 'center',
               }}
             >
-              Cancel
+              {newStep === 'record-kind' ? '← Back' : 'Cancel'}
             </button>
           </div>
         </div>
@@ -242,5 +249,34 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
         </div>
       )}
     </div>
+  )
+}
+
+function ChoiceCard({ icon, title, desc, disabled, onClick }: {
+  icon: string
+  title: string
+  desc: string
+  disabled?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        flex: 1, minWidth: 0,
+        display: 'flex', flexDirection: 'column', alignItems: 'center',
+        gap: 10, padding: '20px 12px',
+        background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+        borderRadius: 10, cursor: disabled ? 'default' : 'pointer', textAlign: 'center',
+        opacity: disabled ? 0.5 : 1,
+      }}
+      onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.borderColor = 'var(--accent)' }}
+      onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
+    >
+      <span style={{ fontSize: 28, color: 'var(--accent)' }}>{icon}</span>
+      <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--text)' }}>{title}</span>
+      <span style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.4 }}>{desc}</span>
+    </button>
   )
 }

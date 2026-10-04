@@ -2,6 +2,7 @@
 File upload and transcript editing routes.
 """
 import asyncio
+import json
 import subprocess
 from pathlib import Path
 
@@ -29,6 +30,19 @@ def _has_duration(path: Path) -> bool:
         return float(out) > 0
     except (ValueError, subprocess.TimeoutExpired, FileNotFoundError):
         return False
+
+
+def _has_video_stream(path: Path) -> bool:
+    """True for real video. Cover art embedded in an audio file doesn't count."""
+    cmd = ["ffprobe", "-v", "quiet", "-select_streams", "v",
+           "-show_entries", "stream=codec_type:stream_disposition=attached_pic",
+           "-of", "json", str(path)]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30).stdout
+        streams = json.loads(out or "{}").get("streams", [])
+    except (ValueError, subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+    return any(not s.get("disposition", {}).get("attached_pic") for s in streams)
 
 
 def _normalize_recording(path: Path) -> Path:
@@ -88,6 +102,9 @@ async def upload_files(
         })
 
     proj["speakers"] = speakers
+    # Worked out from the files so the user isn't asked whether it's video or audio.
+    has_video = await asyncio.to_thread(lambda: any(_has_video_stream(Path(s["file_path"])) for s in speakers))
+    proj["project_type"] = "video" if has_video else "podcast"
     if name and name.strip():
         proj["name"] = name.strip()
     proj["transcribe_language"] = language or None

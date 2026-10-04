@@ -61,6 +61,7 @@ export interface Render {
 
 export type ProjectStatus =
   | 'created'
+  | 'recording'
   | 'uploaded'
   | 'transcribing'
   | 'transcribed'
@@ -81,11 +82,46 @@ export interface WordMute {
   end: number
 }
 
+export type ProjectSource = 'upload' | 'record'
+
+/** A person recorded on their own microphone. Ids are A–D, matching speaker ids. */
+export interface Participant {
+  id: string
+  name: string
+}
+
+export type TakeTranscriptionStatus = 'none' | 'pending' | 'transcribing' | 'done' | 'error'
+
+export interface Take {
+  id: string
+  created_at: string
+  status: 'recording' | 'finalizing' | 'ready' | 'error'
+  participants: string[]
+  /** participant id → finalised file inside takes/<id>/ */
+  tracks: Record<string, string>
+  duration: number
+  error: string | null
+  /** Finalised on startup after the app closed mid-take; the studio asks whether to keep it. */
+  recovered: boolean
+  transcription: { status: TakeTranscriptionStatus; percent: number; error?: string | null }
+}
+
+export interface TakeBoundary {
+  take_id: string
+  start: number
+  end: number
+}
+
 export interface Project {
   id: string
   name: string
   status: ProjectStatus
   project_type: 'video' | 'podcast'
+  source: ProjectSource
+  participants?: Participant[]
+  /** Recorded projects only, in timeline order. */
+  takes?: Take[]
+  take_boundaries?: TakeBoundary[]
   created_at: string
   speakers: Speaker[]
   transcripts: Record<string, TranscriptSegment[]>
@@ -104,6 +140,8 @@ export interface ProjectSummary {
   name: string
   status: ProjectStatus
   created_at: string
+  source: ProjectSource
+  project_type: 'video' | 'podcast'
 }
 
 // ── Render request payloads ───────────────────────────────────────────────────

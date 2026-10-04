@@ -26,5 +26,8 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
+    // Never inline scripts (e.g. the AudioWorklet) as data: URLs; the desktop
+    // app's CSP only allows scripts from 'self'.
+    assetsInlineLimit: (filePath) => (filePath.endsWith('.js') ? false : undefined),
   },
 })

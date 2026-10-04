@@ -2,7 +2,7 @@
 
 > *Your footage, developed locally.*
 
-A local-first video and podcast editor. Upload your pre-aligned camera or audio files (or record a podcast right in the app), get an AI-generated edit decision list from Claude, review and tweak cuts in the browser, then render final exports via FFmpeg. Nothing leaves your machine.
+A local-first video and podcast editor. Upload your pre-aligned camera or audio files (or record a podcast in the built-in studio), get an AI-generated edit decision list from Claude, review and tweak cuts in the browser, then render final exports via FFmpeg. Nothing leaves your machine.
 
 See [ROADMAP.md](ROADMAP.md) for what's done and what's planned next.
 
@@ -24,7 +24,7 @@ See [ROADMAP.md](ROADMAP.md) for what's done and what's planned next.
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+
 - Node.js 18+
 - FFmpeg (full build — required for rendering)
 - An Anthropic API key  
@@ -190,9 +190,10 @@ On macOS the first recording triggers the system microphone prompt. If you decli
 
 ## Workflow
 
-1. **New Project** — choose **Video** (multi-camera interview/talking head) or **Podcast** (audio-only recording).
-2. **Upload files** — add up to 4 pre-aligned camera or audio files, one per speaker. For podcasts you can instead choose **Record** and capture up to 4 microphones at once; each mic becomes its own aligned track. Assign a name to each. Choose the transcript **language** (defaults to English) and **Whisper model** (defaults to `medium`).
-3. **Transcribe** — Whisper runs locally on each file's audio track.
+1. **New Project** — name it, then choose **Upload** or **Record**.
+2. **Upload** — add up to 4 camera or audio files, one per speaker. All files must start at the same moment. Darkroom works out whether it's a video or audio-only project from the files. Choose the transcript **language** (defaults to English) and **Whisper model** (defaults to `medium`).
+   **Record** (audio only for now) — pick up to 4 microphones and name each participant, then record in the studio: live scrolling waveforms and level meters per mic, and as many takes as you like. Each take is saved to disk as it records and transcribed as soon as you stop. Reorder or delete takes, then **Finish & edit**.
+3. **Transcribe** — Whisper runs locally on each file's audio track (for recordings, on each take as it finishes).
 4. **Analyse** — Claude receives the merged transcript and returns an EDL (edit decision list) as JSON with segments and 3–5 suggested Shorts clips.
 5. **Review** — video/audio previews, transcript panel, per-segment controls. Toggle cuts, change camera assignments, edit transcript text inline, mute individual words.
 6. **Shorts Builder** — pick any AI-suggested clip or define a custom range. Choose subtitle style, accent colour, opacity, and camera layout. Preview the clip before rendering.
@@ -207,7 +208,7 @@ On macOS the first recording triggers the system microphone prompt. If you decli
 Multi-camera interviews, talking heads, or any recording with video. Supports camera switching in the EDL. Renders 16:9 full edit and 9:16 vertical Shorts.
 
 ### Podcast
-Audio-only recordings, uploaded or recorded in the app. No camera switching. Renders a mixed-audio MP3/AAC output. The setup and editor UIs automatically adapt — file inputs accept audio formats only, the camera layout toggle is hidden.
+Audio-only recordings, uploaded or recorded in the studio. No camera switching. Exports a mixed MP3 or a lossless WAV, with cuts and word mutes applied. The editor adapts automatically: the camera layout toggle is hidden.
 
 ---
 
@@ -236,7 +237,7 @@ darkroom/
 │       │   ├── jobs.py      # transcription, analysis, render routes + WebSocket
 │       │   └── media.py     # file serving helpers
 │       ├── services/
-│       │   ├── transcriber.py  # Whisper transcription
+│       │   ├── transcription.py  # Whisper transcription
 │       │   ├── editor.py       # Claude EDL generation (Anthropic API or Bedrock)
 │       │   └── renderer.py     # FFmpeg rendering
 │       └── storage.py       # project JSON persistence
@@ -245,8 +246,9 @@ darkroom/
 │       ├── views/
 │       │   ├── Welcome.tsx  # project list + new project
 │       │   ├── Setup.tsx    # file upload + settings
+│       │   ├── Studio.tsx   # recording studio (takes, live waveforms)
 │       │   └── Editor.tsx   # main editor view
-│       ├── components/      # TranscriptEditor, VideoPreview, Recorder, etc.
+│       ├── components/      # TranscriptEditor, VideoPreview, Studio/, etc.
 │       └── api/
 │           ├── client.ts    # typed API client + WebSocket helper
 │           └── types.ts     # shared TypeScript types

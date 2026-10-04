@@ -6,6 +6,7 @@ Prod: uvicorn darkroom.main:app --port 8000 --workers 1
       (single worker — Whisper model lives in process memory)
 """
 import asyncio
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import jobs, media, projects
+from .api import jobs, media, projects, takes
 from .services.renderer import check_ffmpeg
 from .storage import PROJECTS_DIR
 
@@ -36,6 +37,9 @@ async def lifespan(app: FastAPI):
     if not check_ffmpeg():
         print("WARNING: ffmpeg not found — rendering will be unavailable.")
 
+    # Finalise takes left recording by a crash; in the background so startup isn't held up.
+    threading.Thread(target=takes.recover_unfinished_takes, daemon=True).start()
+
     yield
 
 
@@ -50,6 +54,7 @@ app = FastAPI(
 app.include_router(projects.router, prefix="/api")
 app.include_router(media.router,    prefix="/api")
 app.include_router(jobs.router,     prefix="/api")
+app.include_router(takes.router,    prefix="/api")
 
 # ── Project file serving ──────────────────────────────────────────────────────
 @app.get("/projects/{project_id}/files/{filename:path}")

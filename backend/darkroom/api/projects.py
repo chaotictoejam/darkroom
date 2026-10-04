@@ -2,30 +2,41 @@
 Project CRUD routes.
 """
 import shutil
+from typing import Literal, Optional
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ..storage import PROJECTS_DIR, get_project, list_projects, new_project, save_project
+from ..storage import PROJECTS_DIR, editing_project, get_project, list_projects, new_project, save_project
 
 router = APIRouter()
 
 
 class CreateProjectBody(BaseModel):
     name: str = "Untitled Project"
-    project_type: str = "video"
+    project_type: Literal["video", "podcast"] = "video"
+    source: Literal["upload", "record"] = "upload"
+
+
+class PatchProjectBody(BaseModel):
+    name: Optional[str] = None
+    transcribe_model: Optional[str] = None
+    # Present-but-null means auto-detect, so use a sentinel for "not sent".
+    transcribe_language: Optional[str] = ""
 
 
 @router.get("/projects")
 def get_projects():
     return [
-        {"id": p["id"], "name": p["name"], "status": p["status"], "created_at": p["created_at"]}
+        {"id": p["id"], "name": p["name"], "status": p["status"], "created_at": p["created_at"],
+         "source": p["source"], "project_type": p["project_type"]}
         for p in list_projects()
     ]
 
 
 @router.post("/projects", status_code=201)
 def create_project(body: CreateProjectBody):
-    project = new_project(body.name)
+    project = new_project(body.name.strip() or "Untitled Project", source=body.source)
     project["project_type"] = body.project_type
     save_project(project)
     return project
@@ -35,6 +46,21 @@ def create_project(body: CreateProjectBody):
 def get_project_route(project_id: str):
     proj = get_project(project_id)
     if not proj:
+        raise HTTPException(404, "Project not found")
+    return proj
+
+
+@router.patch("/projects/{project_id}")
+def patch_project(project_id: str, body: PatchProjectBody):
+    try:
+        with editing_project(project_id) as proj:
+            if body.name is not None and body.name.strip():
+                proj["name"] = body.name.strip()
+            if body.transcribe_model is not None:
+                proj["transcribe_model"] = body.transcribe_model
+            if body.transcribe_language != "":
+                proj["transcribe_language"] = body.transcribe_language or None
+    except LookupError:
         raise HTTPException(404, "Project not found")
     return proj
 

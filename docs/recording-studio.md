@@ -1,6 +1,6 @@
 # Recording Studio and New Project Flow: Plan
 
-Status: **planned**, not started. Tracked in [ROADMAP.md](../ROADMAP.md).
+Status: **Phase 1 done** (new project flow and audio-only studio); Phases 2–5 planned. Tracked in [ROADMAP.md](../ROADMAP.md).
 
 Turn recording from a tab on the podcast setup screen into a first-class way to start a project: a dedicated studio where you see exactly what is being captured (live waveforms for audio, live previews for cameras and screens), record a take, stop, have it transcribed straight away, and keep recording more takes until you're ready to edit.
 
@@ -177,20 +177,20 @@ projects/a1b2c3d4/
 ## TODO
 
 ### Phase 1: New flow and audio-only studio
-- [ ] New Project modal: name + **Upload** / **Record**; Record asks **Audio only** / **Video + audio**
-- [ ] Store `source: "upload" | "record"` on the project; keep `project_type` (`podcast` for audio only, `video` for video)
-- [ ] Upload path: today's Setup screen with "must be synced" copy; detect video vs audio from the files
-- [ ] Source picker for microphones with names, live meters, duplicate-device warning (reuse from `Recorder`)
-- [ ] Backend: takes data model, chunk append endpoint, finalise-on-stop (WAV), recover unfinished takes on startup
-- [ ] Studio view (in-app, full window): scrolling waveform lanes via `AudioWorklet` + canvas, level meters with clip indicator, timer
-- [ ] Takes strip: per-take length, transcription progress, delete take
-- [ ] Drag to reorder takes; rebuild joined tracks and transcript offsets in the new order
-- [ ] Per-take transcription job, transcript offset and appended to `merged_transcript` (later: transcribe while recording, see [fast-transcription.md](fast-transcription.md))
-- [ ] Join takes into per-speaker tracks; save take boundaries
-- [ ] **Finish & edit** handles takes still transcribing
-- [ ] **MP3 export** for audio-only projects in the render step
-- [ ] Remove the old Record tab from Setup
-- [ ] Tests: chunk append, finalise, recovery, take joining, transcript offsets
+- [x] New Project modal: name + **Upload** / **Record**; Record asks **Audio only** / **Video + audio**
+- [x] Store `source: "upload" | "record"` on the project; keep `project_type` (`podcast` for audio only, `video` for video)
+- [x] Upload path: today's Setup screen with "must be synced" copy; detect video vs audio from the files
+- [x] Source picker for microphones with names, live meters, duplicate-device warning (reuse from `Recorder`)
+- [x] Backend: takes data model, chunk append endpoint, finalise-on-stop (WAV), recover unfinished takes on startup
+- [x] Studio view (in-app, full window): scrolling waveform lanes via `AudioWorklet` + canvas, level meters with clip indicator, timer
+- [x] Takes strip: per-take length, transcription progress, delete take
+- [x] Drag to reorder takes; rebuild joined tracks and transcript offsets in the new order
+- [x] Per-take transcription job, transcript offset and appended to `merged_transcript` (later: transcribe while recording, see [fast-transcription.md](fast-transcription.md))
+- [x] Join takes into per-speaker tracks; save take boundaries
+- [x] **Finish & edit** handles takes still transcribing
+- [x] **MP3 export** for audio-only projects in the render step
+- [x] Remove the old Record tab from Setup
+- [x] Tests: chunk append, finalise, recovery, take joining, transcript offsets
 
 ### Phase 2: Video + audio (cameras)
 - [ ] Camera sources: device, resolution, paired mic, live preview
@@ -228,6 +228,13 @@ projects/a1b2c3d4/
 | Do screens count toward the 4-track limit? | **No.** Up to 4 participants (mics), plus any number of screens |
 | Can takes be reordered before editing? | **Yes**, by dragging in the takes strip |
 | Recording file formats? | **MP4** for video takes, **WAV** for audio takes (lossless, so editing and export don't stack quality loss). **MP3** is offered as an export format. The browser records WebM/Opus; the backend converts on Stop |
+| WAV parameters for takes? | **Mono, 48 kHz, 16-bit PCM** for every mic, so joining takes is a straight concat and tracks stay sample-aligned |
+| When are takes joined into tracks? | On **Finish & edit**, in the takes strip order (`cam_<id>.wav`). Reordering before that only changes the order; nothing is re-transcribed |
+| How many takes transcribe at once? | **One.** A single background worker, since each transcription loads a Whisper model and they would compete for CPU/GPU and memory |
+| Chunk upload integrity? | Each chunk carries its byte **offset**. The backend accepts a resend of a chunk it already has and refuses a gap; while the backend is unreachable, chunks wait in memory and are retried |
+| What happens to a take after a crash? | On startup it is finalised from what reached disk and flagged **recovered**; the studio offers **Keep** or **Delete** |
+| Video + audio in the New Project modal before Phase 2? | Shown, but **disabled** ("coming soon") |
+| Audio export formats? | **MP3** (192 kbps) and **WAV** (lossless master). Both apply the EDL, word cuts and word mutes, and normalise to −16 LUFS |
 
 ## Open questions
 

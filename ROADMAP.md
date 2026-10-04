@@ -24,16 +24,23 @@ Every item below follows these:
 Darkroom runs as an Electron app (`make desktop`) that starts its own backend and closes it on quit. Podcast projects gain a **Record** tab that captures up to 4 microphones at once, one aligned track each, which then flow through the normal transcribe → analyse → edit pipeline.
 
 - Electron shell in `desktop/`, microphone-only permissions, macOS mic prompt
-- Recorder in `frontend/src/components/Recorder/`
+- In-app recording, since replaced by the recording studio (below)
 - Streamed WebM recordings converted to FLAC on upload so durations and seeking work
+
+### Recording studio, Phase 1: new project flow and audio-only studio
+
+New Project asks **Upload** (already-synced files; video or audio-only is detected from the files) or **Record**. Record opens a studio with live scrolling waveforms and level meters per mic. Each take streams to disk as it records, survives a crash, and is transcribed as soon as it stops; takes can be reordered and deleted, then joined into per-speaker tracks on **Finish & edit**. Audio-only projects export to **MP3** or **WAV**.
+
+- Studio in `frontend/src/views/Studio.tsx` and `frontend/src/components/Studio/`
+- Takes API and transcription worker in `backend/darkroom/api/takes.py`; file handling in `services/takes.py`
 
 ---
 
 ## Next
 
-### 1. Recording studio and new project flow
+### 1. Recording studio and new project flow (Phases 2–5)
 
-**Why:** recording is currently a tab on the podcast setup screen, audio only, with no view of what is being captured and one take per project.
+**Why:** the studio records microphones only. Video podcasts and screen recordings need cameras, screens and recording more from the editor.
 
 **Involves:** New Project asks **Upload** (already-synced files) or **Record**. Record supports audio only or video + audio, with microphones, cameras and multiple screens. Recording happens in a studio view with live scrolling waveforms (and camera/screen previews for video). Each take is written to disk as it records, transcribed as soon as it stops, and you can keep recording more takes, including later from the editor.
 
