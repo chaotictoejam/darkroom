@@ -191,9 +191,9 @@ On macOS the first recording triggers the system microphone prompt. If you decli
 ## Workflow
 
 1. **New Project**: name it, then choose **Upload** or **Record**.
-2. **Upload**: add up to 4 camera or audio files, one per speaker. All files must start at the same moment. Darkroom works out whether it's a video or audio-only project from the files. Choose the transcript **language** (defaults to English) and **Whisper model** (defaults to `medium`).
+2. **Upload**: add up to 4 camera or audio files, one per speaker. All files must start at the same moment. Darkroom works out whether it's a video or audio-only project from the files. Choose the transcript **language** (defaults to English) and **Whisper model** (defaults to `turbo`, which is fast and multilingual).
    **Record** (audio only for now): pick up to 4 microphones and name each participant, then record in the studio: live scrolling waveforms and level meters per mic, and as many takes as you like. Each take is saved to disk as it records and transcribed as soon as you stop. Reorder or delete takes, then **Finish & edit**.
-3. **Transcribe**: Whisper runs locally on each file's audio track (for recordings, on each take as it finishes).
+3. **Transcribe**: Whisper runs locally on each file's audio track (for recordings, on each take as it finishes). Silence is skipped (voice activity detection), the model stays loaded between tracks, and it runs in int8 on CPU or float16 on an NVIDIA GPU. The first run downloads the selected model.
 4. **Analyse**: Claude receives the merged transcript and returns an EDL (edit decision list) as JSON with segments and 3–5 suggested Shorts clips.
 5. **Review**: video/audio previews, transcript panel, per-segment controls. Toggle cuts, change camera assignments, edit transcript text inline, mute individual words.
 6. **Shorts Builder**: pick any AI-suggested clip or define a custom range. Choose subtitle style, accent colour, opacity, and camera layout. Preview the clip before rendering.
@@ -333,6 +333,7 @@ projects/
 | DELETE | `/api/projects/:id` | Delete project |
 | POST | `/api/projects/:id/upload` | Upload files, speaker names, language, model |
 | POST | `/api/projects/:id/transcribe` | Start Whisper transcription (async) |
+| POST | `/api/transcription/preload` | Load a Whisper model in the background (`{model, download}`) |
 | POST | `/api/projects/:id/analyze` | Start Claude EDL generation (async) |
 | POST | `/api/projects/:id/skip-analysis` | Generate keep-all EDL without AI |
 | POST | `/api/projects/:id/reset-edl` | Clear EDL, return to transcribed state |
@@ -442,7 +443,7 @@ The Lambda adds effectively zero overhead on top of the Bedrock model cost.
 
 **Whisper produces wrong language / hallucinations**: set the language explicitly in the upload form rather than using Auto-detect. English recordings should use `English`.
 
-**Whisper is slow**: choose a smaller model (`small` or `base`) in the upload form, or run on a machine with a GPU.
+**Whisper is slow**: choose a smaller model (`small` or `base`) in the upload form, or run on a machine with an NVIDIA GPU (CUDA and cuDNN installed).
 
 **Short has no audio / silent**: ensure all camera files have an audio track. Darkroom mixes all microphones; a missing audio stream will cause FFmpeg to fail.
 

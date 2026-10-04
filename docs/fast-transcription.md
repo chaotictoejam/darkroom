@@ -1,6 +1,6 @@
 # Fast Local Transcription: Plan
 
-Status: **planned**, not started. Tracked in [ROADMAP.md](../ROADMAP.md).
+Status: **in progress**: Phase 1 (quick wins) done. Tracked in [ROADMAP.md](../ROADMAP.md).
 
 Descript and Riverside have transcripts ready within moments of an upload or recording finishing. This plan covers how they get there, where Darkroom's time goes today, and how to get close to that speed **while keeping transcription on the user's machine**, plus an opt-in mode that uses GPUs in the user's **own** cloud account.
 
@@ -158,13 +158,13 @@ All "likely gain" figures are to be confirmed by the Phase 0 benchmark.
 - [ ] Record results in this doc and use them to confirm the default model
 
 ### Phase 1: Quick wins
-- [ ] `vad_filter=True`; review which hallucination filters are still needed afterwards
-- [ ] Model cache: load once per (model, device, compute type), reuse across tracks and jobs
-- [ ] Automatic `compute_type`: int8 on CPU, float16 on CUDA
-- [ ] `BatchedInferencePipeline` with a batch size chosen from available memory
-- [ ] Default model → `turbo`; update Setup labels and README
-- [ ] Progress from produced segment times instead of the speed table
-- [ ] Preload the model when a project is opened or the studio is armed
+- [x] `vad_filter=True`; review which hallucination filters are still needed afterwards
+- [x] Model cache: load once per (model, device, compute type), reuse across tracks and jobs
+- [x] Automatic `compute_type`: int8 on CPU, float16 on CUDA
+- [x] `BatchedInferencePipeline` with a batch size chosen from available memory
+- [x] Default model → `turbo`; update Setup labels and README
+- [x] Progress from produced segment times instead of the speed table
+- [x] Preload the model when a project is opened or the studio is armed
 
 ### Phase 2: Per-mic speaker gating
 - [ ] VAD per track + cross-track loudness comparison → speech regions per speaker
@@ -205,7 +205,19 @@ All "likely gain" figures are to be confirmed by the Phase 0 benchmark.
 
 ---
 
+## Decisions
+
+| Question | Decision |
+|---|---|
+| How many models stay loaded? | **One**, the most recently used. Switching model evicts the old one (a job still using it keeps its reference until done). Holding every model a user tries could use several GB of RAM |
+| Which hallucination filters are still needed with VAD? | **All kept.** VAD removes the main cause (silence), but the filters are cheap and still catch loops in real speech. The `no_speech_prob` filter now uses Whisper's own rule (`no_speech_prob > 0.5` **and** `avg_logprob < -1.0`), because the batched pipeline reports `no_speech_prob` per 30 s chunk and on its own would drop real speech next to a pause |
+| Segment granularity with the batched pipeline | `without_timestamps=False`, so segments stay sentence-sized rather than one per 30 s VAD chunk |
+| Compute type when CUDA has no float16 | Next supported of `int8_float16`, `float32`. If the model can't load on CUDA at all (e.g. cuBLAS/cuDNN missing), fall back to CPU int8 and log it; a user-facing message is Phase 5 |
+| Batch size | From memory: CPU 2 / 4 / 8 for < 8 / 8–16 / ≥ 16 GB RAM (4 if unknown, e.g. Windows); CUDA 4 / 8 / 16 for < 4 / 4–8 / ≥ 8 GB free VRAM via `nvidia-smi` (8 if unknown). To be tuned by Phase 0 |
+| When to preload, and may preloading download? | Setup preloads the selected model **only if it's already downloaded**, so browsing the picker never starts a multi-GB download. Entering the studio preloads **and downloads** if needed, since the first take is transcribed as soon as it stops. Endpoint: `POST /api/transcription/preload` `{model, download}` |
+| Default model | **`turbo`** for now (multilingual, fast). Revisit against `distil-large-v3.5` once Phase 0 has numbers |
+
 ## Open questions
 
-- **Default model:** `turbo` or `distil-large-v3.5`? Distil models are English-focused; `turbo` is multilingual. Decide from the Phase 0 results.
+- **Default model:** `turbo` is the default as of Phase 1; confirm against `distil-large-v3.5` (English-focused) with the Phase 0 results.
 - **Live transcript in the studio:** useful to see, or distracting while recording? Could be a toggle.
