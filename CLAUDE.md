@@ -93,6 +93,5 @@ Roadmap items have a plan in `docs/` with Goals, design, a phased **TODO** check
 ## Known gotchas
 
 - The video full edit (`fullEdit` target) renders EDL segments only and ignores `word_cuts`, unlike the preview proxy and the MP3/WAV export (`_apply_word_cuts` in `renderer.py`).
-- `.gitignore` ignores every `build/` directory; don't put tracked files in one (use e.g. `desktop/resources/`).
 - `make desktop` needs a built frontend; `make desktop-dev` needs ports 8000 and 5173 free.
 - Upload currently reads whole files into memory (`await f.read()`); fine for audio, heavy for large video (planned fix in `docs/fast-transcription.md`).

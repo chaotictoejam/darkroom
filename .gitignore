@@ -1,53 +1,60 @@
 # ── Secrets ───────────────────────────────────────────────────────────────────
 .env
+.env.*
+!.env.example
 
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
 .Python
 *.egg-info/
 *.dist-info/
-build/
 .eggs/
-# Keep frontend/dist (Vite build output) but ignore Python build artifacts
 backend/dist/
 backend/build/
-venv/
-.venv/
-env/
+/.venv/
+/venv/
+/env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 # Whisper model cache (can be several GB)
-backend/.whisper/
 .whisper/
 
 # ── Frontend ──────────────────────────────────────────────────────────────────
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+*.tsbuildinfo
+npm-debug.log*
 # Desktop (Electron)
 desktop/node_modules/
 desktop/out/
-# Local Vite env overrides
-frontend/.env.local
-frontend/.env.*.local
+desktop/dist/
+# Playwright
+test-results/
+playwright-report/
 
 # ── Infra (CDK) ───────────────────────────────────────────────────────────────
 infra/cdk.out/
 infra/node_modules/
 
 # ── User data ─────────────────────────────────────────────────────────────────
-# Project files (video uploads + renders) — can be very large
-projects/
+# Project files (uploads, recordings, renders) — can be very large
+/projects/
 
 # ── OS ────────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# ── IDE ───────────────────────────────────────────────────────────────────────
+# ── IDE / tools ───────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
-.claude/
+*.log
+# Personal Claude Code settings; shared .claude/ config can be committed
+.claude/settings.local.json
