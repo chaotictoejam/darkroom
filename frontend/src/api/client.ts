@@ -83,6 +83,10 @@ export const api = {
 
   // ── Jobs ────────────────────────────────────────────────────────────────────
 
+  /** Load a Whisper model in the background. download=false skips models not yet on disk. */
+  preloadModel: (model: string, download = false) =>
+    request<{ ok: boolean }>('/api/transcription/preload', { method: 'POST', body: JSON.stringify({ model, download }) }),
+
   transcribe: (id: string) =>
     request<{ message: string }>(`/api/projects/${id}/transcribe`, { method: 'POST' }),
 

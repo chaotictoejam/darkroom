@@ -1,10 +1,12 @@
 /** Options for local transcription, shared by Setup (upload) and the recording studio. */
+export const DEFAULT_WHISPER_MODEL = 'turbo'
+
 export const WHISPER_MODELS = [
-  { value: 'base',   label: 'base — fast, less accurate' },
-  { value: 'small',  label: 'small — balanced' },
-  { value: 'medium', label: 'medium — good accuracy' },
+  { value: 'turbo',  label: 'turbo — fast + accurate (recommended)' },
+  { value: 'base',   label: 'base — fastest, less accurate' },
+  { value: 'small',  label: 'small — fast, decent accuracy' },
+  { value: 'medium', label: 'medium — slower, good accuracy' },
   { value: 'large',  label: 'large — best, slowest' },
-  { value: 'turbo',  label: 'turbo — fast + accurate' },
 ]
 
 export const LANGUAGES = [
