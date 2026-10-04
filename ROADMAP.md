@@ -38,11 +38,11 @@ New Project asks **Upload** (already-synced files; video or audio-only is detect
 
 ## Next
 
-### 1. Recording studio and new project flow (Phases 2–5)
+### 1. Recording studio and new project flow (Phases 2–7)
 
-**Why:** the studio records microphones only. Video podcasts and screen recordings need cameras, screens and recording more from the editor.
+**Why:** the studio records microphones only. Video podcasts and screen recordings need cameras, screens and recording more from the editor, and most shows need intro music and sound effects.
 
-**Involves:** New Project asks **Upload** (already-synced files) or **Record**. Record supports audio only or video + audio, with microphones, cameras and multiple screens. Recording happens in a studio view with live scrolling waveforms (and camera/screen previews for video). Each take is written to disk as it records, transcribed as soon as it stops, and you can keep recording more takes, including later from the editor.
+**Involves:** New Project asks **Upload** (already-synced files) or **Record**. Record supports audio only or video + audio, with microphones, cameras and multiple screens. Recording happens in a studio view with live scrolling waveforms (and camera/screen previews for video). Each take is written to disk as it records, transcribed as soon as it stops, and you can keep recording more takes, including later from the editor. Music and sound effects (intros/outros, ducked beds, stingers) are placed on their own tracks in the editor and mixed in at render; a studio soundboard comes later. **Studio sound** cleans up voices locally: AI noise removal, de-essing, EQ and level matching between speakers.
 
 Full plan, mockups and TODO list: **[docs/recording-studio.md](docs/recording-studio.md)**
 
