@@ -26,7 +26,7 @@ See [ROADMAP.md](ROADMAP.md) for what's done and what's planned next.
 
 - Python 3.11+
 - Node.js 18+
-- FFmpeg (full build — required for rendering)
+- FFmpeg (full build, required for rendering)
 - An Anthropic API key  
   **or**  
   AWS credentials with access to Bedrock model `us.anthropic.claude-sonnet-4-5-20250929-v1:0`
@@ -35,13 +35,13 @@ See [ROADMAP.md](ROADMAP.md) for what's done and what's planned next.
 
 ## Install
 
-### 1 — Clone / unzip
+### 1. Clone / unzip
 
 ```bash
 cd darkroom
 ```
 
-### 2 — FFmpeg
+### 2. FFmpeg
 
 **macOS (Homebrew)**
 ```bash
@@ -82,7 +82,7 @@ Verify: `ffmpeg -version`
 
 ---
 
-### 3 — Dependencies
+### 3. Dependencies
 
 ```bash
 make install
@@ -104,14 +104,14 @@ cd frontend && npm install
 
 ---
 
-### 4 — AI provider
+### 4. AI provider
 
 Copy the example env file:
 ```bash
 cp .env.example .env
 ```
 
-#### Option A — Anthropic API (default)
+#### Option A: Anthropic API (default)
 
 ```env
 AI_PROVIDER=anthropic
@@ -120,7 +120,7 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 Get a key at <https://console.anthropic.com> → API Keys → Create Key.
 
-#### Option B — AWS Bedrock
+#### Option B: AWS Bedrock
 
 Requires AWS credentials available in the environment (via `AWS_PROFILE`, `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, or an IAM role) and the model `us.anthropic.claude-sonnet-4-5-20250929-v1:0` enabled in your Bedrock console.
 
@@ -169,7 +169,7 @@ make frontend
 make build
 ```
 
-Compiles the React app into `frontend/dist`. FastAPI then serves the full app at **http://localhost:8000** — no Vite needed.
+Compiles the React app into `frontend/dist`. FastAPI then serves the full app at **http://localhost:8000**
 
 ### Desktop app (Electron)
 
@@ -190,15 +190,15 @@ On macOS the first recording triggers the system microphone prompt. If you decli
 
 ## Workflow
 
-1. **New Project** — name it, then choose **Upload** or **Record**.
-2. **Upload** — add up to 4 camera or audio files, one per speaker. All files must start at the same moment. Darkroom works out whether it's a video or audio-only project from the files. Choose the transcript **language** (defaults to English) and **Whisper model** (defaults to `medium`).
-   **Record** (audio only for now) — pick up to 4 microphones and name each participant, then record in the studio: live scrolling waveforms and level meters per mic, and as many takes as you like. Each take is saved to disk as it records and transcribed as soon as you stop. Reorder or delete takes, then **Finish & edit**.
-3. **Transcribe** — Whisper runs locally on each file's audio track (for recordings, on each take as it finishes).
-4. **Analyse** — Claude receives the merged transcript and returns an EDL (edit decision list) as JSON with segments and 3–5 suggested Shorts clips.
-5. **Review** — video/audio previews, transcript panel, per-segment controls. Toggle cuts, change camera assignments, edit transcript text inline, mute individual words.
-6. **Shorts Builder** — pick any AI-suggested clip or define a custom range. Choose subtitle style, accent colour, opacity, and camera layout. Preview the clip before rendering.
-7. **Render** — choose export targets (16:9 full edit, 9:16 vertical, or a named Short) and FFmpeg renders them with audio normalised to –16 LUFS.
-8. **Redo EDL** — re-run the AI analysis on the existing transcript without re-transcribing (sidebar danger zone).
+1. **New Project**: name it, then choose **Upload** or **Record**.
+2. **Upload**: add up to 4 camera or audio files, one per speaker. All files must start at the same moment. Darkroom works out whether it's a video or audio-only project from the files. Choose the transcript **language** (defaults to English) and **Whisper model** (defaults to `medium`).
+   **Record** (audio only for now): pick up to 4 microphones and name each participant, then record in the studio: live scrolling waveforms and level meters per mic, and as many takes as you like. Each take is saved to disk as it records and transcribed as soon as you stop. Reorder or delete takes, then **Finish & edit**.
+3. **Transcribe**: Whisper runs locally on each file's audio track (for recordings, on each take as it finishes).
+4. **Analyse**: Claude receives the merged transcript and returns an EDL (edit decision list) as JSON with segments and 3–5 suggested Shorts clips.
+5. **Review**: video/audio previews, transcript panel, per-segment controls. Toggle cuts, change camera assignments, edit transcript text inline, mute individual words.
+6. **Shorts Builder**: pick any AI-suggested clip or define a custom range. Choose subtitle style, accent colour, opacity, and camera layout. Preview the clip before rendering.
+7. **Render**: choose export targets (16:9 full edit, 9:16 vertical, or a named Short) and FFmpeg renders them with audio normalised to –16 LUFS.
+8. **Redo EDL**: re-run the AI analysis on the existing transcript without re-transcribing (sidebar danger zone).
 
 ---
 
@@ -344,7 +344,7 @@ projects/
 | POST | `/api/projects/:id/render` | Start FFmpeg render `{targets:[…]}` |
 | POST | `/api/projects/:id/render-short` | Render a named Short with subtitle options |
 | POST | `/api/projects/:id/preview` | Generate proxy preview video (async) |
-| GET | `/api/ws/:id` | WebSocket — stream job progress events |
+| GET | `/api/ws/:id` | WebSocket, streams job progress events |
 | GET | `/projects/:id/files/:path` | Serve project file (video / output) |
 
 ---
@@ -389,8 +389,8 @@ cdk deploy
 ```
 
 The stack outputs:
-- **`EdlFunctionArn`** — invoke via `boto3.client("lambda").invoke(...)`
-- **`EdlFunctionUrl`** — HTTPS endpoint (IAM-authenticated)
+- **`EdlFunctionArn`**: invoke via `boto3.client("lambda").invoke(...)`
+- **`EdlFunctionUrl`**: HTTPS endpoint (IAM-authenticated)
 
 The Lambda accepts `{ "prompt": "<formatted prompt>", "retry": false }` and returns `{ "edl_raw": "<json string>" }`.
 
@@ -398,7 +398,7 @@ The Lambda accepts `{ "prompt": "<formatted prompt>", "retry": false }` and retu
 
 ## Costs
 
-Whisper transcription and FFmpeg rendering run locally and are always free. The only billable step is **Analyse** — the single Claude call that generates the EDL.
+Whisper transcription and FFmpeg rendering run locally and are always free. The only billable step is **Analyse** (the single Claude call that generates the EDL).
 
 ### Model pricing
 
@@ -421,7 +421,7 @@ Token consumption scales with episode length. The transcript is the dominant inp
 
 These are rough estimates. A dense multi-speaker episode produces more EDL segments (more output tokens); a solo monologue produces fewer.
 
-Shorts clips and re-renders do **not** generate additional AI calls — they reuse the existing EDL.
+Shorts clips and re-renders do **not** generate additional AI calls (they reuse the existing EDL).
 
 ### CDK Lambda costs (infra/)
 
@@ -438,24 +438,24 @@ The Lambda adds effectively zero overhead on top of the Bedrock model cost.
 
 ## Troubleshooting
 
-**"FFmpeg not found"** — make sure `ffmpeg` is on your `PATH`. Run `ffmpeg -version` to test.
+**"FFmpeg not found"**: make sure `ffmpeg` is on your `PATH`. Run `ffmpeg -version` to test.
 
-**Whisper produces wrong language / hallucinations** — set the language explicitly in the upload form rather than using Auto-detect. English recordings should use `English`.
+**Whisper produces wrong language / hallucinations**: set the language explicitly in the upload form rather than using Auto-detect. English recordings should use `English`.
 
-**Whisper is slow** — choose a smaller model (`small` or `base`) in the upload form, or run on a machine with a GPU.
+**Whisper is slow**: choose a smaller model (`small` or `base`) in the upload form, or run on a machine with a GPU.
 
-**Short has no audio / silent** — ensure all camera files have an audio track. Darkroom mixes all microphones; a missing audio stream will cause FFmpeg to fail.
+**Short has no audio / silent**: ensure all camera files have an audio track. Darkroom mixes all microphones; a missing audio stream will cause FFmpeg to fail.
 
-**SAR mismatch error in FFmpeg** — handled automatically (`setsar=1` is applied to every stream). If still occurring, check that all camera files are standard H.264 MP4.
+**SAR mismatch error in FFmpeg**: handled automatically (`setsar=1` is applied to every stream). If still occurring, check that all camera files are standard H.264 MP4.
 
-**Claude returns invalid JSON** — the app retries once with a stricter prompt. If it fails again, the error is surfaced in the UI.
+**Claude returns invalid JSON**: the app retries once with a stricter prompt. If it fails again, the error is surfaced in the UI.
 
-**MP3 / audio file not selectable in upload dialog** — on Windows, `audio/*` MIME filtering is unreliable. The file input includes explicit extensions (`.mp3`, `.m4a`, `.wav`, etc.) which should allow selection. If a format is missing, rename it to `.mp3` or `.m4a`.
+**MP3 / audio file not selectable in upload dialog**: on Windows, `audio/*` MIME filtering is unreliable. The file input includes explicit extensions (`.mp3`, `.m4a`, `.wav`, etc.) which should allow selection. If a format is missing, rename it to `.mp3` or `.m4a`.
 
-**Seeing the old vanilla JS UI** — make sure you're opening `http://localhost:5173` (the Vite dev server), not port 8000. Port 8000 only serves the React app if you've run `make build` first.
+**Seeing the old vanilla JS UI**: make sure you're opening `http://localhost:5173` (the Vite dev server), not port 8000. Port 8000 only serves the React app if you've run `make build` first.
 
-**Recording: "Microphone access was denied"** — on macOS, allow Darkroom in **System Settings → Privacy & Security → Microphone**, then click **Enable microphones** again. In the browser, recording only works on `localhost` (or HTTPS).
+**Recording: "Microphone access was denied"**: on macOS, allow Darkroom in **System Settings → Privacy & Security → Microphone**, then click **Enable microphones** again. In the browser, recording only works on `localhost` (or HTTPS).
 
-**Recording: a mic is missing from the list** — plug it in before clicking **Enable microphones**; the list refreshes on hot-plug, but some USB interfaces only show up after the OS has finished setting them up.
+**Recording: a mic is missing from the list**: plug it in before clicking **Enable microphones**; the list refreshes on hot-plug, but some USB interfaces only show up after the OS has finished setting them up.
 
-**macOS port 5000 conflict** — not applicable; Darkroom uses ports 8000 and 5173.
+**macOS port 5000 conflict**: not applicable; Darkroom uses ports 8000 and 5173.
