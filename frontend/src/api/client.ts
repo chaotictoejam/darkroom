@@ -3,7 +3,7 @@
  * All requests go to the same origin — Vite proxies /api/* in dev,
  * FastAPI serves everything from the same port in production.
  */
-import type { EDL, Project, ProjectSummary, RenderShortParams } from './types'
+import type { EDL, Participant, Project, ProjectSource, ProjectSummary, RenderShortParams, Take } from './types'
 
 class ApiError extends Error {
   constructor(
@@ -37,10 +37,40 @@ export const api = {
 
   listProjects: () => request<ProjectSummary[]>('/api/projects'),
 
-  createProject: (name: string, project_type: 'video' | 'podcast' = 'video') =>
-    request<Project>('/api/projects', { method: 'POST', body: JSON.stringify({ name, project_type }) }),
+  createProject: (name: string, project_type: 'video' | 'podcast', source: ProjectSource) =>
+    request<Project>('/api/projects', { method: 'POST', body: JSON.stringify({ name, project_type, source }) }),
 
   getProject: (id: string) => request<Project>(`/api/projects/${id}`),
+
+  /** transcribe_language: null means auto-detect. */
+  patchProject: (
+    id: string,
+    patch: { name?: string; transcribe_model?: string; transcribe_language?: string | null },
+  ) => request<Project>(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+
+  // ── Recording studio takes ──────────────────────────────────────────────────
+
+  createTake: (id: string, participants: Participant[]) =>
+    request<Take>(`/api/projects/${id}/takes`, { method: 'POST', body: JSON.stringify({ participants }) }),
+
+  stopTake: (id: string, takeId: string) =>
+    request<Take>(`/api/projects/${id}/takes/${takeId}/stop`, { method: 'POST' }),
+
+  deleteTake: (id: string, takeId: string) =>
+    request<{ ok: boolean }>(`/api/projects/${id}/takes/${takeId}`, { method: 'DELETE' }),
+
+  keepTake: (id: string, takeId: string) =>
+    request<Take>(`/api/projects/${id}/takes/${takeId}/keep`, { method: 'POST' }),
+
+  retryTakeTranscription: (id: string, takeId: string) =>
+    request<{ ok: boolean }>(`/api/projects/${id}/takes/${takeId}/transcribe`, { method: 'POST' }),
+
+  reorderTakes: (id: string, order: string[]) =>
+    request<Take[]>(`/api/projects/${id}/takes/order`, { method: 'PUT', body: JSON.stringify({ order }) }),
+
+  /** Join the takes into per-speaker tracks and one transcript, ready for the editor. */
+  finishRecording: (id: string) =>
+    request<Project>(`/api/projects/${id}/takes/finish`, { method: 'POST' }),
 
   deleteProject: (id: string) =>
     request<{ ok: boolean }>(`/api/projects/${id}`, { method: 'DELETE' }),
@@ -126,7 +156,9 @@ export const api = {
 // ── WebSocket progress ────────────────────────────────────────────────────────
 
 export interface ProgressEvent {
-  type?: 'ping' | 'preview_generating' | 'preview_ready' | 'preview_error'
+  type?: 'ping' | 'preview_generating' | 'preview_ready' | 'preview_error' | 'take'
+  /** Present on take events */
+  take?: Take
   status?: string
   progress?: { step: string; percent: number; message: string }
   /** Present on preview_ready events */
@@ -142,6 +174,7 @@ export interface ProgressEvent {
 export function subscribeToProgress(
   projectId: string,
   onEvent: (evt: ProgressEvent) => void,
+  onClose?: () => void,
 ): () => void {
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
   const ws = new WebSocket(`${protocol}://${window.location.host}/api/ws/${projectId}`)
@@ -154,7 +187,13 @@ export function subscribeToProgress(
     }
   }
 
-  return () => ws.close()
+  let closedByCaller = false
+  ws.onclose = () => { if (!closedByCaller) onClose?.() }
+
+  return () => {
+    closedByCaller = true
+    ws.close()
+  }
 }
 
 export { ApiError }

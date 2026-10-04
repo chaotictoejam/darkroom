@@ -6,9 +6,12 @@ Writes are atomic (write-to-tmp, then rename) to prevent corruption on crash.
 """
 import json
 import os
+import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterator
 
 # Allow override via env var so tests can redirect to a temp directory.
 PROJECTS_DIR = Path(os.getenv("DARKROOM_PROJECTS_DIR", str(Path(__file__).parent.parent.parent / "projects")))
@@ -20,6 +23,7 @@ def project_path(project_id: str) -> Path:
 
 _DEFAULTS = {
     "project_type": "video",
+    "source": "upload",
     "word_cuts": [],
     "word_mutes": [],
     "renders": {},
@@ -53,6 +57,33 @@ def save_project(project: dict) -> None:
     tmp.replace(path)  # atomic on POSIX; near-atomic on Windows
 
 
+_locks: dict[str, threading.RLock] = {}
+_locks_mutex = threading.Lock()
+
+
+def _project_lock(project_id: str) -> threading.RLock:
+    with _locks_mutex:
+        return _locks.setdefault(project_id, threading.RLock())
+
+
+@contextmanager
+def editing_project(project_id: str) -> Iterator[dict]:
+    """
+    Load a project, let the caller change it, then save it, all under a
+    per-project lock. Background jobs (per-take transcription, finalising,
+    progress updates) run at the same time, and a plain load-change-save from
+    two threads would drop one of the changes.
+
+    Raises LookupError if the project does not exist.
+    """
+    with _project_lock(project_id):
+        proj = get_project(project_id)
+        if proj is None:
+            raise LookupError(project_id)
+        yield proj
+        save_project(proj)
+
+
 def list_projects() -> list[dict]:
     if not PROJECTS_DIR.exists():
         return []
@@ -65,12 +96,13 @@ def list_projects() -> list[dict]:
     return projects
 
 
-def new_project(name: str) -> dict:
+def new_project(name: str, source: str = "upload") -> dict:
     return {
         "id": uuid.uuid4().hex[:8],
         "name": name,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "status": "created",
+        "status": "recording" if source == "record" else "created",
+        "source": source,
         "speakers": [],
         "transcripts": {},
         "merged_transcript": [],

@@ -804,15 +804,23 @@ function download(filename: string, content: string, mime: string) {
 
 function RenderContent({ project, onChange }: { project: Project; onChange: (p: Project) => void }) {
   const [rendering, setRendering] = useState(false)
+  const isAudio = project.project_type === 'podcast'
 
-  async function handleRender() {
+  async function handleRender(target: string) {
     setRendering(true)
     try {
-      await api.render(project.id, ['fullEdit'])
+      await api.render(project.id, [target])
       onChange({ ...project, status: 'rendering' })
     } finally {
       setRendering(false)
     }
+  }
+
+  const buttonStyle = {
+    background: 'var(--accent)', color: '#fff', border: 'none',
+    borderRadius: 6, padding: '8px 16px', fontWeight: 600, fontSize: 13,
+    cursor: project.edl && !rendering ? 'pointer' : 'default',
+    opacity: project.edl ? 1 : 0.5,
   }
 
   return (
@@ -822,18 +830,25 @@ function RenderContent({ project, onChange }: { project: Project; onChange: (p: 
           Run AI analysis first to generate an EDL.
         </p>
       )}
-      <button
-        onClick={handleRender}
-        disabled={!project.edl || rendering}
-        style={{
-          background: 'var(--accent)', color: '#fff', border: 'none',
-          borderRadius: 6, padding: '8px 16px', fontWeight: 600, fontSize: 13,
-          cursor: project.edl && !rendering ? 'pointer' : 'default',
-          opacity: project.edl ? 1 : 0.5,
-        }}
-      >
-        {rendering ? 'Rendering…' : 'Render Full Edit'}
-      </button>
+      {isAudio ? (
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={() => handleRender('mp3')} disabled={!project.edl || rendering} style={buttonStyle}>
+            {rendering ? 'Rendering…' : 'Export MP3'}
+          </button>
+          <button
+            onClick={() => handleRender('wav')}
+            disabled={!project.edl || rendering}
+            title="Lossless master"
+            style={{ ...buttonStyle, background: 'none', border: '1px solid var(--accent)', color: 'var(--accent)' }}
+          >
+            Export WAV
+          </button>
+        </div>
+      ) : (
+        <button onClick={() => handleRender('fullEdit')} disabled={!project.edl || rendering} style={buttonStyle}>
+          {rendering ? 'Rendering…' : 'Render Full Edit'}
+        </button>
+      )}
 
       {Object.entries(project.renders).map(([name, render]) => (
         <div key={name} style={{ marginTop: 10, padding: 10, background: 'var(--bg-card)', borderRadius: 6 }}>

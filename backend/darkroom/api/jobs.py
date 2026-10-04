@@ -23,7 +23,7 @@ from ..services.renderer import (
     render_short_custom,
 )
 from ..services.transcription import merge_transcripts, transcribe_all
-from ..storage import PROJECTS_DIR, get_project, save_project
+from ..storage import PROJECTS_DIR, editing_project, get_project, save_project
 
 router = APIRouter()
 
@@ -83,11 +83,11 @@ async def ws_progress(websocket: WebSocket, project_id: str) -> None:
 
 def _update_progress(project_id: str, **kwargs) -> None:
     """Persist progress to disk AND push to WS subscribers."""
-    proj = get_project(project_id)
-    if not proj:
+    try:
+        with editing_project(project_id) as proj:
+            proj.update(kwargs)
+    except LookupError:
         return
-    proj.update(kwargs)
-    save_project(proj)
     _push(project_id, {"status": proj["status"], "progress": proj["progress"]})
 
 

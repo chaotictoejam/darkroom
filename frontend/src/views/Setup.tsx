@@ -1,10 +1,12 @@
 /**
- * Setup view — configure cameras/speakers, upload files, kick off transcription.
- * Mirrors the existing setup card from index.html.
+ * Setup view — the Upload path: name a file per speaker, upload, kick off
+ * transcription. Files must already be synced (all start at the same moment).
+ * Whether the project is video or audio-only is worked out from the files.
  */
 import { useState } from 'react'
 import { api } from '../api/client'
 import type { Project } from '../api/types'
+import { LANGUAGES, WHISPER_MODELS } from '../transcriptionOptions'
 
 interface SpeakerSlot {
   name: string
@@ -16,32 +18,6 @@ interface Props {
   onBack: () => void
   onProcessing: (project: Project) => void
 }
-
-const WHISPER_MODELS = [
-  { value: 'base',   label: 'base — fast, less accurate' },
-  { value: 'small',  label: 'small — balanced' },
-  { value: 'medium', label: 'medium — good accuracy' },
-  { value: 'large',  label: 'large — best, slowest' },
-  { value: 'turbo',  label: 'turbo — fast + accurate' },
-]
-
-const LANGUAGES = [
-  { value: 'en', label: 'English' },
-  { value: '',   label: 'Auto-detect' },
-  { value: 'es', label: 'Spanish' },
-  { value: 'fr', label: 'French' },
-  { value: 'de', label: 'German' },
-  { value: 'it', label: 'Italian' },
-  { value: 'pt', label: 'Portuguese' },
-  { value: 'nl', label: 'Dutch' },
-  { value: 'pl', label: 'Polish' },
-  { value: 'ru', label: 'Russian' },
-  { value: 'zh', label: 'Chinese' },
-  { value: 'ja', label: 'Japanese' },
-  { value: 'ko', label: 'Korean' },
-  { value: 'ar', label: 'Arabic' },
-  { value: 'hi', label: 'Hindi' },
-]
 
 export default function Setup({ project, onBack, onProcessing }: Props) {
   const [name, setName] = useState(project.name)
@@ -63,17 +39,17 @@ export default function Setup({ project, onBack, onProcessing }: Props) {
     setSpeakers((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)))
   }
 
-  const canStart = speakers.every((s) => s.file !== null)
+  const canStart = speakers.length > 0 && speakers.every((s) => s.file !== null)
 
   async function handleStart() {
     setError(null)
     setUploading(true)
     try {
       const form = new FormData()
-      for (const s of speakers) {
+      speakers.forEach((s, i) => {
         form.append('files', s.file!)
-        form.append('names', s.name || `Speaker ${speakers.indexOf(s) + 1}`)
-      }
+        form.append('names', s.name || `Speaker ${i + 1}`)
+      })
       form.append('model', model)
       form.append('name', name.trim() || project.name)
       if (language) form.append('language', language)
@@ -107,24 +83,24 @@ export default function Setup({ project, onBack, onProcessing }: Props) {
         </label>
 
         <div style={{ marginBottom: 16 }}>
-          <span style={{ color: 'var(--text-muted)', fontSize: 12, display: 'block', marginBottom: 8 }}>
-            {project.project_type === 'podcast' ? 'Audio files & participants' : 'Camera files & speakers'}
+          <span style={{ color: 'var(--text-muted)', fontSize: 12, display: 'block', marginBottom: 4 }}>
+            Files & speakers
           </span>
+          <p style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 8 }}>
+            One file per speaker (camera or microphone). <strong style={{ color: 'var(--text)' }}>All files must start at the same moment</strong>,
+            so they line up without adjusting.
+          </p>
           {speakers.map((s, i) => (
             <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
               <input
-                placeholder={project.project_type === 'podcast' ? `Participant ${i + 1}` : `Speaker ${i + 1}`}
+                placeholder={`Speaker ${i + 1}`}
                 value={s.name}
                 onChange={(e) => updateSpeaker(i, { name: e.target.value })}
                 style={{ flex: 1 }}
               />
               <input
                 type="file"
-                accept={
-                  project.project_type === 'podcast'
-                    ? 'audio/*,.mp3,.m4a,.wav,.aac,.ogg,.flac,.opus'
-                    : 'video/*,audio/*,.mp4,.mov,.mkv,.avi,.webm,.mp3,.m4a,.wav'
-                }
+                accept="video/*,audio/*,.mp4,.mov,.mkv,.avi,.webm,.mp3,.m4a,.wav,.aac,.ogg,.flac,.opus"
                 onChange={(e) => {
                   const file = e.target.files?.[0]
                   if (file !== undefined) updateSpeaker(i, { file })
@@ -138,7 +114,7 @@ export default function Setup({ project, onBack, onProcessing }: Props) {
           ))}
           {speakers.length < 4 && (
             <button onClick={addSpeaker} style={{ background: 'none', border: '1px dashed var(--border)', color: 'var(--text-muted)', borderRadius: 'var(--radius)', padding: '6px 14px', width: '100%' }}>
-              {project.project_type === 'podcast' ? '+ Add participant' : '+ Add camera'}
+              + Add speaker
             </button>
           )}
         </div>

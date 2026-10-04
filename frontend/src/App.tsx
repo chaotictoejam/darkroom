@@ -2,10 +2,11 @@ import { useState } from 'react'
 import type { Project } from './api/types'
 import Welcome from './views/Welcome'
 import Setup from './views/Setup'
+import Studio from './views/Studio'
 import Processing from './views/Processing'
 import Editor from './views/Editor'
 
-export type AppView = 'welcome' | 'setup' | 'processing' | 'editor'
+export type AppView = 'welcome' | 'setup' | 'studio' | 'processing' | 'editor'
 
 export default function App() {
   const [view, setView] = useState<AppView>('welcome')
@@ -14,7 +15,9 @@ export default function App() {
   function openProject(proj: Project) {
     setProject(proj)
     // Route to the correct view based on current project status
-    if (proj.status === 'created' || proj.status === 'uploaded') {
+    if (proj.source === 'record' && (proj.status === 'created' || proj.status === 'recording')) {
+      setView('studio')
+    } else if (proj.status === 'created' || proj.status === 'uploaded') {
       setView('setup')
     } else if (proj.status === 'transcribing' || proj.status === 'analyzing' || proj.status === 'rendering') {
       setView('processing')
@@ -25,7 +28,7 @@ export default function App() {
 
   function startNewProject(proj: Project) {
     setProject(proj)
-    setView('setup')
+    setView(proj.source === 'record' ? 'studio' : 'setup')
   }
 
   return (
@@ -41,6 +44,13 @@ export default function App() {
           project={project}
           onBack={() => setView('welcome')}
           onProcessing={(proj) => { setProject(proj); setView('processing') }}
+        />
+      )}
+      {view === 'studio' && project && (
+        <Studio
+          project={project}
+          onBack={() => setView('welcome')}
+          onFinished={(proj) => { setProject(proj); setView('editor') }}
         />
       )}
       {view === 'processing' && project && (
