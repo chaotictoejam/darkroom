@@ -1,27 +1,127 @@
 """
-processor.py — Whisper transcription and transcript merge
+transcription.py — Whisper transcription and transcript merge
+
+Models are loaded once and cached (see ``get_model``); every track is decoded
+with Silero VAD and faster-whisper's batched pipeline, so silence is skipped
+and speech is decoded several 30 s windows at a time.
 """
 
+import logging
 import os
-import re
 import shutil
 import subprocess
 import tempfile
 import threading
-import time
 import wave
 from collections import Counter
 
+import ctranslate2
 import numpy as np
-from faster_whisper import WhisperModel
+from faster_whisper import BatchedInferencePipeline, WhisperModel, download_model
 
-# Conservative CPU-based estimates of audio-seconds processed per wall-clock second.
-# GPU will be faster; the bar will just finish early rather than overshoot.
-_MODEL_SPEED: dict[str, float] = {
-    "base": 12.0, "small": 8.0, "medium": 5.0,
-    "large": 2.5, "large-v2": 2.5, "large-v3": 2.5,
-    "turbo": 12.0,
-}
+logger = logging.getLogger(__name__)
+
+DEFAULT_MODEL = "turbo"
+
+_SAMPLE_RATE = 16000
+
+
+# ── Model cache ───────────────────────────────────────────────────────────────
+
+# Only the most recently used model is kept: large-v3 alone is ~1.5 GB in int8,
+# so holding every model a user has tried would exhaust RAM. A job still using
+# an evicted model keeps its own reference until it finishes.
+_model_cache: dict[tuple[str, str, str], WhisperModel] = {}
+_model_lock = threading.Lock()
+
+
+def _pick_device() -> tuple[str, str]:
+    """(device, compute_type): float16 on an NVIDIA GPU, int8 on CPU."""
+    try:
+        if ctranslate2.get_cuda_device_count() > 0:
+            supported = ctranslate2.get_supported_compute_types("cuda")
+            for compute_type in ("float16", "int8_float16", "float32"):
+                if compute_type in supported:
+                    return "cuda", compute_type
+    except Exception:  # broken CUDA install: fall through to CPU
+        logger.exception("CUDA check failed; using CPU")
+    return "cpu", "int8"
+
+
+def get_model(model_name: str, *, download: bool = True) -> WhisperModel | None:
+    """Return a cached WhisperModel, loading it on first use.
+
+    With ``download=False`` a model that isn't on disk yet returns None instead
+    of being downloaded (used for preloading, so browsing the model picker
+    never starts a multi-GB download).
+    """
+    device, compute_type = _pick_device()
+    key = (model_name, device, compute_type)
+    with _model_lock:
+        model = _model_cache.get(key)
+        if model is not None:
+            return model
+        if not download:
+            try:
+                download_model(model_name, local_files_only=True)
+            except Exception:
+                return None
+        try:
+            model = WhisperModel(model_name, device=device, compute_type=compute_type)
+        except Exception:
+            if device == "cpu":
+                raise
+            # e.g. CUDA driver present but cuBLAS/cuDNN missing
+            logger.exception("Could not load %s on %s; falling back to CPU", model_name, device)
+            key = (model_name, "cpu", "int8")
+            model = WhisperModel(model_name, device="cpu", compute_type="int8")
+        _model_cache.clear()
+        _model_cache[key] = model
+        return model
+
+
+def preload_model(model_name: str, *, download: bool = False) -> None:
+    """Load a model in the background so the first transcription starts at once."""
+    def _load() -> None:
+        try:
+            get_model(model_name, download=download)
+        except Exception:
+            logger.exception("Preloading Whisper model %s failed", model_name)
+
+    threading.Thread(target=_load, daemon=True).start()
+
+
+def _total_memory_gb() -> float | None:
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
+    except (AttributeError, ValueError, OSError):  # e.g. Windows
+        return None
+
+
+def _free_gpu_memory_gb() -> float | None:
+    if not shutil.which("nvidia-smi"):
+        return None
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+        return int(out.split()[0]) / 1024
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return None
+
+
+def _batch_size(device: str) -> int:
+    """How many 30 s windows to decode at once, from the memory available."""
+    if device == "cuda":
+        free = _free_gpu_memory_gb()
+        if free is None:
+            return 8
+        return 16 if free >= 8 else 8 if free >= 4 else 4
+    total = _total_memory_gb()
+    if total is None:
+        return 4
+    return 8 if total >= 16 else 4 if total >= 8 else 2
 
 
 def _extract_audio(video_path: str) -> str:
@@ -58,65 +158,63 @@ def transcribe_file(
     file_path: str,
     speaker_id: str,
     speaker_name: str,
-    model_name: str = "base",
+    model_name: str = DEFAULT_MODEL,
     language: str | None = None,
     progress_callback=None,
 ) -> list[dict]:
     """Transcribe a single video/audio file using Whisper. Returns list of segment dicts.
 
-    progress_callback(frac: float) is called every ~1.5 s with an estimated
-    0.0–0.95 fraction of this speaker's audio processed. The caller maps this
-    onto the overall job percentage.
+    progress_callback(frac: float) is called as segments are decoded, with the
+    fraction (0.0–1.0) of this speaker's audio covered so far. The caller maps
+    this onto the overall job percentage.
     """
     audio_path = _extract_audio(file_path)
-    stop_event = threading.Event()
     try:
         audio_np = _wav_to_numpy(audio_path)
-        audio_duration = len(audio_np) / 16000.0
-        model = WhisperModel(model_name, device="auto")
-
-        if progress_callback and audio_duration > 0:
-            speed = _MODEL_SPEED.get(model_name, 5.0)
-            estimated_wall = audio_duration / speed
-            start = time.monotonic()
-
-            def _tick() -> None:
-                # stop_event.wait(timeout) returns True when set, False on timeout
-                while not stop_event.wait(1.5):
-                    elapsed = time.monotonic() - start
-                    progress_callback(min(0.95, elapsed / max(estimated_wall, 1.0)))
-
-            threading.Thread(target=_tick, daemon=True).start()
-
-        segments_iter, _info = model.transcribe(
-            audio_np,
-            word_timestamps=True,
-            language=language,
-            # temperature=0 forces greedy decoding — far less likely to hallucinate loops
-            temperature=0,
-            # Don't feed previous segment text as context — prevents one hallucination
-            # from snowballing into the next segment
-            condition_on_previous_text=False,
-            # Whisper's own thresholds for dropping likely-silence segments
-            no_speech_threshold=0.5,
-            log_prob_threshold=-1.0,
-            compression_ratio_threshold=2.4,
-        )
-        # transcribe() returns a lazy generator — consume it now, inside the
-        # try block, so the progress-ticker thread is stopped once decoding
-        # actually finishes.
-        whisper_segments = list(segments_iter)
     finally:
-        stop_event.set()
         try:
             os.unlink(audio_path)
         except OSError:
             pass
 
+    audio_duration = len(audio_np) / _SAMPLE_RATE
+    model = get_model(model_name)
+    pipeline = BatchedInferencePipeline(model)
+    segments_iter, _info = pipeline.transcribe(
+        audio_np,
+        language=language,
+        batch_size=_batch_size(model.model.device),
+        # Silero VAD: only speech is decoded, which skips silence and removes the
+        # main source of hallucinations
+        vad_filter=True,
+        word_timestamps=True,
+        # Keep sentence-level segments rather than one per 30 s VAD chunk
+        without_timestamps=False,
+        # temperature=0 forces greedy decoding — far less likely to hallucinate loops
+        temperature=0,
+        # Don't feed previous segment text as context — prevents one hallucination
+        # from snowballing into the next segment
+        condition_on_previous_text=False,
+        # Whisper's own thresholds for dropping likely-silence segments
+        no_speech_threshold=0.5,
+        log_prob_threshold=-1.0,
+        compression_ratio_threshold=2.4,
+    )
+
+    # transcribe() returns a lazy generator; progress comes from how far into the
+    # track the decoded segments reach
+    whisper_segments = []
+    for seg in segments_iter:
+        whisper_segments.append(seg)
+        if progress_callback and audio_duration > 0:
+            progress_callback(min(1.0, seg.end / audio_duration))
+
     segments = []
     for seg in whisper_segments:
-        # Skip segments Whisper itself flagged as likely silence
-        if seg.no_speech_prob > 0.5:
+        # Whisper's rule for silence: likely no speech AND low confidence. The
+        # batched pipeline reports no_speech_prob per 30 s chunk, so it can't be
+        # used on its own without dropping real speech next to a pause.
+        if seg.no_speech_prob > 0.5 and seg.avg_logprob < -1.0:
             continue
         # Skip segments with suspiciously high compression ratio (repetitive text)
         if seg.compression_ratio > 2.4:
@@ -136,7 +234,7 @@ def transcribe_file(
     return _filter_hallucinations(segments)
 
 
-def transcribe_all(speakers: list[dict], model_name: str, progress_callback=None, language: str | None = None) -> dict[str, list]:
+def transcribe_all(speakers: list[dict], model_name: str = DEFAULT_MODEL, progress_callback=None, language: str | None = None) -> dict[str, list]:
     """Transcribe all speaker files. Returns {speaker_id: [segments]}.
 
     progress_callback(overall_frac: float, name: str, index: int, total: int)
