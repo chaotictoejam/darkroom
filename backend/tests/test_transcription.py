@@ -142,10 +142,22 @@ def test_transcribe_file_uses_vad_batches_and_real_progress(tmp_path, fake_model
 
     assert seen["kwargs"]["vad_filter"] is True
     assert seen["kwargs"]["word_timestamps"] is True
-    assert seen["kwargs"]["without_timestamps"] is False
+    # Timestamp tokens make the batched pipeline drop speech; segments come from word times
+    assert seen["kwargs"]["without_timestamps"] is True
     assert seen["kwargs"]["batch_size"] >= 1
     assert seen["kwargs"]["language"] == "en"
     assert [s["text"] for s in segments] == ["Welcome to the show", "Today we talk about editing", "Let's get started"]
     assert segments[0]["speaker_id"] == "A" and segments[0]["words"][0]["start"] == 1.0
     assert progress == pytest.approx([0.25, 0.5, 0.7, 1.0])
     assert progress == sorted(progress)
+
+
+def test_chunks_split_into_sentences_at_punctuation_and_pauses():
+    def w(word, start, end):
+        return {"word": word, "start": start, "end": end}
+
+    words = [w(" Hello", 0.0, 0.4), w(" there.", 0.4, 0.8), w(" How", 1.0, 1.2), w(" are", 1.2, 1.4),
+             w(" you", 1.4, 1.6), w(" doing", 3.0, 3.4), w(" today?", 3.4, 3.9), w(" Good", 4.0, 4.3)]
+    parts = tr._split_sentences(words)
+    assert ["".join(x["word"] for x in p).strip() for p in parts] == [
+        "Hello there.", "How are you", "doing today?", "Good"]

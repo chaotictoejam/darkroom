@@ -188,8 +188,10 @@ def transcribe_file(
         # main source of hallucinations
         vad_filter=True,
         word_timestamps=True,
-        # Keep sentence-level segments rather than one per 30 s VAD chunk
-        without_timestamps=False,
+        # Timestamp tokens make the batched pipeline drop speech after a chunk's
+        # last timestamp (it decodes each chunk once, with no re-seek), so decode
+        # text only and split chunks into sentences from word times below
+        without_timestamps=True,
         # temperature=0 forces greedy decoding — far less likely to hallucinate loops
         temperature=0,
         # Don't feed previous segment text as context — prevents one hallucination
@@ -219,19 +221,39 @@ def transcribe_file(
         # Skip segments with suspiciously high compression ratio (repetitive text)
         if seg.compression_ratio > 2.4:
             continue
-        segments.append({
-            "speaker_id": speaker_id,
-            "speaker_name": speaker_name,
-            "start": round(float(seg.start), 3),
-            "end": round(float(seg.end), 3),
-            "text": seg.text.strip(),
-            "words": [
-                {"word": w.word, "start": round(float(w.start), 3), "end": round(float(w.end), 3)}
-                for w in (seg.words or [])
-            ],
-        })
+        words = [{"word": w.word, "start": round(float(w.start), 3), "end": round(float(w.end), 3)}
+                 for w in (seg.words or [])]
+        for part in _split_sentences(words) if words else [None]:
+            segments.append({
+                "speaker_id": speaker_id,
+                "speaker_name": speaker_name,
+                "start": part[0]["start"] if part else round(float(seg.start), 3),
+                "end": part[-1]["end"] if part else round(float(seg.end), 3),
+                "text": "".join(w["word"] for w in part).strip() if part else seg.text.strip(),
+                "words": part or [],
+            })
 
     return _filter_hallucinations(segments)
+
+
+# A pause this long between words also ends a segment
+_SENTENCE_GAP_S = 1.0
+
+
+def _split_sentences(words: list[dict]) -> list[list[dict]]:
+    """Split one decoded chunk (up to 30 s) into sentence-sized runs of words.
+
+    A run ends after a word ending in . ? or !, or before a pause of
+    _SENTENCE_GAP_S or more.
+    """
+    parts: list[list[dict]] = [[]]
+    for i, w in enumerate(words):
+        if parts[-1] and w["start"] - words[i - 1]["end"] >= _SENTENCE_GAP_S:
+            parts.append([])
+        parts[-1].append(w)
+        if w["word"].strip().endswith((".", "?", "!")):
+            parts.append([])
+    return [p for p in parts if p]
 
 
 def transcribe_all(speakers: list[dict], model_name: str = DEFAULT_MODEL, progress_callback=None, language: str | None = None) -> dict[str, list]:
