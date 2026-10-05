@@ -23,6 +23,11 @@ dev = [
     "pytest>=8.0",
     "httpx>=0.27",
 ]
+bench = [
+    "jiwer>=3.0",
+    "whisper-normalizer>=0.0.10",
+    "pyarrow>=14",
+]
 bedrock = [
     "boto3>=1.34.0",
 ]
