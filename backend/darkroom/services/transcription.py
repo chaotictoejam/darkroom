@@ -18,6 +18,7 @@ from collections import Counter
 import ctranslate2
 import numpy as np
 from faster_whisper import BatchedInferencePipeline, WhisperModel, download_model
+from faster_whisper.vad import get_vad_model
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,10 @@ def get_model(model_name: str, *, download: bool = True) -> WhisperModel | None:
                 download_model(model_name, local_files_only=True)
             except Exception:
                 return None
+        # Load Silero VAD (onnxruntime) before the Whisper model: importing
+        # onnxruntime after CTranslate2 has loaded the CUDA libraries segfaults
+        # on some systems (seen on an EC2 T4 with pip-installed cuDNN 9)
+        get_vad_model()
         try:
             model = WhisperModel(model_name, device=device, compute_type=compute_type)
         except Exception:

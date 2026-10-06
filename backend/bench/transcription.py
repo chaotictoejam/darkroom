@@ -385,7 +385,7 @@ def run(specs: list[str], minutes: float, kinds: list[str] | None, label: str, o
             if proc.returncode != 0:
                 rc = proc.returncode
                 how = f"signal {signal.Signals(-rc).name}" if rc < 0 else f"exit {rc}"
-                tail = (proc.stderr.strip() or proc.stdout.strip() or "(no output)")[-3000:]
+                tail = (proc.stderr.strip() or proc.stdout.strip() or "(no output)")[-12000:]
                 print(f"FAILED ({how})\n{tail}")
                 continue
             res = json.loads(proc.stdout.strip().splitlines()[-1])
