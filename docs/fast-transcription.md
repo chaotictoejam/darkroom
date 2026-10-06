@@ -1,6 +1,6 @@
 # Fast Local Transcription: Plan
 
-Status: **in progress**: Phase 1 (quick wins) done. Tracked in [ROADMAP.md](../ROADMAP.md).
+Status: **in progress**: Phase 1 (quick wins) done; Phase 0 benchmark done on CPU (see [Phase 0 results](#phase-0-results-cpu)). Tracked in [ROADMAP.md](../ROADMAP.md).
 
 Descript and Riverside have transcripts ready within moments of an upload or recording finishing. This plan covers how they get there, where Darkroom's time goes today, and how to get close to that speed **while keeping transcription on the user's machine**, plus an opt-in mode that uses GPUs in the user's **own** cloud account.
 
@@ -29,14 +29,14 @@ From `backend/darkroom/services/transcription.py`:
 | Each speaker's **whole track** is transcribed, one after another | A 1-hour, 2-mic podcast is 2 hours of audio to process, even though each mic is mostly silence or crosstalk |
 | **No VAD** (`vad_filter` not set) | Whisper processes every silent 30 s window, and then several filters have to remove the hallucinations it produces on silence |
 | The model is **loaded again for every track** (`WhisperModel(...)` inside `transcribe_file`) | Several seconds per track, and memory churn |
-| `compute_type` left at default | On CPU this runs in float32; int8 is typically around twice as fast with little accuracy loss |
+| `compute_type` left at default | On CPU this runs in float32; int8 measured 1.15–1.2× faster in Phase 0, with no accuracy loss |
 | Default model is **`medium`** | `turbo` (large-v3-turbo) and `distil-large-v3.5` are faster with similar or better accuracy |
 | No **batched** inference | `BatchedInferencePipeline` (available in the installed faster-whisper 1.2.1) decodes many chunks at once |
 | Transcription starts only **after** upload or recording ends | Nothing overlaps; a long recording means a long wait after Stop |
 | Uploads copy files **through HTTP**, and the backend reads the whole file into memory | For multi-GB video this is slow before transcription even starts |
 | Progress is a **time estimate**, and the transcript appears only at the end | Feels slower than it is |
 
-**Rough estimate** (to be measured in Phase 0): a 1-hour, 2-person podcast on an 8–12 core CPU with `medium` today takes in the region of 20–30 minutes. With the quick wins below it should come down to a few minutes; with live transcription during recording, to seconds after Stop.
+**Measured in Phase 0** (Ryzen 5 3600, 6 cores): a 1-hour, 2-person podcast with `medium` and the old settings took about **61 minutes**, not the 20–30 first estimated. With the Phase 1 settings it takes about 28 minutes with `turbo`, or 9 with `small`; with live transcription during recording, it should come down to seconds after Stop.
 
 ---
 
@@ -146,16 +146,49 @@ The deployment is a CDK stack in `infra/` alongside the existing ones, and the a
 | Streaming segments to UI | Small | Perceived speed |
 | Optional self-hosted cloud GPUs | Large | Near-instant on any machine, for users who opt in |
 
-All "likely gain" figures are to be confirmed by the Phase 0 benchmark.
+All "likely gain" figures are to be confirmed by the Phase 0 benchmark; the CPU results are below.
+
+---
+
+## Phase 0 results (CPU)
+
+Measured on 4 Oct 2026 on an AMD Ryzen 5 3600 (6 cores, 12 threads, 32 GB, no usable GPU) with faster-whisper 1.2.1. Script: [`backend/bench/transcription.py`](../backend/bench/transcription.py); raw results (no transcripts): [`backend/bench/results/fedora.jsonl`](../backend/bench/results/fedora.jsonl). NVIDIA and Apple Silicon runs are still to do.
+
+**Test set** (public, with human reference transcripts; 75 min of audio, 7 tracks): solo = one TED talk (TED-LIUM 3 long-form, 15 min); 2-mic = AMI TS3003b 25:00–35:00, the two speakers in conversation; 4-mic = AMI ES2004a 7:00–17:00, all four headsets. AMI headsets have real crosstalk.
+
+**WER** is reported two ways: everything transcribed on each mic (crosstalk from other speakers counts as insertions), and in brackets with crosstalk excluded (only words inside the speaker's own reference speech, the best a Phase 2 gate could do). Speed is × real time, including model load.
+
+| Config | Solo | 2-mic | 4-mic | Overall speed | Pooled WER, crosstalk excluded | Peak RAM |
+|---|---|---|---|---|---|---|
+| Before Phase 1 (`medium`, float32, no VAD) | 1.53× · 1.8% | 1.98× · 65.9% (29.8%) | 2.27× · 36.1% (35.4%) | 2.00× | 19.7% | 8.0 GB |
+| Phase 1, `large-v3` | 1.59× · 1.9% | 2.70× · 36.5% (14.7%) | 5.49× · 16.5% (15.4%) | 3.11× | 9.5% | 8.1 GB |
+| Phase 1, `turbo` (default) | 2.74× · 2.1% | 4.27× · 37.3% (14.8%) | 9.43× · 16.0% (15.2%) | 5.20× | 9.5% | 3.6 GB |
+| Phase 1, `distil-large-v3.5` | 2.81× · 1.7% | 4.36× · 60.5% (15.1%) | 9.60× · 17.0% (13.0%) | 5.31× | 8.7% | 3.6 GB |
+| Phase 1, `medium` | 2.85× · 2.0% | 4.88× · 31.2% (16.1%) | 9.70× · 15.4% (14.8%) | 5.55× | 9.7% | 5.0 GB |
+| Phase 1, `small` | 7.83× · 2.1% | 12.85× · 33.2% (15.4%) | 26.38× · 16.1% (15.7%) | 15.01× | 9.8% | 2.4 GB |
+| Phase 1, `base` | 23.64× · 2.9% | 39.81× · 41.0% (16.3%) | 74.23× · 19.3% (17.2%) | 44.69× | 10.9% | 1.8 GB |
+
+Ablations on `turbo` (solo / 2-mic speed): float32 sequential no VAD 2.31× / 2.53×; + int8 2.83× / 2.90×; + VAD 2.94× / 3.71×; batched pipeline at batch 1 / 4 / 8 / 16: 2.68–2.78× / 4.62×, 4.37×, 4.27×, 4.18×; batch 8 with 6 threads 3.27× / 5.18×; with 12 threads 3.30× / 4.95×.
+
+What the numbers say:
+
+- **Phase 1 is 2.6× faster overall and halves the error rate** (19.7% → 9.5% crosstalk excluded). The old code missed about a third of the words on the 4-mic tracks (588 of 1,880 deleted): without VAD, Whisper skips short replies surrounded by long silence.
+- **On CPU, `turbo` is no faster than `medium`.** It shrinks the decoder but keeps large-v3's encoder, which is the bottleneck on a CPU. `small` is 2.9× faster than `turbo` at the same accuracy.
+- **Threads matter more than batching on CPU.** CTranslate2 uses 4 threads by default; 6 (the physical cores) is about 20% faster; 12 adds nothing. Batch sizes above 4 are slightly slower. The batched pipeline's gain on CPU comes from its tighter VAD chunks, not from batching.
+- **Crosstalk is now the largest error source:** more than half of every model's errors on the 2-mic item. `distil-large-v3.5` transcribes the most bleed.
+- **Bug found:** batched decoding with timestamp tokens dropped whole sentences (fixed; see Decisions).
 
 ---
 
 ## TODO
 
 ### Phase 0: Benchmark
-- [ ] Benchmark script: fixed test set (solo, 2-mic and 4-mic recordings with real crosstalk, 10–60 min) → wall time, real-time factor and word error rate per configuration
-- [ ] Baseline today's settings on CPU, NVIDIA GPU and Apple Silicon
-- [ ] Record results in this doc and use them to confirm the default model
+- [x] Benchmark script: fixed test set (solo, 2-mic and 4-mic recordings with real crosstalk, 10–60 min) → wall time, real-time factor and word error rate per configuration
+- [x] Baseline on CPU (Ryzen 5 3600)
+- [ ] Baseline on an NVIDIA GPU
+- [ ] Baseline on Apple Silicon
+- [x] Record results in this doc
+- [ ] Confirm the default model: `small` on CPU is recommended (see [Open questions](#open-questions))
 
 ### Phase 1: Quick wins
 - [x] `vad_filter=True`; review which hallucination filters are still needed afterwards
@@ -165,6 +198,8 @@ All "likely gain" figures are to be confirmed by the Phase 0 benchmark.
 - [x] Default model → `turbo`; update Setup labels and README
 - [x] Progress from produced segment times instead of the speed table
 - [x] Preload the model when a project is opened or the studio is armed
+- [ ] From Phase 0: set `cpu_threads` to the number of physical cores (about 20% faster on CPU)
+- [ ] From Phase 0: cap the CPU batch size at 4, and re-measure together with the thread change
 
 ### Phase 2: Per-mic speaker gating
 - [ ] VAD per track + cross-track loudness comparison → speech regions per speaker
@@ -211,13 +246,15 @@ All "likely gain" figures are to be confirmed by the Phase 0 benchmark.
 |---|---|
 | How many models stay loaded? | **One**, the most recently used. Switching model evicts the old one (a job still using it keeps its reference until done). Holding every model a user tries could use several GB of RAM |
 | Which hallucination filters are still needed with VAD? | **All kept.** VAD removes the main cause (silence), but the filters are cheap and still catch loops in real speech. The `no_speech_prob` filter now uses Whisper's own rule (`no_speech_prob > 0.5` **and** `avg_logprob < -1.0`), because the batched pipeline reports `no_speech_prob` per 30 s chunk and on its own would drop real speech next to a pause |
-| Segment granularity with the batched pipeline | `without_timestamps=False`, so segments stay sentence-sized rather than one per 30 s VAD chunk |
+| Segment granularity with the batched pipeline | Decode **without timestamp tokens** (`without_timestamps=True`) and split each chunk into sentences from word times (at `.` `?` `!` or a pause of 1 s or more). Phase 1 first used `without_timestamps=False`, but the batched pipeline decodes each chunk once, so speech after the last timestamp was dropped: whole sentences on the Phase 0 solo talk |
 | Compute type when CUDA has no float16 | Next supported of `int8_float16`, `float32`. If the model can't load on CUDA at all (e.g. cuBLAS/cuDNN missing), fall back to CPU int8 and log it; a user-facing message is Phase 5 |
-| Batch size | From memory: CPU 2 / 4 / 8 for < 8 / 8–16 / ≥ 16 GB RAM (4 if unknown, e.g. Windows); CUDA 4 / 8 / 16 for < 4 / 4–8 / ≥ 8 GB free VRAM via `nvidia-smi` (8 if unknown). To be tuned by Phase 0 |
+| Batch size | From memory: CPU 2 / 4 / 8 for < 8 / 8–16 / ≥ 16 GB RAM (4 if unknown, e.g. Windows); CUDA 4 / 8 / 16 for < 4 / 4–8 / ≥ 8 GB free VRAM via `nvidia-smi` (8 if unknown). Phase 0 found batches above 4 slightly slower on CPU; a cap of 4 is planned |
 | When to preload, and may preloading download? | Setup preloads the selected model **only if it's already downloaded**, so browsing the picker never starts a multi-GB download. Entering the studio preloads **and downloads** if needed, since the first take is transcribed as soon as it stops. Endpoint: `POST /api/transcription/preload` `{model, download}` |
-| Default model | **`turbo`** for now (multilingual, fast). Revisit against `distil-large-v3.5` once Phase 0 has numbers |
+| Default model | **`turbo`** for now (multilingual). Phase 0 shows `small` matches its accuracy at 2.9× the speed on CPU; the choice is open (see Open questions) |
+| Benchmark test set | Public recordings with human references: one TED talk (solo) and AMI headset meetings (2-mic, 4-mic, real crosstalk). Audio and transcripts stay in `~/.cache/darkroom/bench`; only timings and scores are committed, since TED-LIUM is CC BY-NC-ND |
+| How multi-mic WER is scored | Both with crosstalk (everything transcribed on each mic) and without (only words inside the speaker's own reference speech). The second compares models fairly and is the target for Phase 2 |
 
 ## Open questions
 
-- **Default model:** `turbo` is the default as of Phase 1; confirm against `distil-large-v3.5` (English-focused) with the Phase 0 results.
+- **Default model:** on CPU, `small` matches `turbo`'s accuracy at 2.9× the speed in Phase 0. Should the default depend on the device (`small` on CPU, `turbo` on NVIDIA)? Check `small` on non-English audio first; the Phase 0 set is English only. `distil-large-v3.5` is most accurate with crosstalk excluded but transcribes the most bleed and is English only: revisit after Phase 2.
 - **Live transcript in the studio:** useful to see, or distracting while recording? Could be a toggle.
