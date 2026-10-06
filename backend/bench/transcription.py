@@ -378,9 +378,11 @@ def run(specs: list[str], minutes: float, kinds: list[str] | None, label: str, o
         cfg = parse_config(spec)
         for item in items:
             print(f"{spec:28} {item['id']:20} ", end="", flush=True)
-            # faulthandler prints a traceback if the worker crashes in native code
+            # faulthandler prints a traceback if the worker crashes in native code. The
+            # item goes by id, not as JSON: multi-mic items carry tens of KB of word
+            # times, and onnxruntime segfaulted on import with that much argv (EC2 T4)
             proc = subprocess.run([sys.executable, "-X", "faulthandler", __file__, "_worker",
-                                   json.dumps(cfg), json.dumps(item), str(set_dir)],
+                                   json.dumps(cfg), item["id"], str(set_dir)],
                                   capture_output=True, text=True)
             if proc.returncode != 0:
                 rc = proc.returncode
@@ -476,7 +478,7 @@ def main() -> None:
     p.add_argument("files", nargs="*", type=Path)
     p = sub.add_parser("_worker")
     p.add_argument("cfg")
-    p.add_argument("item")
+    p.add_argument("item", help="item id in the manifest")
     p.add_argument("set_dir", type=Path)
     a = ap.parse_args()
 
@@ -489,7 +491,9 @@ def main() -> None:
     elif a.cmd == "report":
         report(a.files or sorted(RESULTS_DIR.glob("*.jsonl")) or sorted(SUMMARY_DIR.glob("*.jsonl")))
     else:
-        print(json.dumps(worker(json.loads(a.cfg), json.loads(a.item), a.set_dir)))
+        items = json.loads((a.set_dir / "manifest.json").read_text())["items"]
+        item = next(i for i in items if i["id"] == a.item)
+        print(json.dumps(worker(json.loads(a.cfg), item, a.set_dir)))
 
 
 if __name__ == "__main__":
