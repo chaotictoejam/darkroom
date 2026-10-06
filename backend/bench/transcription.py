@@ -1,7 +1,8 @@
 """
 transcription.py — benchmark local transcription: wall time, speed and word error rate
 
-Plan and results: docs/fast-transcription.md (Phase 0).
+Plan and results: docs/fast-transcription.md (Phase 0). How to run it, the
+datasets it downloads, sharing results and running on AWS: bench/README.md.
 
     cd backend
     ../.venv/bin/pip install -e ".[bench]"
@@ -329,7 +330,16 @@ def score(item: dict, tracks: list[dict]) -> dict:
 
 # ── Commands ──────────────────────────────────────────────────────────────────
 
-def machine() -> dict:
+def _gpu_name() -> str | None:
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
+                             capture_output=True, text=True, timeout=10).stdout.strip()
+        return out.splitlines()[0] if out else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def machine(label: str) -> dict:
     import ctranslate2
     import faster_whisper
 
@@ -343,9 +353,9 @@ def machine() -> dict:
         ram = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
     except (AttributeError, ValueError, OSError):
         ram = None
-    return {"host": platform.node(), "os": f"{platform.system()} {platform.release()}", "cpu": cpu,
+    return {"host": label, "os": f"{platform.system()} {platform.release()}", "cpu": cpu,
             "logical_cpus": os.cpu_count(), "ram_gb": round(ram, 1) if ram else None,
-            "cuda_devices": ctranslate2.get_cuda_device_count(),
+            "cuda_devices": ctranslate2.get_cuda_device_count(), "gpu": _gpu_name(),
             "faster_whisper": faster_whisper.__version__, "ctranslate2": ctranslate2.__version__}
 
 
@@ -357,10 +367,11 @@ def _load_set(minutes: float) -> tuple[Path, dict]:
     return set_dir, json.loads(manifest.read_text())
 
 
-def run(specs: list[str], minutes: float, kinds: list[str] | None, out: Path) -> None:
+def run(specs: list[str], minutes: float, kinds: list[str] | None, label: str, out: Path | None) -> None:
     set_dir, manifest = _load_set(minutes)
     items = [i for i in manifest["items"] if not kinds or i["kind"] in kinds]
-    info = machine()
+    info = machine(label)
+    out = out or RESULTS_DIR / f"{label}.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
     for spec in specs:
         cfg = parse_config(spec)
@@ -450,7 +461,9 @@ def main() -> None:
     p.add_argument("configs", nargs="+")
     p.add_argument("--minutes", type=float, default=10)
     p.add_argument("--kinds", nargs="*", choices=["solo", "2-mic", "4-mic"])
-    p.add_argument("--out", type=Path, default=RESULTS_DIR / f"{platform.node()}.jsonl")
+    p.add_argument("--label", default=platform.node(),
+                   help="machine name in the results and their file name (default: hostname)")
+    p.add_argument("--out", type=Path, help="results file (default: <cache>/results/<label>.jsonl)")
     p = sub.add_parser("export", help="write results without transcripts to bench/results/")
     p.add_argument("files", nargs="*", type=Path)
     p = sub.add_parser("report", help="markdown table of results (local, else committed)")
@@ -464,7 +477,7 @@ def main() -> None:
     if a.cmd == "prepare":
         print(f"Test set in {prepare(a.minutes)}")
     elif a.cmd == "run":
-        run(a.configs, a.minutes, a.kinds, a.out)
+        run(a.configs, a.minutes, a.kinds, a.label, a.out)
     elif a.cmd == "export":
         export(a.files or sorted(RESULTS_DIR.glob("*.jsonl")))
     elif a.cmd == "report":
