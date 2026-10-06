@@ -26,6 +26,7 @@ REGION=${AWS_REGION:-${AWS_DEFAULT_REGION:-$(aws configure get region 2>/dev/nul
 REGION=${REGION:-us-east-1}
 CONFIGS="baseline app@turbo app@distil-large-v3.5 app@medium app@small app@base app@large-v3 fp16-vad-b1@turbo fp16-vad-b4@turbo fp16-vad-b16@turbo int8-vad-b8@turbo"
 MINUTES=10
+KINDS=""
 MAX_HOURS=3
 REF=HEAD
 SPOT=false
@@ -41,6 +42,7 @@ Options:
   --region REGION        AWS region (default $REGION)
   --configs "A B ..."    benchmark configurations (default: model sweep + GPU ablations)
   --minutes N            length of the multi-mic excerpts (default $MINUTES)
+  --kinds "K ..."        only these items: solo, 2-mic, 4-mic (default: all)
   --max-hours N          hard limit; the instance shuts down after this (default $MAX_HOURS)
   --ref REF              git commit/branch to benchmark (default HEAD; must be committed)
   --spot                 use a Spot instance (cheaper; may be interrupted)
@@ -55,6 +57,7 @@ while [[ $# -gt 0 ]]; do
     --region) REGION=$2; shift 2 ;;
     --configs) CONFIGS=$2; shift 2 ;;
     --minutes) MINUTES=$2; shift 2 ;;
+    --kinds) KINDS=$2; shift 2 ;;
     --max-hours) MAX_HOURS=$2; shift 2 ;;
     --ref) REF=$2; shift 2 ;;
     --spot) SPOT=true; shift ;;
@@ -179,7 +182,7 @@ nvidia-smi
 /opt/venv/bin/python -c 'import ctranslate2; n = ctranslate2.get_cuda_device_count(); print("CUDA devices:", n); assert n > 0'
 cd /opt/darkroom/backend
 /opt/venv/bin/python bench/transcription.py prepare --minutes $MINUTES
-/opt/venv/bin/python bench/transcription.py run $CONFIGS --minutes $MINUTES --label $LABEL
+/opt/venv/bin/python bench/transcription.py run $CONFIGS --minutes $MINUTES --label $LABEL ${KINDS:+--kinds $KINDS}
 /opt/venv/bin/python bench/transcription.py export
 /opt/venv/bin/aws s3 cp bench/results/$LABEL.jsonl s3://$BUCKET/results/$LABEL.jsonl
 /opt/venv/bin/python bench/transcription.py report bench/results/$LABEL.jsonl
@@ -233,6 +236,8 @@ if [[ "$(cat "$WORK/status")" != ok ]]; then
   exit 1
 fi
 OUT="$REPO_ROOT/backend/bench/results/$LABEL.jsonl"
-aws s3 cp --quiet "s3://$BUCKET/results/$LABEL.jsonl" "$OUT"
+# Append, so earlier runs on the same instance type are kept (report uses the latest row of each)
+aws s3 cp --quiet "s3://$BUCKET/results/$LABEL.jsonl" "$WORK/results.jsonl"
+cat "$WORK/results.jsonl" >> "$OUT"
 log "Done in $(( ($(date +%s) - start) / 60 )) min. Results: $OUT (log: $LOG_DIR/$RUN_ID.log)"
 grep -A20 '^| Machine' "$LOG_DIR/$RUN_ID.log" | grep '^|' || true

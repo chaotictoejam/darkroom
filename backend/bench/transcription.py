@@ -37,6 +37,7 @@ import os
 import platform
 import re
 import resource
+import signal
 import subprocess
 import sys
 import time
@@ -377,10 +378,15 @@ def run(specs: list[str], minutes: float, kinds: list[str] | None, label: str, o
         cfg = parse_config(spec)
         for item in items:
             print(f"{spec:28} {item['id']:20} ", end="", flush=True)
-            proc = subprocess.run([sys.executable, __file__, "_worker", json.dumps(cfg), json.dumps(item), str(set_dir)],
+            # faulthandler prints a traceback if the worker crashes in native code
+            proc = subprocess.run([sys.executable, "-X", "faulthandler", __file__, "_worker",
+                                   json.dumps(cfg), json.dumps(item), str(set_dir)],
                                   capture_output=True, text=True)
             if proc.returncode != 0:
-                print("FAILED\n" + proc.stderr[-2000:])
+                rc = proc.returncode
+                how = f"signal {signal.Signals(-rc).name}" if rc < 0 else f"exit {rc}"
+                tail = (proc.stderr.strip() or proc.stdout.strip() or "(no output)")[-3000:]
+                print(f"FAILED ({how})\n{tail}")
                 continue
             res = json.loads(proc.stdout.strip().splitlines()[-1])
             res.update(score(item, res["tracks"]))
