@@ -182,6 +182,9 @@ nvidia-smi
 /opt/venv/bin/python -c 'import ctranslate2; n = ctranslate2.get_cuda_device_count(); print("CUDA devices:", n); assert n > 0'
 cd /opt/darkroom/backend
 /opt/venv/bin/python bench/transcription.py prepare --minutes $MINUTES
+# Warm-up, not recorded: a new instance's disk loads lazily from its snapshot, so
+# the first process to touch the CUDA libraries would otherwise be slower
+/opt/venv/bin/python bench/transcription.py run app@tiny --kinds solo --minutes $MINUTES --label warmup --out /tmp/warmup.jsonl
 /opt/venv/bin/python bench/transcription.py run $CONFIGS --minutes $MINUTES --label $LABEL ${KINDS:+--kinds $KINDS}
 /opt/venv/bin/python bench/transcription.py export
 /opt/venv/bin/aws s3 cp bench/results/$LABEL.jsonl s3://$BUCKET/results/$LABEL.jsonl
