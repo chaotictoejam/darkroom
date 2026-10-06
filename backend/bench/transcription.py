@@ -7,6 +7,7 @@ Plan and results: docs/fast-transcription.md (Phase 0).
     ../.venv/bin/pip install -e ".[bench]"
     ../.venv/bin/python bench/transcription.py prepare            # download + cut the test set
     ../.venv/bin/python bench/transcription.py run baseline app@turbo app@distil-large-v3.5
+    ../.venv/bin/python bench/transcription.py export             # scores (no transcripts) → bench/results/
     ../.venv/bin/python bench/transcription.py report
 
 Test set (public, with human reference transcripts):
@@ -48,6 +49,8 @@ from pathlib import Path
 DATA_DIR = Path(os.environ.get("DARKROOM_BENCH_DIR", Path.home() / ".cache" / "darkroom" / "bench"))
 RAW_DIR = DATA_DIR / "raw"
 RESULTS_DIR = DATA_DIR / "results"  # holds transcripts of the test set, so kept out of the repo
+# Committed results: timings and scores only, no transcripts (`export` writes them)
+SUMMARY_DIR = Path(__file__).parent / "results"
 
 _AMI_AUDIO = "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/{meeting}/audio/{meeting}.Headset-{ch}.wav"
 _AMI_ANNOTATIONS = "https://groups.inf.ed.ac.uk/ami/AMICorpusAnnotations/ami_public_manual_1.6.2.zip"
@@ -378,13 +381,38 @@ def run(specs: list[str], minutes: float, kinds: list[str] | None, out: Path) ->
                   f"WER {res['wer'] * 100:5.1f}%  load {res['load_s']:.1f} s  RAM {res['peak_ram_gb']:.1f} GB")
 
 
-def report(paths: list[Path]) -> None:
+def _rescored(paths: list[Path]) -> list[dict]:
+    """Result rows, rescored from their transcripts (when they have them) with the current scoring."""
     rows = [json.loads(line) for p in paths for line in p.read_text().splitlines() if line.strip()]
     manifests: dict[float, dict] = {}
-    for r in rows:  # rescore, so every row uses the current scoring
+    for r in rows:
+        if "hyp" not in r["tracks"][0]:
+            continue  # an exported summary: already scored
         if r["minutes"] not in manifests:
             manifests[r["minutes"]] = {i["id"]: i for i in _load_set(r["minutes"])[1]["items"]}
         r.update(score(manifests[r["minutes"]][r["item"]], r["tracks"]))
+    return rows
+
+
+def export(paths: list[Path]) -> None:
+    """Write each machine's results without transcripts to bench/results/<host>.jsonl.
+
+    The test set's transcripts can't be redistributed (TED-LIUM is CC BY-NC-ND),
+    so only timings, scores and machine details are committed.
+    """
+    by_host: dict[str, list[dict]] = {}
+    for r in _rescored(paths):
+        r["tracks"] = [{k: v for k, v in t.items() if k not in ("hyp", "hyp_words")} for t in r["tracks"]]
+        by_host.setdefault(r["machine"]["host"], []).append(r)
+    SUMMARY_DIR.mkdir(exist_ok=True)
+    for host, rows in by_host.items():
+        out = SUMMARY_DIR / f"{host}.jsonl"
+        out.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        print(f"  {len(rows)} results → {out}")
+
+
+def report(paths: list[Path]) -> None:
+    rows = _rescored(paths)
     by_cfg: dict[tuple, dict] = {}
     for r in rows:  # latest run of each (machine, config, item) wins
         by_cfg.setdefault((r["machine"]["host"], r["config"]["spec"], r["minutes"]), {})[r["item"]] = r
@@ -423,7 +451,9 @@ def main() -> None:
     p.add_argument("--minutes", type=float, default=10)
     p.add_argument("--kinds", nargs="*", choices=["solo", "2-mic", "4-mic"])
     p.add_argument("--out", type=Path, default=RESULTS_DIR / f"{platform.node()}.jsonl")
-    p = sub.add_parser("report", help="markdown table of results")
+    p = sub.add_parser("export", help="write results without transcripts to bench/results/")
+    p.add_argument("files", nargs="*", type=Path)
+    p = sub.add_parser("report", help="markdown table of results (local, else committed)")
     p.add_argument("files", nargs="*", type=Path)
     p = sub.add_parser("_worker")
     p.add_argument("cfg")
@@ -435,8 +465,10 @@ def main() -> None:
         print(f"Test set in {prepare(a.minutes)}")
     elif a.cmd == "run":
         run(a.configs, a.minutes, a.kinds, a.out)
+    elif a.cmd == "export":
+        export(a.files or sorted(RESULTS_DIR.glob("*.jsonl")))
     elif a.cmd == "report":
-        report(a.files or sorted(RESULTS_DIR.glob("*.jsonl")))
+        report(a.files or sorted(RESULTS_DIR.glob("*.jsonl")) or sorted(SUMMARY_DIR.glob("*.jsonl")))
     else:
         print(json.dumps(worker(json.loads(a.cfg), json.loads(a.item), a.set_dir)))
 
