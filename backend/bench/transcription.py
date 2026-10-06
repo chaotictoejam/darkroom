@@ -232,8 +232,12 @@ def _custom_transcribe(cfg: dict, path: str, model_holder: dict) -> tuple[list, 
 
 
 def worker(cfg: dict, item: dict, set_dir: Path) -> dict:
+    from faster_whisper import download_model
+
     from darkroom.services import transcription as tr
 
+    # Download outside the timings, so a model's first use isn't slower than the rest
+    download_model(cfg["model"])
     model_holder: dict = {}
     tracks = []
     load_total = 0.0
