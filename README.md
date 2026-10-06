@@ -230,17 +230,18 @@ darkroom/
 │   ├── main.cjs             # starts the backend, opens the window, mic permissions
 │   └── preload.cjs          # window.darkroom bridge for the renderer
 ├── backend/
-│   └── darkroom/
-│       ├── main.py          # FastAPI app entry point
-│       ├── api/
-│       │   ├── projects.py  # project CRUD routes
-│       │   ├── jobs.py      # transcription, analysis, render routes + WebSocket
-│       │   └── media.py     # file serving helpers
-│       ├── services/
-│       │   ├── transcription.py  # Whisper transcription
-│       │   ├── editor.py       # Claude EDL generation (Anthropic API or Bedrock)
-│       │   └── renderer.py     # FFmpeg rendering
-│       └── storage.py       # project JSON persistence
+│   ├── darkroom/
+│   │   ├── main.py          # FastAPI app entry point
+│   │   ├── api/
+│   │   │   ├── projects.py  # project CRUD routes
+│   │   │   ├── jobs.py      # transcription, analysis, render routes + WebSocket
+│   │   │   └── media.py     # file serving helpers
+│   │   ├── services/
+│   │   │   ├── transcription.py  # Whisper transcription
+│   │   │   ├── editor.py       # Claude EDL generation (Anthropic API or Bedrock)
+│   │   │   └── renderer.py     # FFmpeg rendering
+│   │   └── storage.py       # project JSON persistence
+│   └── bench/               # transcription benchmark (see bench/README.md)
 ├── frontend/
 │   └── src/
 │       ├── views/
@@ -257,6 +258,7 @@ darkroom/
 ├── infra/                   # optional CDK deployment (Bedrock Lambda)
 │   ├── app.py               # CDK entry point
 │   ├── darkroom_stack.py    # Lambda + IAM + Function URL
+│   ├── bench/               # run the transcription benchmark on a temporary EC2 GPU
 │   ├── lambda/
 │   │   └── handler.py       # async Lambda → Bedrock
 │   ├── requirements.txt
@@ -443,7 +445,7 @@ The Lambda adds effectively zero overhead on top of the Bedrock model cost.
 
 **Whisper produces wrong language / hallucinations**: set the language explicitly in the upload form rather than using Auto-detect. English recordings should use `English`.
 
-**Whisper is slow**: choose a smaller model (`small` or `base`) in the upload form, or run on a machine with an NVIDIA GPU (CUDA and cuDNN installed).
+**Whisper is slow**: choose a smaller model (`small` or `base`) in the upload form, or run on a machine with an NVIDIA GPU (CUDA and cuDNN installed). To measure speed and accuracy on your own machine, see the [transcription benchmark](backend/bench/README.md).
 
 **Short has no audio / silent**: ensure all camera files have an audio track. Darkroom mixes all microphones; a missing audio stream will cause FFmpeg to fail.
 

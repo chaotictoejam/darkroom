@@ -40,7 +40,8 @@ Requires Python 3.11+ (pyproject), Node 18+, full FFmpeg. AI provider config liv
   - `api/client.ts` typed API client + `subscribeToProgress` WebSocket · `api/types.ts` shared types
   - `desktop.ts` typed `window.darkroom` bridge (undefined in a plain browser)
 - `desktop/` — Electron shell: `main.cjs` (spawns backend, permissions, CSP, single instance), `preload.cjs` (bridge)
-- `infra/` — optional AWS CDK (Python) stacks
+- `infra/` — optional AWS CDK (Python) stacks; `infra/bench/run-gpu-benchmark.sh` runs the transcription benchmark on a temporary EC2 GPU instance
+- `backend/bench/` — transcription benchmark (`README.md`: datasets, running locally/on AWS, sharing results); committed results without transcripts in `bench/results/`
 - `docs/` — design plans for roadmap items; `ROADMAP.md` — Done / Next / Ideas
 - `projects/` — user data, gitignored; never commit or delete it
 

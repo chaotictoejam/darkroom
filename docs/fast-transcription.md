@@ -152,7 +152,7 @@ All "likely gain" figures are to be confirmed by the Phase 0 benchmark; the CPU 
 
 ## Phase 0 results (CPU)
 
-Measured on 4 Oct 2026 on an AMD Ryzen 5 3600 (6 cores, 12 threads, 32 GB, no usable GPU) with faster-whisper 1.2.1. Script: [`backend/bench/transcription.py`](../backend/bench/transcription.py); raw results (no transcripts): [`backend/bench/results/fedora.jsonl`](../backend/bench/results/fedora.jsonl). NVIDIA and Apple Silicon runs are still to do.
+Measured on 4 Oct 2026 on an AMD Ryzen 5 3600 (6 cores, 12 threads, 32 GB, no usable GPU) with faster-whisper 1.2.1. Script: [`backend/bench/transcription.py`](../backend/bench/transcription.py); raw results (no transcripts): [`backend/bench/results/ryzen5-3600.jsonl`](../backend/bench/results/ryzen5-3600.jsonl). NVIDIA and Apple Silicon runs are still to do. To run the benchmark yourself, locally or on AWS GPU and Mac instances, see [`backend/bench/README.md`](../backend/bench/README.md).
 
 **Test set** (public, with human reference transcripts; 75 min of audio, 7 tracks): solo = one TED talk (TED-LIUM 3 long-form, 15 min); 2-mic = AMI TS3003b 25:00–35:00, the two speakers in conversation; 4-mic = AMI ES2004a 7:00–17:00, all four headsets. AMI headsets have real crosstalk.
 
@@ -185,8 +185,8 @@ What the numbers say:
 ### Phase 0: Benchmark
 - [x] Benchmark script: fixed test set (solo, 2-mic and 4-mic recordings with real crosstalk, 10–60 min) → wall time, real-time factor and word error rate per configuration
 - [x] Baseline on CPU (Ryzen 5 3600)
-- [ ] Baseline on an NVIDIA GPU
-- [ ] Baseline on Apple Silicon
+- [ ] Baseline on an NVIDIA GPU (`infra/bench/run-gpu-benchmark.sh`; needs a G-instance quota increase on the AWS account)
+- [ ] Baseline on Apple Silicon (EC2 Mac steps in `backend/bench/README.md`; 24-hour minimum, so best combined with the Phase 5 Mac engine)
 - [x] Record results in this doc
 - [ ] Confirm the default model: `small` on CPU is recommended (see [Open questions](#open-questions))
 
@@ -252,6 +252,7 @@ What the numbers say:
 | When to preload, and may preloading download? | Setup preloads the selected model **only if it's already downloaded**, so browsing the picker never starts a multi-GB download. Entering the studio preloads **and downloads** if needed, since the first take is transcribed as soon as it stops. Endpoint: `POST /api/transcription/preload` `{model, download}` |
 | Default model | **`turbo`** for now (multilingual). Phase 0 shows `small` matches its accuracy at 2.9× the speed on CPU; the choice is open (see Open questions) |
 | Benchmark test set | Public recordings with human references: one TED talk (solo) and AMI headset meetings (2-mic, 4-mic, real crosstalk). Audio and transcripts stay in `~/.cache/darkroom/bench`; only timings and scores are committed, since TED-LIUM is CC BY-NC-ND |
+| Running the benchmark on other hardware | NVIDIA: a self-cleaning script (`infra/bench/run-gpu-benchmark.sh`) rather than a CDK stack, since a benchmark is a one-off job: it creates a bucket, a scoped IAM role and one instance with no inbound access and a hard time limit, and deletes them all on exit. Apple Silicon: documented manual steps, because EC2 Mac hosts have a 24-hour minimum that a script can't clean up early |
 | How multi-mic WER is scored | Both with crosstalk (everything transcribed on each mic) and without (only words inside the speaker's own reference speech). The second compares models fairly and is the target for Phase 2 |
 
 ## Open questions
