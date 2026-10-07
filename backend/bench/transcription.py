@@ -477,9 +477,13 @@ def export(paths: list[Path]) -> None:
 
     The test set's transcripts can't be redistributed (TED-LIUM is CC BY-NC-ND),
     so only timings, scores and machine details are committed.
+    Only the latest run of each configuration and item is kept.
     """
-    by_host: dict[str, list[dict]] = {}
+    latest: dict[tuple, dict] = {}  # superseded runs of the same configuration and item are dropped
     for r in _rescored(paths):
+        latest[(r["machine"]["host"], r["config"]["spec"], r["minutes"], r["item"])] = r
+    by_host: dict[str, list[dict]] = {}
+    for r in latest.values():
         r["tracks"] = [{k: v for k, v in t.items() if k not in ("hyp", "hyp_words")} for t in r["tracks"]]
         by_host.setdefault(r["machine"]["host"], []).append(r)
     SUMMARY_DIR.mkdir(exist_ok=True)
