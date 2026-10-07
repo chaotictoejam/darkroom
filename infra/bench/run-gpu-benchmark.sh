@@ -27,6 +27,7 @@ REGION=${REGION:-us-east-1}
 CONFIGS="baseline app@turbo app@distil-large-v3.5 app@medium app@small app@base app@large-v3 fp16-vad-b1@turbo fp16-vad-b4@turbo fp16-vad-b16@turbo int8-vad-b8@turbo"
 MINUTES=10
 KINDS=""
+MULTILINGUAL=""
 MAX_HOURS=3
 REF=HEAD
 SPOT=false
@@ -42,7 +43,8 @@ Options:
   --region REGION        AWS region (default $REGION)
   --configs "A B ..."    benchmark configurations (default: model sweep + GPU ablations)
   --minutes N            length of the multi-mic excerpts (default $MINUTES)
-  --kinds "K ..."        only these items: solo, 2-mic, 4-mic (default: all)
+  --kinds "K ..."        only these items: solo, 2-mic, 4-mic, multilingual (default: all prepared)
+  --multilingual         also prepare and run the Spanish, French and German FLEURS items
   --max-hours N          hard limit; the instance shuts down after this (default $MAX_HOURS)
   --ref REF              git commit/branch to benchmark (default HEAD; must be committed)
   --spot                 use a Spot instance (cheaper; may be interrupted)
@@ -58,6 +60,7 @@ while [[ $# -gt 0 ]]; do
     --configs) CONFIGS=$2; shift 2 ;;
     --minutes) MINUTES=$2; shift 2 ;;
     --kinds) KINDS=$2; shift 2 ;;
+    --multilingual) MULTILINGUAL=--multilingual; shift ;;
     --max-hours) MAX_HOURS=$2; shift 2 ;;
     --ref) REF=$2; shift 2 ;;
     --spot) SPOT=true; shift ;;
@@ -181,7 +184,7 @@ export LD_LIBRARY_PATH=\$(/opt/venv/bin/python -c 'import os, nvidia.cublas.lib,
 nvidia-smi
 /opt/venv/bin/python -c 'import ctranslate2; n = ctranslate2.get_cuda_device_count(); print("CUDA devices:", n); assert n > 0'
 cd /opt/darkroom/backend
-/opt/venv/bin/python bench/transcription.py prepare --minutes $MINUTES
+/opt/venv/bin/python bench/transcription.py prepare --minutes $MINUTES $MULTILINGUAL
 # Warm-up, not recorded: a new instance's disk loads lazily from its snapshot, so
 # the first process to touch the CUDA libraries would otherwise be slower
 /opt/venv/bin/python bench/transcription.py run app@tiny --kinds solo --minutes $MINUTES --label warmup --out /tmp/warmup.jsonl

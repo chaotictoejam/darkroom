@@ -16,6 +16,9 @@ Test set (public, with human reference transcripts):
   2-mic  the two headset mics of AMI meeting TS3003b, N minutes from 25:00, where
          those two speakers hold a conversation (the other two say little)
   4-mic  all four headset mics of AMI meeting ES2004a, N minutes from 7:00
+  multilingual (optional, prepare --multilingual): Spanish, French and German,
+         about N minutes each of distinct FLEURS dev-set sentences joined into one
+         track; checks models outside English
 AMI headsets pick up the other people in the room, so the multi-mic items have
 real crosstalk; words bled in from another speaker count as insertions.
 
@@ -62,6 +65,10 @@ _TEDLIUM = ("https://huggingface.co/datasets/distil-whisper/tedlium-long-form/re
 SOLO_TALK = "Craig_Venter"
 # (kind, meeting, mics, start seconds): windows chosen so the speakers kept talk a lot
 AMI_ITEMS = (("2-mic", "TS3003b", 2, 1500), ("4-mic", "ES2004a", 4, 420))
+# language code → FLEURS config
+FLEURS_LANGS = {"es": "es_419", "fr": "fr_fr", "de": "de_de"}
+_FLEURS = "https://huggingface.co/datasets/google/fleurs/resolve/main/data/{cfg}/{path}"
+_FLEURS_GAP_S = 0.8  # silence between joined sentences
 
 _SAMPLE_RATE = 16000
 
@@ -110,7 +117,44 @@ def _ami_tracks(meeting: str, zf: zipfile.ZipFile, start: float, seconds: float)
     return sorted(tracks, key=lambda t: t["channel"])
 
 
-def prepare(minutes: float) -> Path:
+def _fleurs_item(lang: str, seconds: float, out: Path) -> dict:
+    """Distinct FLEURS dev sentences in ``lang`` joined into one ~``seconds`` track."""
+    import tarfile
+
+    import numpy as np
+    from faster_whisper.audio import decode_audio
+
+    cfg = FLEURS_LANGS[lang]
+    tsv = _download(_FLEURS.format(cfg=cfg, path="dev.tsv"), RAW_DIR / f"fleurs-{cfg}-dev.tsv")
+    tar = _download(_FLEURS.format(cfg=cfg, path="audio/dev.tar.gz"), RAW_DIR / f"fleurs-{cfg}-dev.tar.gz")
+    rows, seen = [], set()
+    for line in tsv.read_text(encoding="utf-8").splitlines():
+        sentence_id, wav_name, raw_text = line.split("\t")[:3]
+        if sentence_id not in seen:  # several speakers read some sentences
+            seen.add(sentence_id)
+            rows.append((wav_name, raw_text))
+    gap = np.zeros(int(_FLEURS_GAP_S * _SAMPLE_RATE), dtype=np.float32)
+    parts, texts, total = [], [], 0.0
+    with tarfile.open(tar) as tf:
+        for wav_name, raw_text in rows:
+            if total >= seconds:
+                break
+            audio = decode_audio(tf.extractfile(f"dev/{wav_name}"), sampling_rate=_SAMPLE_RATE)
+            parts += [audio, gap]
+            texts.append(raw_text)
+            total += len(audio) / _SAMPLE_RATE + _FLEURS_GAP_S
+    path = f"multilingual_{lang}.wav"
+    pcm = (np.clip(np.concatenate(parts), -1, 1) * 32767).astype(np.int16)
+    with wave.open(str(out / path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(_SAMPLE_RATE)
+        wf.writeframes(pcm.tobytes())
+    return {"id": f"multilingual-{lang}", "kind": "multilingual", "language": lang,
+            "source": "FLEURS (CC BY 4.0)", "tracks": [{"path": path, "speaker": "A", "ref": " ".join(texts)}]}
+
+
+def prepare(minutes: float, multilingual: bool = False) -> Path:
     seconds = minutes * 60
     out = DATA_DIR / "sets" / f"{minutes:g}min"
     out.mkdir(parents=True, exist_ok=True)
@@ -143,9 +187,15 @@ def prepare(minutes: float) -> Path:
         items.append({"id": f"{kind}-{meeting}", "kind": kind, "source": "AMI Meeting Corpus (CC BY 4.0)", "start_s": start,
                       "tracks": sorted(tracks, key=lambda t: t["speaker"])})
 
+    if multilingual:
+        for lang in FLEURS_LANGS:
+            items.append(_fleurs_item(lang, seconds, out))
+
     for item in items:
         item["audio_s"] = round(sum(_wav_seconds(out / t["path"]) for t in item["tracks"]), 1)
-    (out / "manifest.json").write_text(json.dumps({"minutes": minutes, "items": items}, indent=2))
+    # Atomic, as benchmark workers may be reading the manifest
+    (out / "manifest.json.tmp").write_text(json.dumps({"minutes": minutes, "items": items}, indent=2))
+    os.replace(out / "manifest.json.tmp", out / "manifest.json")
     for item in items:
         words = sum(len(t["ref"].split()) for t in item["tracks"])
         print(f"  {item['id']}: {len(item['tracks'])} track(s), {item['audio_s'] / 60:.1f} min audio, {words} ref words")
@@ -188,7 +238,7 @@ def parse_config(spec: str) -> dict:
 
 # ── Worker (one configuration × one item, in its own process) ─────────────────
 
-def _custom_transcribe(cfg: dict, path: str, model_holder: dict) -> tuple[list, float]:
+def _custom_transcribe(cfg: dict, path: str, model_holder: dict, language: str) -> tuple[list, float]:
     """Transcribe with explicit settings; returns (segments, model load seconds)."""
     from faster_whisper import BatchedInferencePipeline, WhisperModel
 
@@ -208,7 +258,7 @@ def _custom_transcribe(cfg: dict, path: str, model_holder: dict) -> tuple[list, 
     finally:
         os.unlink(wav)
 
-    opts = dict(language="en", word_timestamps=True, temperature=0, condition_on_previous_text=False,
+    opts = dict(language=language, word_timestamps=True, temperature=0, condition_on_previous_text=False,
                 no_speech_threshold=0.5, log_prob_threshold=-1.0, compression_ratio_threshold=2.4)
     if cfg["batch"]:
         segs, _ = BatchedInferencePipeline(model).transcribe(
@@ -250,10 +300,11 @@ def worker(cfg: dict, item: dict, set_dir: Path) -> dict:
         path = str(set_dir / track["path"])
         t = time.perf_counter()
         if cfg["kind"] == "app":
-            segs = tr.transcribe_file(path, track["speaker"], track["speaker"], cfg["model"], language="en")
+            segs = tr.transcribe_file(path, track["speaker"], track["speaker"], cfg["model"],
+                                      language=item.get("language", "en"))
             load_s = 0.0
         else:
-            segs, load_s = _custom_transcribe(cfg, path, model_holder)
+            segs, load_s = _custom_transcribe(cfg, path, model_holder, item.get("language", "en"))
         load_total += load_s
         tracks.append({"speaker": track["speaker"], "audio_s": round(_wav_seconds(Path(path)), 2),
                        "wall_s": round(time.perf_counter() - t, 2),
@@ -309,16 +360,17 @@ def _wer(pairs: list[tuple[str, str]]) -> dict:
 
 
 def score(item: dict, tracks: list[dict]) -> dict:
-    """Corpus WER over the item's tracks, after Whisper's English normaliser.
+    """Corpus WER over the item's tracks, after Whisper's text normaliser (English, or basic).
 
     ``wer`` scores everything transcribed on each mic, so on multi-mic items
     words bled in from other speakers count as insertions. ``gated_wer`` keeps
     only words inside the speaker's own (reference) speech: the best a per-mic
     gate could do (Phase 2). Solo items have no word times, so it equals ``wer``.
     """
+    from whisper_normalizer.basic import BasicTextNormalizer
     from whisper_normalizer.english import EnglishTextNormalizer
 
-    norm = EnglishTextNormalizer()
+    norm = EnglishTextNormalizer() if item.get("language", "en") == "en" else BasicTextNormalizer()
     refs = {t["speaker"]: t for t in item["tracks"]}
     res = _wer([(norm(refs[t["speaker"]]["ref"]), norm(t["hyp"])) for t in tracks])
     gated = []
@@ -440,8 +492,10 @@ def report(paths: list[Path]) -> None:
     for r in rows:  # latest run of each (machine, config, item) wins
         by_cfg.setdefault((r["machine"]["host"], r["config"]["spec"], r["minutes"]), {})[r["item"]] = r
     kinds = ["solo", "2-mic", "4-mic"]
+    multilingual = any(r["kind"] == "multilingual" for r in rows)
     header = (["Machine", "Config", "Device"] + [f"{k}: × real time · WER (gated)" for k in kinds]
-              + ["Total wall", "Overall × real time", "Pooled gated WER", "Load", "Peak RAM"])
+              + (["es/fr/de: × real time · WER"] if multilingual else [])
+              + ["Total wall (English)", "Overall × real time", "Pooled gated WER", "Load", "Peak RAM"])
     print("| " + " | ".join(header) + " |")
     print("|" + "---|" * len(header))
     for (host, spec, _minutes), items in by_cfg.items():
@@ -454,7 +508,19 @@ def report(paths: list[Path]) -> None:
                 cells.append(f"{r['audio_s'] / r['wall_s']:.2f}× · {r['wer'] * 100:.1f}%")
             else:
                 cells.append(f"{r['audio_s'] / r['wall_s']:.2f}× · {r['wer'] * 100:.1f}% ({r['gated_wer'] * 100:.1f}%)")
-        rs = list(items.values())
+        if multilingual:
+            ml = [r for r in items.values() if r["kind"] == "multilingual"]
+            if ml:
+                errs = sum(r["sub"] + r["del"] + r["ins"] for r in ml)
+                words = sum(r["ref_words"] for r in ml)
+                per_lang = ", ".join(f"{r['item'].split('-')[-1]} {r['wer'] * 100:.1f}%" for r in ml)
+                cells.append(f"{sum(r['audio_s'] for r in ml) / sum(r['wall_s'] for r in ml):.2f}× · "
+                             f"{errs / max(words, 1) * 100:.1f}% ({per_lang})")
+            else:
+                cells.append("–")
+        rs = [r for r in items.values() if r["kind"] in kinds]
+        if not rs:
+            rs = list(items.values())
         audio, wall = sum(r["audio_s"] for r in rs), sum(r["wall_s"] for r in rs)
         errs = sum(r["gated_errors"] for r in rs)
         words = sum(r["ref_words"] for r in rs)
@@ -469,10 +535,12 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("prepare", help="download and cut the test set")
     p.add_argument("--minutes", type=float, default=10, help="length of the multi-mic excerpts")
+    p.add_argument("--multilingual", action="store_true",
+                   help="also prepare Spanish, French and German items from FLEURS (~625 MB)")
     p = sub.add_parser("run", help="benchmark configurations")
     p.add_argument("configs", nargs="+")
     p.add_argument("--minutes", type=float, default=10)
-    p.add_argument("--kinds", nargs="*", choices=["solo", "2-mic", "4-mic"])
+    p.add_argument("--kinds", nargs="*", choices=["solo", "2-mic", "4-mic", "multilingual"])
     p.add_argument("--label", default=platform.node(),
                    help="machine name in the results and their file name (default: hostname)")
     p.add_argument("--out", type=Path, help="results file (default: <cache>/results/<label>.jsonl)")
@@ -487,7 +555,7 @@ def main() -> None:
     a = ap.parse_args()
 
     if a.cmd == "prepare":
-        print(f"Test set in {prepare(a.minutes)}")
+        print(f"Test set in {prepare(a.minutes, a.multilingual)}")
     elif a.cmd == "run":
         run(a.configs, a.minutes, a.kinds, a.label, a.out)
     elif a.cmd == "export":

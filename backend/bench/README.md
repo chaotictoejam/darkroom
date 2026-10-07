@@ -19,6 +19,14 @@ Public recordings with human reference transcripts, about 75 minutes of audio in
 | 2-mic | AMI meeting TS3003b, 25:00–35:00: the two speakers in conversation (headsets 0 and 3) | 2 | [AMI Meeting Corpus](https://groups.inf.ed.ac.uk/ami/corpus/) | [CC BY 4.0](https://groups.inf.ed.ac.uk/ami/corpus/license.shtml) |
 | 4-mic | AMI meeting ES2004a, 7:00–17:00: all four headsets | 4 | AMI Meeting Corpus | CC BY 4.0 |
 
+Optionally, `prepare --multilingual` adds one item each in Spanish, French and German, to check models outside English:
+
+| Item | Recording | Source | Licence |
+|---|---|---|---|
+| multilingual-es / -fr / -de | About N minutes (default 10) of distinct sentences from the dev set, read by several speakers, joined with short pauses into one track | [FLEURS](https://huggingface.co/datasets/google/fleurs) (`es_419`, `fr_fr`, `de_de`) | [CC BY 4.0](https://huggingface.co/datasets/google/fleurs) |
+
+These are scored with Whisper's basic text normaliser rather than the English one, and the report shows them in their own column; the overall columns stay English-only so results stay comparable.
+
 AMI headset mics pick up everyone in the room, so the multi-mic items have real crosstalk. The windows were chosen so that every kept speaker talks a lot; the first 10 minutes of most meetings are one person presenting.
 
 ### Files `prepare` downloads
@@ -29,6 +37,7 @@ Everything goes to `~/.cache/darkroom/bench` (set `DARKROOM_BENCH_DIR` to change
 |---|---|
 | TED-LIUM long-form, validation (180 MB) | https://huggingface.co/datasets/distil-whisper/tedlium-long-form/resolve/main/data/validation-00000-of-00001-9ed099229d0cbe10.parquet |
 | AMI manual annotations 1.6.2 (23 MB): word-level transcripts and the speaker ↔ headset map | https://groups.inf.ed.ac.uk/ami/AMICorpusAnnotations/ami_public_manual_1.6.2.zip |
+| FLEURS dev audio and transcripts, only with `--multilingual` (143–255 MB per language) | `https://huggingface.co/datasets/google/fleurs/resolve/main/data/<es_419\|fr_fr\|de_de>/audio/dev.tar.gz` and `.../dev.tsv`, saved as `fleurs-<config>-dev.tar.gz` and `fleurs-<config>-dev.tsv` |
 | AMI headset audio (34–71 MB each) | `https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/<meeting>/audio/<meeting>.Headset-<n>.wav` for TS3003b headsets 0 and 3, and ES2004a headsets 0–3 |
 
 If `prepare` can't reach these hosts (for example behind a proxy), download them yourself into `~/.cache/darkroom/bench/raw/`, keeping the file names (the parquet as `tedlium-validation.parquet`), and run `prepare` again: it only downloads files that are missing.
@@ -40,6 +49,11 @@ curl -L -o tedlium-validation.parquet \
 curl -LO https://groups.inf.ed.ac.uk/ami/AMICorpusAnnotations/ami_public_manual_1.6.2.zip
 for h in 0 3; do curl -LO https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/TS3003b/audio/TS3003b.Headset-$h.wav; done
 for h in 0 1 2 3; do curl -LO https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2004a/audio/ES2004a.Headset-$h.wav; done
+# Only for prepare --multilingual:
+for c in es_419 fr_fr de_de; do
+  curl -L -o fleurs-$c-dev.tar.gz https://huggingface.co/datasets/google/fleurs/resolve/main/data/$c/audio/dev.tar.gz
+  curl -L -o fleurs-$c-dev.tsv https://huggingface.co/datasets/google/fleurs/resolve/main/data/$c/dev.tsv
+done
 ```
 
 Whisper models download from Hugging Face on first use (about 140 MB for `base`, 1.6 GB for `turbo`, 3 GB for `large-v3`).
@@ -95,6 +109,7 @@ For hardware you don't have. These run in **your own AWS account**; nothing else
 infra/bench/run-gpu-benchmark.sh                                  # g4dn.xlarge (T4), default configs
 infra/bench/run-gpu-benchmark.sh --instance-type g6.xlarge --spot # L4, Spot price
 infra/bench/run-gpu-benchmark.sh --configs "baseline app@turbo app@small"
+infra/bench/run-gpu-benchmark.sh --multilingual --configs "app@turbo app@small" --kinds multilingual
 infra/bench/run-gpu-benchmark.sh --help
 ```
 
