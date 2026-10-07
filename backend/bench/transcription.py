@@ -122,7 +122,6 @@ def _fleurs_item(lang: str, seconds: float, out: Path) -> dict:
     import tarfile
 
     import numpy as np
-    from faster_whisper.audio import decode_audio
 
     cfg = FLEURS_LANGS[lang]
     tsv = _download(_FLEURS.format(cfg=cfg, path="dev.tsv"), RAW_DIR / f"fleurs-{cfg}-dev.tsv")
@@ -139,7 +138,11 @@ def _fleurs_item(lang: str, seconds: float, out: Path) -> dict:
         for wav_name, raw_text in rows:
             if total >= seconds:
                 break
-            audio = decode_audio(tf.extractfile(f"dev/{wav_name}"), sampling_rate=_SAMPLE_RATE)
+            # FFmpeg rather than faster_whisper.decode_audio, which breaks with newer PyAV
+            pcm = subprocess.run(
+                ["ffmpeg", "-v", "error", "-i", "pipe:0", "-ac", "1", "-ar", str(_SAMPLE_RATE), "-f", "s16le", "pipe:1"],
+                input=tf.extractfile(f"dev/{wav_name}").read(), capture_output=True, check=True).stdout
+            audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
             parts += [audio, gap]
             texts.append(raw_text)
             total += len(audio) / _SAMPLE_RATE + _FLEURS_GAP_S

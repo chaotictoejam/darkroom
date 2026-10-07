@@ -180,9 +180,13 @@ mkdir -p /opt/darkroom
 /opt/venv/bin/aws s3 cp s3://$BUCKET/src.tar.gz - | tar xz -C /opt/darkroom
 # CUDA 12 cuBLAS + cuDNN 9 for CTranslate2, as faster-whisper's README describes
 /opt/venv/bin/pip install --quiet --retries 10 --timeout 60 -e "/opt/darkroom/backend[bench]" nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"
-export LD_LIBRARY_PATH=\$(/opt/venv/bin/python -c 'import os, nvidia.cublas.lib, nvidia.cudnn.lib; print(os.path.dirname(nvidia.cublas.lib.__file__) + ":" + os.path.dirname(nvidia.cudnn.lib.__file__))')
+# (namespace packages: use __path__, as newer wheels have no __file__)
+NV_LIBS=\$(/opt/venv/bin/python -c 'import nvidia.cublas.lib as b, nvidia.cudnn.lib as d; print(list(b.__path__)[0] + ":" + list(d.__path__)[0])')
+export LD_LIBRARY_PATH=\$NV_LIBS
 nvidia-smi
 /opt/venv/bin/python -c 'import ctranslate2; n = ctranslate2.get_cuda_device_count(); print("CUDA devices:", n); assert n > 0'
+# Load a model on the GPU, so missing cuBLAS/cuDNN fails here rather than mid-benchmark
+/opt/venv/bin/python -c 'from faster_whisper import WhisperModel; WhisperModel("tiny", device="cuda", compute_type="float16"); print("CUDA model load OK")'
 cd /opt/darkroom/backend
 /opt/venv/bin/python bench/transcription.py prepare --minutes $MINUTES $MULTILINGUAL
 # Warm-up, not recorded: a new instance's disk loads lazily from its snapshot, so
