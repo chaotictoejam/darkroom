@@ -124,21 +124,23 @@ def _get_render_lock(project_id: str) -> threading.Lock:
 # ── Transcription ─────────────────────────────────────────────────────────────
 
 class PreloadBody(BaseModel):
-    model: Optional[str] = None  # None: the default for this machine
+    model: Optional[str] = None  # None: the default for this machine and language
+    language: Optional[str] = "en"  # None: auto-detect
     # False: load only if already downloaded (e.g. while browsing the model picker)
     download: bool = False
 
 
 @router.get("/transcription/defaults")
-def get_transcription_defaults():
-    """Device (cpu/cuda) and the recommended default model for this machine."""
-    return transcription_defaults()
+def get_transcription_defaults(language: str = "en"):
+    """Device (cpu/cuda) and the recommended model for this machine and language
+    (an empty language means auto-detect)."""
+    return transcription_defaults(language or None)
 
 
 @router.post("/transcription/preload")
 def preload_transcription_model(body: PreloadBody):
     """Load a Whisper model in the background so transcription starts at once."""
-    preload_model(body.model or default_model(), download=body.download)
+    preload_model(body.model or default_model(body.language), download=body.download)
     return {"ok": True}
 
 
@@ -159,8 +161,8 @@ def start_transcription(project_id: str):
                 progress={"step": "transcribing", "percent": 5, "message": "Loading Whisper model…"},
             )
             p = get_project(project_id)
-            model_name = p.get("transcribe_model") or default_model()
             language = p.get("transcribe_language") or None
+            model_name = p.get("transcribe_model") or default_model(language)
             total = len(p["speakers"])
 
             def _progress(overall_frac: float, name: str, i: int, total: int) -> None:

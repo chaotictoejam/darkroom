@@ -191,7 +191,7 @@ On macOS the first recording triggers the system microphone prompt. If you decli
 ## Workflow
 
 1. **New Project**: name it, then choose **Upload** or **Record**.
-2. **Upload**: add up to 4 camera or audio files, one per speaker. All files must start at the same moment. Darkroom works out whether it's a video or audio-only project from the files. Choose the transcript **language** (defaults to English) and **Whisper model** (defaults to `small` on a CPU and `turbo` on an NVIDIA GPU, which [benchmarked](docs/fast-transcription.md#phase-0-results-cpu) as the best speed for the accuracy on each; `turbo` is more accurate in languages other than English).
+2. **Upload**: add up to 4 camera or audio files, one per speaker. All files must start at the same moment. Darkroom works out whether it's a video or audio-only project from the files. Choose the transcript **language** (defaults to English) and **Whisper model** (defaults to `small` for English on a CPU, where it [benchmarked](docs/fast-transcription.md#phase-0-results-cpu) as accurate as `turbo` at about three times the speed, and to `turbo` for other languages, where `small` made 1.7 times the errors, or on an NVIDIA GPU, where both are fast).
    **Record** (audio only for now): pick up to 4 microphones and name each participant, then record in the studio: live scrolling waveforms and level meters per mic, and as many takes as you like. Each take is saved to disk as it records and transcribed as soon as you stop. Reorder or delete takes, then **Finish & edit**.
 3. **Transcribe**: Whisper runs locally on each file's audio track (for recordings, on each take as it finishes). Silence is skipped (voice activity detection), the model stays loaded between tracks, and it runs in int8 on CPU or float16 on an NVIDIA GPU. The first run downloads the selected model.
 4. **Analyse**: Claude receives the merged transcript and returns an EDL (edit decision list) as JSON with segments and 3–5 suggested Shorts clips.
@@ -335,8 +335,8 @@ projects/
 | DELETE | `/api/projects/:id` | Delete project |
 | POST | `/api/projects/:id/upload` | Upload files, speaker names, language, model |
 | POST | `/api/projects/:id/transcribe` | Start Whisper transcription (async) |
-| GET | `/api/transcription/defaults` | Device (`cpu`/`cuda`) and the recommended model for this machine |
-| POST | `/api/transcription/preload` | Load a Whisper model in the background (`{model, download}`; no model = the default) |
+| GET | `/api/transcription/defaults?language=en` | Device (`cpu`/`cuda`) and the recommended model for this machine and language |
+| POST | `/api/transcription/preload` | Load a Whisper model in the background (`{model, language, download}`; no model = the default) |
 | POST | `/api/projects/:id/analyze` | Start Claude EDL generation (async) |
 | POST | `/api/projects/:id/skip-analysis` | Generate keep-all EDL without AI |
 | POST | `/api/projects/:id/reset-edl` | Clear EDL, return to transcribed state |

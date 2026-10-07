@@ -22,11 +22,12 @@ from faster_whisper import BatchedInferencePipeline, WhisperModel, download_mode
 
 logger = logging.getLogger(__name__)
 
-# Default model by device, from the Phase 0 benchmark: on CPU, small matched
-# turbo's accuracy at 2.9x the speed; on an NVIDIA GPU both take a minute or two
-# per hour of audio, so turbo's stronger multilingual accuracy wins.
-DEFAULT_MODEL_CPU = "small"
-DEFAULT_MODEL_GPU = "turbo"
+# Default model, from the Phase 0 benchmark. In English on CPU, small matched
+# turbo's accuracy at about 3x the speed; in Spanish, French and German it made
+# 1.7x turbo's errors (14.5% against 8.5% WER). On an NVIDIA GPU both take a
+# minute or two per hour of audio, so turbo is the default there in any language.
+DEFAULT_MODEL_FAST = "small"
+DEFAULT_MODEL_ACCURATE = "turbo"
 
 _SAMPLE_RATE = 16000
 
@@ -82,15 +83,21 @@ def _load(model_name: str, device: str, compute_type: str) -> WhisperModel:
     return WhisperModel(model_name, device=device, compute_type=compute_type, cpu_threads=cpu_threads)
 
 
-def default_model() -> str:
-    """The Whisper model to use when the user hasn't chosen one."""
-    return DEFAULT_MODEL_GPU if _pick_device()[0] == "cuda" else DEFAULT_MODEL_CPU
+def default_model(language: str | None = "en") -> str:
+    """The Whisper model to use when the user hasn't chosen one.
+
+    ``small`` only for English on CPU; ``turbo`` on GPU, and on CPU for other
+    languages or auto-detect (``language=None``).
+    """
+    if _pick_device()[0] == "cpu" and language == "en":
+        return DEFAULT_MODEL_FAST
+    return DEFAULT_MODEL_ACCURATE
 
 
-def transcription_defaults() -> dict:
+def transcription_defaults(language: str | None = "en") -> dict:
     """What this machine transcribes on, and the model the app recommends for it."""
     device, compute_type = _pick_device()
-    return {"device": device, "compute_type": compute_type, "default_model": default_model()}
+    return {"device": device, "compute_type": compute_type, "default_model": default_model(language)}
 
 
 def get_model(model_name: str, *, download: bool = True) -> WhisperModel | None:
@@ -227,7 +234,7 @@ def transcribe_file(
             pass
 
     audio_duration = len(audio_np) / _SAMPLE_RATE
-    model = get_model(model_name or default_model())
+    model = get_model(model_name or default_model(language))
     pipeline = BatchedInferencePipeline(model)
     segments_iter, _info = pipeline.transcribe(
         audio_np,

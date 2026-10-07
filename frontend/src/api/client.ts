@@ -83,9 +83,10 @@ export const api = {
 
   // ── Jobs ────────────────────────────────────────────────────────────────────
 
-  /** The device transcription runs on, and the recommended model for it. */
-  transcriptionDefaults: () =>
-    request<{ device: 'cpu' | 'cuda'; compute_type: string; default_model: string }>('/api/transcription/defaults'),
+  /** The device transcription runs on, and the recommended model for it and `language` ('' = auto-detect). */
+  transcriptionDefaults: (language: string) =>
+    request<{ device: 'cpu' | 'cuda'; compute_type: string; default_model: string }>(
+      `/api/transcription/defaults?language=${encodeURIComponent(language)}`),
 
   /** Load a Whisper model in the background. download=false skips models not yet on disk. */
   preloadModel: (model: string, download = false) =>

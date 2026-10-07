@@ -2,9 +2,6 @@
 import { useEffect, useState } from 'react'
 import { api } from './api/client'
 
-// Used until the backend says which model suits this machine (small on CPU,
-// turbo on an NVIDIA GPU; see docs/fast-transcription.md, Phase 0)
-const FALLBACK_WHISPER_MODEL = 'small'
 
 const WHISPER_MODELS = [
   { value: 'base',   label: 'base — fastest, least accurate' },
@@ -14,25 +11,38 @@ const WHISPER_MODELS = [
   { value: 'large',  label: 'large — slowest' },
 ]
 
-/** Model options, with the one recommended for this machine marked. */
+/** Model options, with the one recommended for this computer and language marked. */
 export function whisperModelOptions(recommended: string | null) {
   return WHISPER_MODELS.map((m) => (m.value === recommended
-    ? { ...m, label: `${m.label} (recommended for this computer)` }
+    ? { ...m, label: `${m.label} (recommended)` }
     : m))
 }
 
 /**
- * The chosen Whisper model, starting from `initial` (a project's saved choice)
- * or else the backend's default for this machine.
+ * The chosen Whisper model. Until the user picks one (or a project has one
+ * saved in `initial`), it follows the backend's recommendation for this
+ * computer and `language` ('' = auto-detect): small for English on a CPU,
+ * otherwise turbo (see docs/fast-transcription.md, Phase 0).
  */
-export function useWhisperModel(initial?: string | null) {
-  const [model, setModel] = useState(initial ?? '')
+export function useWhisperModel(language: string, initial?: string | null) {
+  const [model, setModelState] = useState(initial ?? '')
+  const [chosen, setChosen] = useState(Boolean(initial))
   const [recommended, setRecommended] = useState<string | null>(null)
   useEffect(() => {
-    api.transcriptionDefaults()
-      .then((d) => { setRecommended(d.default_model); setModel((m) => m || d.default_model) })
-      .catch(() => setModel((m) => m || FALLBACK_WHISPER_MODEL))
-  }, [])
+    let cancelled = false
+    api.transcriptionDefaults(language)
+      .then((d) => {
+        if (cancelled) return
+        setRecommended(d.default_model)
+        if (!chosen) setModelState(d.default_model)
+      })
+      .catch(() => {
+        // Backend unreachable: the same rule, assuming a CPU
+        if (!cancelled && !chosen) setModelState(language === 'en' ? 'small' : 'turbo')
+      })
+    return () => { cancelled = true }
+  }, [language, chosen])
+  const setModel = (m: string) => { setChosen(true); setModelState(m) }
   return { model, setModel, recommended }
 }
 

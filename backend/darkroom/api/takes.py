@@ -106,8 +106,8 @@ def transcribe_take(project_id: str, take_id: str) -> None:
 
     take_dir = PROJECTS_DIR / project_id / "takes" / take_id
     names = {p["id"]: p["name"] for p in proj.get("participants", [])}
-    model_name = proj.get("transcribe_model") or default_model()
     language = proj.get("transcribe_language") or None
+    model_name = proj.get("transcribe_model") or default_model(language)
     tracks = list(take["tracks"].items())
 
     _set_take(project_id, take_id, transcription={"status": "transcribing", "percent": 0})

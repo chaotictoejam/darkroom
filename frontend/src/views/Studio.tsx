@@ -60,7 +60,7 @@ export default function Studio({ project, onBack, onFinished }: Props) {
   const [sources, setSources] = useState<MicChoice[]>(() => initialSources(project))
   const [openKeys, setOpenKeys] = useState<string[]>([])
   const [language, setLanguage] = useState(project.transcribe_language ?? 'en')
-  const { model, setModel, recommended } = useWhisperModel(project.transcribe_model)
+  const { model, setModel, recommended } = useWhisperModel(language, project.transcribe_model)
   const [takes, setTakes] = useState<Take[]>(project.takes ?? [])
   const [recState, setRecState] = useState<RecState>('idle')
   const [elapsed, setElapsed] = useState(0)

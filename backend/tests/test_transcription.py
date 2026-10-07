@@ -185,11 +185,13 @@ def test_short_replies_are_kept_but_loops_are_dropped():
     assert [s["text"] for s in kept] == ["Yeah.", "Okay, sure.", "That sounds good."]
 
 
-def test_default_model_depends_on_device(monkeypatch):
+def test_default_model_depends_on_device_and_language(monkeypatch):
     monkeypatch.setattr(tr, "_pick_device", lambda: ("cpu", "int8"))
-    assert tr.default_model() == "small"
+    assert tr.default_model("en") == "small"
+    assert tr.default_model("fr") == "turbo"
+    assert tr.default_model(None) == "turbo"  # auto-detect
     monkeypatch.setattr(tr, "_pick_device", lambda: ("cuda", "float16"))
-    assert tr.default_model() == "turbo"
+    assert tr.default_model("en") == "turbo"
 
 
 def test_defaults_endpoint_and_preload_without_model(monkeypatch):
@@ -200,5 +202,8 @@ def test_defaults_endpoint_and_preload_without_model(monkeypatch):
     client = TestClient(app)
     assert client.get("/api/transcription/defaults").json() == {
         "device": "cpu", "compute_type": "int8", "default_model": "small"}
+    assert client.get("/api/transcription/defaults?language=de").json()["default_model"] == "turbo"
+    assert client.get("/api/transcription/defaults?language=").json()["default_model"] == "turbo"
     client.post("/api/transcription/preload", json={})
-    assert calls == ["small"]
+    client.post("/api/transcription/preload", json={"language": "es"})
+    assert calls == ["small", "turbo"]

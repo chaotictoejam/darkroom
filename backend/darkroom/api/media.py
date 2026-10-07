@@ -109,7 +109,7 @@ async def upload_files(
     if name and name.strip():
         proj["name"] = name.strip()
     proj["transcribe_language"] = language or None
-    proj["transcribe_model"] = model or default_model()
+    proj["transcribe_model"] = model or default_model(language or None)
     proj["status"] = "uploaded"
     proj["progress"] = {"step": "uploaded", "percent": 0, "message": "Files uploaded"}
     save_project(proj)

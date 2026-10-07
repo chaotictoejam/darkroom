@@ -22,8 +22,8 @@ interface Props {
 export default function Setup({ project, onBack, onProcessing }: Props) {
   const [name, setName] = useState(project.name)
   const [speakers, setSpeakers] = useState<SpeakerSlot[]>([{ name: '', file: null }])
-  const { model, setModel, recommended } = useWhisperModel()
   const [language, setLanguage] = useState('en')
+  const { model, setModel, recommended } = useWhisperModel(language)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
