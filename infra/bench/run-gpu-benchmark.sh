@@ -175,11 +175,11 @@ export DEBIAN_FRONTEND=noninteractive HOME=/root
 apt-get update
 apt-get install -y ffmpeg python3-venv
 python3 -m venv /opt/venv
-/opt/venv/bin/pip install --quiet awscli
+/opt/venv/bin/pip install --quiet --retries 10 --timeout 60 awscli
 mkdir -p /opt/darkroom
 /opt/venv/bin/aws s3 cp s3://$BUCKET/src.tar.gz - | tar xz -C /opt/darkroom
 # CUDA 12 cuBLAS + cuDNN 9 for CTranslate2, as faster-whisper's README describes
-/opt/venv/bin/pip install --quiet -e "/opt/darkroom/backend[bench]" nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"
+/opt/venv/bin/pip install --quiet --retries 10 --timeout 60 -e "/opt/darkroom/backend[bench]" nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"
 export LD_LIBRARY_PATH=\$(/opt/venv/bin/python -c 'import os, nvidia.cublas.lib, nvidia.cudnn.lib; print(os.path.dirname(nvidia.cublas.lib.__file__) + ":" + os.path.dirname(nvidia.cudnn.lib.__file__))')
 nvidia-smi
 /opt/venv/bin/python -c 'import ctranslate2; n = ctranslate2.get_cuda_device_count(); print("CUDA devices:", n); assert n > 0'
