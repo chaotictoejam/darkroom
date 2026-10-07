@@ -143,13 +143,6 @@ def preload_model(model_name: str, *, download: bool = False) -> None:
     threading.Thread(target=_load, daemon=True).start()
 
 
-def _total_memory_gb() -> float | None:
-    try:
-        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
-    except (AttributeError, ValueError, OSError):  # e.g. Windows
-        return None
-
-
 def _free_gpu_memory_gb() -> float | None:
     if not shutil.which("nvidia-smi"):
         return None
@@ -164,20 +157,18 @@ def _free_gpu_memory_gb() -> float | None:
 
 
 def _batch_size(device: str) -> int:
-    """How many 30 s windows to decode at once, from the memory available.
+    """How many 30 s windows to decode at once.
 
-    Phase 0: on GPU, batch 16 was 20% faster than batch 1; on CPU, batches
-    above 4 were slightly slower, so CPU is capped at 4.
+    Phase 0: on GPU, batch 16 was 20% faster than batch 1, so GPU batches
+    scale with free memory. On CPU (with every core in use) batch 1 was
+    fastest: 4-6% faster than 4, and 10% faster than 8.
     """
     if device == "cuda":
         free = _free_gpu_memory_gb()
         if free is None:
             return 8
         return 16 if free >= 8 else 8 if free >= 4 else 4
-    total = _total_memory_gb()
-    if total is None:
-        return 4
-    return 4 if total >= 8 else 2
+    return 1
 
 
 def _extract_audio(video_path: str) -> str:

@@ -53,14 +53,9 @@ def test_cuda_without_float16_uses_next_best(monkeypatch):
     assert tr._pick_device() == ("cuda", "float32")
 
 
-def test_batch_size_scales_with_memory(monkeypatch):
-    # CPU is capped at 4 (larger batches were slower in Phase 0); GPU scales with free memory
-    monkeypatch.setattr(tr, "_total_memory_gb", lambda: 32.0)
-    assert tr._batch_size("cpu") == 4
-    monkeypatch.setattr(tr, "_total_memory_gb", lambda: 4.0)
-    assert tr._batch_size("cpu") == 2
-    monkeypatch.setattr(tr, "_total_memory_gb", lambda: None)
-    assert tr._batch_size("cpu") == 4
+def test_batch_size(monkeypatch):
+    # CPU decodes one window at a time (fastest in Phase 0); GPU scales with free memory
+    assert tr._batch_size("cpu") == 1
     monkeypatch.setattr(tr, "_free_gpu_memory_gb", lambda: 10.0)
     assert tr._batch_size("cuda") == 16
 
