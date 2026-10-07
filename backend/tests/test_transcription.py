@@ -54,10 +54,11 @@ def test_cuda_without_float16_uses_next_best(monkeypatch):
 
 
 def test_batch_size(monkeypatch):
-    # CPU decodes one window at a time (fastest in Phase 0); GPU scales with free memory
-    assert tr._batch_size("cpu") == 1
+    # CPU: batches help small models but not large ones (Phase 0); GPU scales with free memory
+    assert tr._batch_size("cpu", "small") == 4
+    assert tr._batch_size("cpu", "turbo") == 1
     monkeypatch.setattr(tr, "_free_gpu_memory_gb", lambda: 10.0)
-    assert tr._batch_size("cuda") == 16
+    assert tr._batch_size("cuda", "turbo") == 16
 
 
 # ── Model cache ───────────────────────────────────────────────────────────────

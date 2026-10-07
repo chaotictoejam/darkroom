@@ -156,19 +156,24 @@ def _free_gpu_memory_gb() -> float | None:
         return None
 
 
-def _batch_size(device: str) -> int:
+# Models small enough that batching still helps on CPU
+_SMALL_MODELS = {"tiny", "tiny.en", "base", "base.en", "small", "small.en", "distil-small.en"}
+
+
+def _batch_size(device: str, model_name: str) -> int:
     """How many 30 s windows to decode at once.
 
     Phase 0: on GPU, batch 16 was 20% faster than batch 1, so GPU batches
-    scale with free memory. On CPU (with every core in use) batch 1 was
-    fastest: 4-6% faster than 4, and 10% faster than 8.
+    scale with free memory. On CPU, with every core in use, it depends on
+    the model: small was 5-8% faster at batch 4 than 1, while turbo was 4-6%
+    faster at batch 1 than 4 (its encoder already keeps every core busy).
     """
     if device == "cuda":
         free = _free_gpu_memory_gb()
         if free is None:
             return 8
         return 16 if free >= 8 else 8 if free >= 4 else 4
-    return 1
+    return 4 if model_name in _SMALL_MODELS else 1
 
 
 def _extract_audio(video_path: str) -> str:
@@ -225,12 +230,13 @@ def transcribe_file(
             pass
 
     audio_duration = len(audio_np) / _SAMPLE_RATE
-    model = get_model(model_name or default_model(language))
+    model_name = model_name or default_model(language)
+    model = get_model(model_name)
     pipeline = BatchedInferencePipeline(model)
     segments_iter, _info = pipeline.transcribe(
         audio_np,
         language=language,
-        batch_size=_batch_size(model.model.device),
+        batch_size=_batch_size(model.model.device, model_name),
         # Silero VAD: only speech is decoded, which skips silence and removes the
         # main source of hallucinations
         vad_filter=True,
