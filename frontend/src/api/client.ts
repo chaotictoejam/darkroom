@@ -83,6 +83,10 @@ export const api = {
 
   // ── Jobs ────────────────────────────────────────────────────────────────────
 
+  /** The device transcription runs on, and the recommended model for it. */
+  transcriptionDefaults: () =>
+    request<{ device: 'cpu' | 'cuda'; compute_type: string; default_model: string }>('/api/transcription/defaults'),
+
   /** Load a Whisper model in the background. download=false skips models not yet on disk. */
   preloadModel: (model: string, download = false) =>
     request<{ ok: boolean }>('/api/transcription/preload', { method: 'POST', body: JSON.stringify({ model, download }) }),

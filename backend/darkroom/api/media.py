@@ -11,7 +11,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from typing import Optional
 
-from ..services.transcription import DEFAULT_MODEL
+from ..services.transcription import default_model
 from ..storage import PROJECTS_DIR, get_project, save_project
 
 router = APIRouter()
@@ -74,7 +74,7 @@ async def upload_files(
     files: list[UploadFile] = File(...),
     names: list[str] = Form(...),
     language: Optional[str] = Form(default=None),
-    model: str = Form(default=DEFAULT_MODEL),
+    model: Optional[str] = Form(default=None),
     name: Optional[str] = Form(default=None),
 ):
     proj = get_project(project_id)
@@ -109,7 +109,7 @@ async def upload_files(
     if name and name.strip():
         proj["name"] = name.strip()
     proj["transcribe_language"] = language or None
-    proj["transcribe_model"] = model
+    proj["transcribe_model"] = model or default_model()
     proj["status"] = "uploaded"
     proj["progress"] = {"step": "uploaded", "percent": 0, "message": "Files uploaded"}
     save_project(proj)

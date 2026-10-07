@@ -5,7 +5,7 @@
  */
 import type { MicEngine } from './micEngine'
 import LevelMeter from './LevelMeter'
-import { LANGUAGES, WHISPER_MODELS } from '../../transcriptionOptions'
+import { LANGUAGES, whisperModelOptions } from '../../transcriptionOptions'
 
 export const MAX_SOURCES = 4
 
@@ -25,6 +25,7 @@ interface Props {
   usedIds: string[]
   language: string
   model: string
+  recommendedModel: string | null
   onLanguageChange: (v: string) => void
   onModelChange: (v: string) => void
   permission: 'idle' | 'requesting' | 'granted'
@@ -133,7 +134,7 @@ export default function SourcePicker(props: Props) {
             <label style={{ flex: 1 }}>
               <span style={{ ...mutedText, display: 'block', marginBottom: 4 }}>Whisper model</span>
               <select value={props.model} onChange={(e) => props.onModelChange(e.target.value)} style={{ width: '100%' }}>
-                {WHISPER_MODELS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+                {whisperModelOptions(props.recommendedModel).map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
               </select>
             </label>
           </div>

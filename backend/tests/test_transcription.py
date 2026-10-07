@@ -183,3 +183,22 @@ def test_short_replies_are_kept_but_loops_are_dropped():
         seg("you know you know you know you know"), seg("That sounds good."),
     ])
     assert [s["text"] for s in kept] == ["Yeah.", "Okay, sure.", "That sounds good."]
+
+
+def test_default_model_depends_on_device(monkeypatch):
+    monkeypatch.setattr(tr, "_pick_device", lambda: ("cpu", "int8"))
+    assert tr.default_model() == "small"
+    monkeypatch.setattr(tr, "_pick_device", lambda: ("cuda", "float16"))
+    assert tr.default_model() == "turbo"
+
+
+def test_defaults_endpoint_and_preload_without_model(monkeypatch):
+    monkeypatch.setattr(tr, "_pick_device", lambda: ("cpu", "int8"))
+    calls = []
+    monkeypatch.setattr(jobs_api, "preload_model", lambda name, download=False: calls.append(name))
+    from darkroom.main import app
+    client = TestClient(app)
+    assert client.get("/api/transcription/defaults").json() == {
+        "device": "cpu", "compute_type": "int8", "default_model": "small"}
+    client.post("/api/transcription/preload", json={})
+    assert calls == ["small"]

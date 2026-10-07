@@ -27,7 +27,7 @@ from ..services.takes import (
     read_take_transcript,
     write_take_transcript,
 )
-from ..services.transcription import DEFAULT_MODEL, transcribe_file
+from ..services.transcription import default_model, transcribe_file
 from ..storage import PROJECTS_DIR, editing_project, get_project, list_projects
 from .jobs import _push
 
@@ -106,7 +106,7 @@ def transcribe_take(project_id: str, take_id: str) -> None:
 
     take_dir = PROJECTS_DIR / project_id / "takes" / take_id
     names = {p["id"]: p["name"] for p in proj.get("participants", [])}
-    model_name = proj.get("transcribe_model") or DEFAULT_MODEL
+    model_name = proj.get("transcribe_model") or default_model()
     language = proj.get("transcribe_language") or None
     tracks = list(take["tracks"].items())
 

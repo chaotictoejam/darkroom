@@ -22,7 +22,11 @@ from faster_whisper import BatchedInferencePipeline, WhisperModel, download_mode
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "turbo"
+# Default model by device, from the Phase 0 benchmark: on CPU, small matched
+# turbo's accuracy at 2.9x the speed; on an NVIDIA GPU both take a minute or two
+# per hour of audio, so turbo's stronger multilingual accuracy wins.
+DEFAULT_MODEL_CPU = "small"
+DEFAULT_MODEL_GPU = "turbo"
 
 _SAMPLE_RATE = 16000
 
@@ -76,6 +80,17 @@ def _physical_cores() -> int:
 def _load(model_name: str, device: str, compute_type: str) -> WhisperModel:
     cpu_threads = _physical_cores() if device == "cpu" else 0
     return WhisperModel(model_name, device=device, compute_type=compute_type, cpu_threads=cpu_threads)
+
+
+def default_model() -> str:
+    """The Whisper model to use when the user hasn't chosen one."""
+    return DEFAULT_MODEL_GPU if _pick_device()[0] == "cuda" else DEFAULT_MODEL_CPU
+
+
+def transcription_defaults() -> dict:
+    """What this machine transcribes on, and the model the app recommends for it."""
+    device, compute_type = _pick_device()
+    return {"device": device, "compute_type": compute_type, "default_model": default_model()}
 
 
 def get_model(model_name: str, *, download: bool = True) -> WhisperModel | None:
@@ -192,7 +207,7 @@ def transcribe_file(
     file_path: str,
     speaker_id: str,
     speaker_name: str,
-    model_name: str = DEFAULT_MODEL,
+    model_name: str | None = None,
     language: str | None = None,
     progress_callback=None,
 ) -> list[dict]:
@@ -212,7 +227,7 @@ def transcribe_file(
             pass
 
     audio_duration = len(audio_np) / _SAMPLE_RATE
-    model = get_model(model_name)
+    model = get_model(model_name or default_model())
     pipeline = BatchedInferencePipeline(model)
     segments_iter, _info = pipeline.transcribe(
         audio_np,
@@ -290,7 +305,7 @@ def _split_sentences(words: list[dict]) -> list[list[dict]]:
     return [p for p in parts if p]
 
 
-def transcribe_all(speakers: list[dict], model_name: str = DEFAULT_MODEL, progress_callback=None, language: str | None = None) -> dict[str, list]:
+def transcribe_all(speakers: list[dict], model_name: str | None = None, progress_callback=None, language: str | None = None) -> dict[str, list]:
     """Transcribe all speaker files. Returns {speaker_id: [segments]}.
 
     progress_callback(overall_frac: float, name: str, index: int, total: int)
