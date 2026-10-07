@@ -10,6 +10,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import wave
@@ -48,6 +49,35 @@ def _pick_device() -> tuple[str, str]:
     return "cpu", "int8"
 
 
+def _physical_cores() -> int:
+    """Physical CPU cores, or 0 (CTranslate2's default of 4 threads) if unknown.
+
+    Phase 0: using every physical core was about 20% faster than the default;
+    hyper-threads added nothing.
+    """
+    try:
+        if sys.platform.startswith("linux"):
+            cores, ids = set(), {}
+            with open("/proc/cpuinfo") as f:
+                for line in f:
+                    key, _, value = line.partition(":")
+                    ids[key.strip()] = value.strip()
+                    if key.strip() == "core id":
+                        cores.add((ids.get("physical id"), value.strip()))
+            return len(cores)
+        if sys.platform == "darwin":
+            out = subprocess.run(["sysctl", "-n", "hw.physicalcpu"], capture_output=True, text=True, timeout=5)
+            return int(out.stdout.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return 0
+
+
+def _load(model_name: str, device: str, compute_type: str) -> WhisperModel:
+    cpu_threads = _physical_cores() if device == "cpu" else 0
+    return WhisperModel(model_name, device=device, compute_type=compute_type, cpu_threads=cpu_threads)
+
+
 def get_model(model_name: str, *, download: bool = True) -> WhisperModel | None:
     """Return a cached WhisperModel, loading it on first use.
 
@@ -67,14 +97,14 @@ def get_model(model_name: str, *, download: bool = True) -> WhisperModel | None:
             except Exception:
                 return None
         try:
-            model = WhisperModel(model_name, device=device, compute_type=compute_type)
+            model = _load(model_name, device, compute_type)
         except Exception:
             if device == "cpu":
                 raise
             # e.g. CUDA driver present but cuBLAS/cuDNN missing
             logger.exception("Could not load %s on %s; falling back to CPU", model_name, device)
             key = (model_name, "cpu", "int8")
-            model = WhisperModel(model_name, device="cpu", compute_type="int8")
+            model = _load(model_name, "cpu", "int8")
         _model_cache.clear()
         _model_cache[key] = model
         return model
@@ -112,7 +142,11 @@ def _free_gpu_memory_gb() -> float | None:
 
 
 def _batch_size(device: str) -> int:
-    """How many 30 s windows to decode at once, from the memory available."""
+    """How many 30 s windows to decode at once, from the memory available.
+
+    Phase 0: on GPU, batch 16 was 20% faster than batch 1; on CPU, batches
+    above 4 were slightly slower, so CPU is capped at 4.
+    """
     if device == "cuda":
         free = _free_gpu_memory_gb()
         if free is None:
@@ -121,7 +155,7 @@ def _batch_size(device: str) -> int:
     total = _total_memory_gb()
     if total is None:
         return 4
-    return 8 if total >= 16 else 4 if total >= 8 else 2
+    return 4 if total >= 8 else 2
 
 
 def _extract_audio(video_path: str) -> str:
@@ -290,14 +324,6 @@ def transcribe_all(speakers: list[dict], model_name: str = DEFAULT_MODEL, progre
     return transcripts
 
 
-# Single-word fillers that Whisper commonly hallucinates on silence
-_FILLER_WORDS = {
-    "okay", "ok", "yeah", "yes", "no", "right", "alright", "hmm", "mhm",
-    "uh", "um", "uhh", "umm", "mm", "mmm", "ah", "oh", "er", "erm",
-    "like", "so", "well", "now", "anyway", "sure", "yep", "nope",
-}
-
-
 def _normalise(word: str) -> str:
     return word.lower().strip(".,!?\"'")
 
@@ -308,8 +334,11 @@ def _filter_hallucinations(segments: list[dict]) -> list[dict]:
 
     1. Within-segment loops  — "okay okay okay okay"
     2. Repeating-phrase loops — "you know you know you know"
-    3. Pure filler segments  — segment text is only 1-2 filler words
-    4. Cross-segment runs    — 3+ consecutive segments with the same 1-2 word text
+    3. Cross-segment runs    — 3+ consecutive segments with the same 1-2 word text
+
+    Short filler-only segments ("Okay.", "Yeah, yeah.") are kept: with VAD only
+    speech is decoded, and in Phase 0 dropping them deleted real replies and
+    cost 1.6–2.8 points of word error rate on meetings.
     """
     # --- Pass 1: per-segment checks ---
     pass1 = []
@@ -320,11 +349,6 @@ def _filter_hallucinations(segments: list[dict]) -> list[dict]:
 
         words = text.split()
         norm = [_normalise(w) for w in words]
-
-        # Drop pure-filler segments (e.g. a segment that is just "Okay." or "Yeah, yeah.")
-        real_words = [w for w in norm if w not in _FILLER_WORDS]
-        if not real_words and len(words) <= 4:
-            continue
 
         # Within-segment word loop: "okay okay okay okay"
         if len(words) >= 4:

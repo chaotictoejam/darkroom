@@ -13,17 +13,20 @@ from darkroom.services import transcription as tr
 class _FakeModel:
     loads: list[tuple] = []
 
-    def __init__(self, name, device="cpu", compute_type="default"):
+    def __init__(self, name, device="cpu", compute_type="default", cpu_threads=0):
         if device == "cuda" and getattr(_FakeModel, "fail_cuda", False):
             raise RuntimeError("libcublas not found")
         _FakeModel.loads.append((name, device, compute_type))
+        _FakeModel.threads.append(cpu_threads)
         self.model = SimpleNamespace(device=device)
 
 
 @pytest.fixture
 def fake_models(monkeypatch):
     _FakeModel.loads = []
+    _FakeModel.threads = []
     _FakeModel.fail_cuda = False
+    monkeypatch.setattr(tr, "_physical_cores", lambda: 6)
     monkeypatch.setattr(tr, "WhisperModel", _FakeModel)
     monkeypatch.setattr(tr, "_model_cache", {})
     monkeypatch.setattr(tr, "_pick_device", lambda: ("cpu", "int8"))
@@ -51,8 +54,9 @@ def test_cuda_without_float16_uses_next_best(monkeypatch):
 
 
 def test_batch_size_scales_with_memory(monkeypatch):
+    # CPU is capped at 4 (larger batches were slower in Phase 0); GPU scales with free memory
     monkeypatch.setattr(tr, "_total_memory_gb", lambda: 32.0)
-    assert tr._batch_size("cpu") == 8
+    assert tr._batch_size("cpu") == 4
     monkeypatch.setattr(tr, "_total_memory_gb", lambda: 4.0)
     assert tr._batch_size("cpu") == 2
     monkeypatch.setattr(tr, "_total_memory_gb", lambda: None)
@@ -67,6 +71,13 @@ def test_model_loaded_once_and_reused(fake_models):
     first = tr.get_model("turbo")
     assert tr.get_model("turbo") is first
     assert fake_models.loads == [("turbo", "cpu", "int8")]
+
+
+def test_cpu_uses_every_physical_core(fake_models, monkeypatch):
+    tr.get_model("turbo")
+    monkeypatch.setattr(tr, "_pick_device", lambda: ("cuda", "float16"))
+    tr.get_model("small")
+    assert fake_models.threads == [6, 0]  # 0 = CTranslate2's default; ignored on CUDA
 
 
 def test_switching_model_evicts_previous(fake_models):
@@ -161,3 +172,14 @@ def test_chunks_split_into_sentences_at_punctuation_and_pauses():
     parts = tr._split_sentences(words)
     assert ["".join(x["word"] for x in p).strip() for p in parts] == [
         "Hello there.", "How are you", "doing today?", "Good"]
+
+
+def test_short_replies_are_kept_but_loops_are_dropped():
+    def seg(text):
+        return {"text": text, "start": 0.0, "end": 1.0, "words": []}
+
+    kept = tr._filter_hallucinations([
+        seg("Yeah."), seg("Okay, sure."), seg("okay okay okay okay okay"),
+        seg("you know you know you know you know"), seg("That sounds good."),
+    ])
+    assert [s["text"] for s in kept] == ["Yeah.", "Okay, sure.", "That sounds good."]
