@@ -1,6 +1,6 @@
 # Fast Local Transcription: Plan
 
-Status: **in progress**: Phase 1 (quick wins) done; Phase 0 benchmark done on CPU (see [Phase 0 results](#phase-0-results-cpu)). Tracked in [ROADMAP.md](../ROADMAP.md).
+Status: **in progress**: Phase 1 (quick wins) done; Phase 0 benchmark done on CPU and an NVIDIA T4 (see [CPU](#phase-0-results-cpu) and [NVIDIA T4](#phase-0-results-nvidia-t4) results); Apple Silicon still to do. Tracked in [ROADMAP.md](../ROADMAP.md).
 
 Descript and Riverside have transcripts ready within moments of an upload or recording finishing. This plan covers how they get there, where Darkroom's time goes today, and how to get close to that speed **while keeping transcription on the user's machine**, plus an opt-in mode that uses GPUs in the user's **own** cloud account.
 
@@ -177,6 +177,33 @@ What the numbers say:
 - **Threads matter more than batching on CPU.** CTranslate2 uses 4 threads by default; 6 (the physical cores) is about 20% faster; 12 adds nothing. Batch sizes above 4 are slightly slower. The batched pipeline's gain on CPU comes from its tighter VAD chunks, not from batching.
 - **Crosstalk is now the largest error source:** more than half of every model's errors on the 2-mic item. `distil-large-v3.5` transcribes the most bleed.
 - **Bug found:** batched decoding with timestamp tokens dropped whole sentences (fixed; see Decisions).
+- **The filler-segment filter now costs accuracy.** With VAD on, the hallucination filters removed nothing on this set (insertions unchanged), but dropping "filler-only" segments deleted real one-word replies ("Yeah.", "Okay."), which sentence splitting now puts in their own segments: on the 4-mic item with `small`, crosstalk-excluded WER is 15.7% with the filters, 14.1% without the filler rule and 13.9% with no filters.
+
+## Phase 0 results (NVIDIA T4)
+
+Measured on 6 Oct 2026 on an EC2 `g4dn.xlarge` (NVIDIA T4 16 GB, 4 vCPUs) with `infra/bench/run-gpu-benchmark.sh`, same test set and scoring as the CPU results. Raw results: [`backend/bench/results/aws-g4dn.xlarge.jsonl`](../backend/bench/results/aws-g4dn.xlarge.jsonl). All seven T4 runs (including diagnosis of the harness bugs below) used about 2 instance-hours, roughly $1.
+
+| Config | Solo | 2-mic | 4-mic | Overall speed | Pooled WER, crosstalk excluded | 1-h 2-mic podcast |
+|---|---|---|---|---|---|---|
+| Before Phase 1 (`medium`, float16, no VAD) | 21.48× · 1.8% | 26.37× · 69.0% (31.1%) | 31.22× · 43.4% (37.1%) | 27.4× | 20.6% | 4.6 min |
+| Phase 1, `large-v3` | 25.54× · 1.9% | 40.09× · 44.3% (16.0%) | 71.34× · 17.3% (16.1%) | 45.5× | 10.0% | 3.0 min |
+| Phase 1, `medium` | 42.78× · 1.8% | 67.99× · 32.8% (16.6%) | 106.76× · 15.3% (14.9%) | 73.5× | 9.7% | 1.8 min |
+| Phase 1, `turbo` (default) | 53.46× · 2.1% | 76.00× · 35.4% (14.1%) | 127.52× · 16.3% (15.2%) | 87.4× | 9.4% | 1.6 min |
+| Phase 1, `distil-large-v3.5` | 58.38× · 1.8% | 78.84× · 62.5% (34.9%) | 134.83× · 16.6% (12.8%) | 92.8× | 13.5% | 1.5 min |
+| Phase 1, `small` | 86.79× · 1.9% | 123.08× · 32.1% (14.6%) | 173.54× · 16.0% (15.6%) | 132.4× | 9.5% | 1.0 min |
+| Phase 1, `base` | 144.32× · 2.9% | 177.78× · 43.5% (15.1%) | 230.11× · 16.3% (15.6%) | 192.1× | 10.1% | 0.7 min |
+
+Ablations on `turbo` (overall speed · pooled WER, crosstalk excluded): float16 batched at batch 1 72.8× · 8.4%, batch 4 84.7× · 8.3%, batch 16 87.1× · 8.3%; int8_float16 at batch 8 81.9× · 8.2%.
+
+What the numbers say:
+
+- **Phase 1 is 3.2× faster on the T4 and halves the error rate** (20.6% → 9.4%). A 1-hour, 2-mic podcast now takes about 1.6 minutes with `turbo`.
+- **Batching helps on GPU**, unlike on CPU: batch 16 is 20% faster than batch 1. The app already picks 16 on a GPU with 8 GB or more free.
+- **float16 is the right compute type on CUDA**: int8_float16 is about 6% slower at the same accuracy.
+- **`small` is still 1.5× faster than `turbo` at the same accuracy**, but on a GPU both take a minute or two per hour of audio, so `turbo`'s stronger multilingual accuracy is worth keeping there.
+- **`distil-large-v3.5`'s word timings are unreliable.** It picks up the same amount of crosstalk on GPU and CPU (708 and 682 insertions on 2-mic), but on the T4 its word timestamps place much more of it inside the speaker's own speech (34.9% crosstalk-excluded WER on 2-mic, against 15.1% on CPU). Darkroom cuts audio on word timestamps, so this rules it out as a default.
+- **The app's filler filter shows up here too:** on 4-mic, the app scores 15.2% crosstalk excluded against 12.4% for the same model and settings without the app's post-processing.
+- **Benchmark harness bugs found on the way** (fixed): workers crashed with a segfault in onnxruntime when given a multi-mic item's word times as JSON on the command line (items now go by id), model downloads were timed on first use, and the first job on a fresh instance ran about a third slower while its disk loaded from the snapshot (the script now warms up first).
 
 ---
 
@@ -185,7 +212,7 @@ What the numbers say:
 ### Phase 0: Benchmark
 - [x] Benchmark script: fixed test set (solo, 2-mic and 4-mic recordings with real crosstalk, 10–60 min) → wall time, real-time factor and word error rate per configuration
 - [x] Baseline on CPU (Ryzen 5 3600)
-- [ ] Baseline on an NVIDIA GPU (`infra/bench/run-gpu-benchmark.sh`; needs a G-instance quota increase on the AWS account)
+- [x] Baseline on an NVIDIA GPU (T4, EC2 `g4dn.xlarge`, via `infra/bench/run-gpu-benchmark.sh`)
 - [ ] Baseline on Apple Silicon (EC2 Mac steps in `backend/bench/README.md`; 24-hour minimum, so best combined with the Phase 5 Mac engine)
 - [x] Record results in this doc
 - [ ] Confirm the default model: `small` on CPU is recommended (see [Open questions](#open-questions))
@@ -199,7 +226,8 @@ What the numbers say:
 - [x] Progress from produced segment times instead of the speed table
 - [x] Preload the model when a project is opened or the studio is armed
 - [ ] From Phase 0: set `cpu_threads` to the number of physical cores (about 20% faster on CPU)
-- [ ] From Phase 0: cap the CPU batch size at 4, and re-measure together with the thread change
+- [ ] From Phase 0: cap the CPU batch size at 4, and re-measure together with the thread change (keep 16 on GPU, where batching helps)
+- [ ] From Phase 0: drop the filler-only segment filter (costs 1.6–2.8 points of WER on meetings; catches nothing with VAD on), keeping the loop detectors
 
 ### Phase 2: Per-mic speaker gating
 - [ ] VAD per track + cross-track loudness comparison → speech regions per speaker
@@ -245,7 +273,7 @@ What the numbers say:
 | Question | Decision |
 |---|---|
 | How many models stay loaded? | **One**, the most recently used. Switching model evicts the old one (a job still using it keeps its reference until done). Holding every model a user tries could use several GB of RAM |
-| Which hallucination filters are still needed with VAD? | **All kept.** VAD removes the main cause (silence), but the filters are cheap and still catch loops in real speech. The `no_speech_prob` filter now uses Whisper's own rule (`no_speech_prob > 0.5` **and** `avg_logprob < -1.0`), because the batched pipeline reports `no_speech_prob` per 30 s chunk and on its own would drop real speech next to a pause |
+| Which hallucination filters are still needed with VAD? | **Under review** (Phase 0 found the filler-only rule deletes real one-word replies; see Phase 1 TODO). Originally: **all kept.** VAD removes the main cause (silence), but the filters are cheap and still catch loops in real speech. The `no_speech_prob` filter now uses Whisper's own rule (`no_speech_prob > 0.5` **and** `avg_logprob < -1.0`), because the batched pipeline reports `no_speech_prob` per 30 s chunk and on its own would drop real speech next to a pause |
 | Segment granularity with the batched pipeline | Decode **without timestamp tokens** (`without_timestamps=True`) and split each chunk into sentences from word times (at `.` `?` `!` or a pause of 1 s or more). Phase 1 first used `without_timestamps=False`, but the batched pipeline decodes each chunk once, so speech after the last timestamp was dropped: whole sentences on the Phase 0 solo talk |
 | Compute type when CUDA has no float16 | Next supported of `int8_float16`, `float32`. If the model can't load on CUDA at all (e.g. cuBLAS/cuDNN missing), fall back to CPU int8 and log it; a user-facing message is Phase 5 |
 | Batch size | From memory: CPU 2 / 4 / 8 for < 8 / 8–16 / ≥ 16 GB RAM (4 if unknown, e.g. Windows); CUDA 4 / 8 / 16 for < 4 / 4–8 / ≥ 8 GB free VRAM via `nvidia-smi` (8 if unknown). Phase 0 found batches above 4 slightly slower on CPU; a cap of 4 is planned |
@@ -257,5 +285,5 @@ What the numbers say:
 
 ## Open questions
 
-- **Default model:** on CPU, `small` matches `turbo`'s accuracy at 2.9× the speed in Phase 0. Should the default depend on the device (`small` on CPU, `turbo` on NVIDIA)? Check `small` on non-English audio first; the Phase 0 set is English only. `distil-large-v3.5` is most accurate with crosstalk excluded but transcribes the most bleed and is English only: revisit after Phase 2.
+- **Default model:** on CPU, `small` matches `turbo`'s accuracy at 2.9× the speed in Phase 0; on the T4 it is 1.5× faster, but both finish an hour of audio in a minute or two. Recommended: default by device, `small` on CPU and `turbo` on NVIDIA. Check `small` on non-English audio first; the Phase 0 set is English only. `distil-large-v3.5` is ruled out as a default: its word timestamps were unreliable on the T4, and it is English only.
 - **Live transcript in the studio:** useful to see, or distracting while recording? Could be a toggle.
