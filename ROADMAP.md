@@ -8,12 +8,13 @@ Each item says why it matters and roughly what it involves, so it can be picked 
 
 ## Principles
 
-Every item below follows these:
+The point of Darkroom is that **nothing leaves your control**. Every item below follows these:
 
-- **Local by default.** Recording, transcription, editing and rendering run on the user's machine, and work with no cloud set up at all.
-- **Cloud is opt-in and self-hosted.** Any feature that uses the cloud (remote guests, cloud transcription) runs on infrastructure the user deploys into **their own account**, such as AWS or a similar provider. There is no shared Darkroom service, and Darkroom never holds user data.
+- **Local by default.** Recording, transcription, AI editing and rendering run on the user's machine, and work with no cloud set up at all.
+- **Cloud is opt-in and stays in your account.** When the user wants more speed or a bigger model, it runs on infrastructure they deploy into **their own account** (AWS, or similar), and their data stays inside that account. There is no shared Darkroom service, and Darkroom never holds user data.
+- **No third parties by default.** Cloud AI goes through the user's own account (Bedrock), set up so prompts aren't stored, reviewed or shared. Anything that would send data to a third party is off unless the user knowingly turns it on.
 - **Session-scoped and cleaned up.** Cloud resources and data exist only as long as the job or session needs them, then are deleted automatically.
-- **Clear about what leaves the machine.** The app says plainly when something will be sent to the cloud and where. Today that's only the **Analyse** step, which sends transcript text to the AI provider the user configures (the Anthropic API, or Bedrock in their own AWS account).
+- **Clear about what leaves the machine.** The app says plainly when something will be sent off the computer and where. Today that's only the **Analyse** step, which sends transcript text to the configured AI provider. Bedrock keeps it in the user's AWS account; the direct Anthropic API is a third party, which [Private AI](docs/private-ai.md) makes opt-in and adds a fully local option.
 
 ---
 
@@ -38,7 +39,15 @@ New Project asks **Upload** (already-synced files; video or audio-only is detect
 
 ## Next
 
-### 1. Recording studio and new project flow (Phases 2–7)
+### 1. Private AI: local models and a locked-down Bedrock
+
+**Why:** Analyse is the one step where data can leave the user's control. It defaults to the Anthropic API (a third party), there's no local option, and Darkroom doesn't check how the user's Bedrock account retains prompts.
+
+**Involves:** a local AI provider (Ollama/LM Studio/llama.cpp on loopback first, a bundled model later) with JSON-constrained EDL output and an EDL benchmark to pick models; Bedrock checks for zero data retention, region control and models that require retention or human review; the direct Anthropic API made an explicit, labelled opt-in; and the Analyse step saying exactly where the transcript goes.
+
+Full plan, Bedrock data-handling validation and TODO list: **[docs/private-ai.md](docs/private-ai.md)**
+
+### 2. Recording studio and new project flow (Phases 2–7)
 
 **Why:** the studio records microphones only. Video podcasts and screen recordings need cameras, screens and recording more from the editor, and most shows need intro music and sound effects.
 
@@ -46,7 +55,7 @@ New Project asks **Upload** (already-synced files; video or audio-only is detect
 
 Full plan, mockups and TODO list: **[docs/recording-studio.md](docs/recording-studio.md)**
 
-### 2. Fast local transcription
+### 3. Fast local transcription
 
 **Why:** Descript and Riverside have transcripts ready moments after an upload or recording ends. Darkroom transcribes each mic's whole track one after another on settings that leave a lot of speed unused.
 
@@ -54,13 +63,13 @@ Full plan, mockups and TODO list: **[docs/recording-studio.md](docs/recording-st
 
 Full plan, analysis and TODO list: **[docs/fast-transcription.md](docs/fast-transcription.md)**
 
-### 3. Unsynced media on the timeline
+### 4. Unsynced media on the timeline
 
 **Why:** Upload only works for files that all start at the same moment. Footage from separate devices, or B-roll and inserts, can't be used today.
 
 **Involves:** uploading files into an existing project and placing them on the timeline: drag to position, auto-sync by audio where possible (cross-correlation, as planned for remote guests), and render support for clips that don't span the whole edit.
 
-### 4. Installable desktop builds
+### 5. Installable desktop builds
 
 **Why:** the desktop app currently needs a repo checkout plus `make install`. Most podcasters won't have Python, Node and FFmpeg set up.
 
@@ -71,19 +80,19 @@ Full plan, analysis and TODO list: **[docs/fast-transcription.md](docs/fast-tran
 - Storing projects in the OS app-data folder (`app.getPath('userData')`) rather than the repo's `projects/`
 - Packaging with electron-builder or Electron Forge for `.dmg`, `.exe` and `.AppImage`
 
-### 5. macOS signing and notarization
+### 6. macOS signing and notarization
 
 **Why:** a packaged, unsigned app can't reliably get microphone, camera or screen recording permission on macOS, and Gatekeeper blocks it by default.
 
 **Involves:** hardened runtime with the `com.apple.security.device.audio-input` and `com.apple.security.device.camera` entitlements, `NSMicrophoneUsageDescription` and `NSCameraUsageDescription` in `Info.plist`, Screen Recording permission guidance, code signing and notarization in CI. Windows code signing as a follow-on.
 
-### 6. Multi-channel audio interfaces
+### 7. Multi-channel audio interfaces
 
 **Why:** a common podcast setup is one USB interface (e.g. Focusrite Scarlett 2i2) with a mic on each input. The browser sees that as a single stereo device, so both people end up in one track.
 
 **Involves:** letting a recorder track pick a channel of a multi-channel device (split with a Web Audio `ChannelSplitterNode`, or with FFmpeg on upload), so each input becomes its own participant.
 
-### 7. Remote guests
+### 8. Remote guests
 
 **Why:** many podcasts have guests who aren't in the room. Today every participant needs a mic plugged into the host's computer.
 

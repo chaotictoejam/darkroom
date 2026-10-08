@@ -2,7 +2,7 @@
 
 > *Your footage, developed locally.*
 
-A local-first video and podcast editor. Upload your pre-aligned camera or audio files (or record a podcast in the built-in studio), get an AI-generated edit decision list from Claude, review and tweak cuts in the browser, then render final exports via FFmpeg. Nothing leaves your machine.
+A local-first video and podcast editor. Upload your pre-aligned camera or audio files (or record a podcast in the built-in studio), get an AI-generated edit decision list from Claude, review and tweak cuts in the browser, then render final exports via FFmpeg. Your media and transcripts stay on your machine. The one exception is the optional AI **Analyse** step, which sends transcript text to the AI provider you configure: see [What leaves your machine](#what-leaves-your-machine) before choosing one.
 
 See [ROADMAP.md](ROADMAP.md) for what's done and what's planned next.
 
@@ -19,6 +19,30 @@ See [ROADMAP.md](ROADMAP.md) for what's done and what's planned next.
 | Frontend | React · TypeScript · Vite |
 | Desktop | Electron (optional shell, adds voice recording) |
 | State | JSON files in `projects/` |
+
+---
+
+## What leaves your machine
+
+Darkroom's goal is that **nothing leaves your control**. Recording, transcription, editing and rendering all run locally. The only thing that can leave your computer today is **transcript text** (words, speaker names and timestamps, never audio or video) when you run **Analyse**, and where it goes depends on the provider:
+
+| Provider | Where the transcript goes | Stored? | Under whose control |
+|---|---|---|---|
+| No AI (skip Analyse and edit manually) | Nowhere | — | Yours |
+| **AWS Bedrock** (recommended) | Bedrock in **your own AWS account** | Not stored for Claude Sonnet/Opus models before Claude Fable 5 | Yours: your AWS agreement, IAM and CloudTrail. Anthropic never sees it. |
+| **Anthropic API** (current default) | **Anthropic's servers, a third party** | Per Anthropic's commercial terms and data retention policy | **Anthropic's, not yours** |
+| Manual Analysis (copy the prompt into Claude Code / claude.ai) | Wherever you paste it, usually Anthropic | Per that product's terms | **Anthropic's, not yours** |
+
+> [!WARNING]
+> **The Anthropic API is a gap in Darkroom's "nothing leaves your control" promise.** It is the easiest option to set up and is still the default, but your transcript leaves your machine *and* your cloud account and is handled under Anthropic's terms, not yours. If your recordings are confidential (unreleased episodes, guests' private details, client work), use Bedrock in your own AWS account, or skip Analyse and edit manually. Local AI models that remove this gap entirely are planned: see [docs/private-ai.md](docs/private-ai.md).
+
+**Bedrock details** (checked against AWS docs on 8 Oct 2026; full notes and sources in [docs/private-ai.md](docs/private-ai.md#validation-what-bedrock-does-with-your-data)):
+
+- Models run in AWS-owned accounts that model providers (Anthropic) cannot access. Prompts and outputs are not shared with them and are not used for training.
+- Claude models released before Claude Fable 5 support **zero data retention**: nothing is stored. To guarantee it, set your account's Bedrock data retention mode to `none` in your region.
+- **Claude Fable 5 / 5.1 are different:** they require retention mode `aws_review`, and AWS keeps all traffic for up to 30 days and may have staff review flagged requests (still not shared with Anthropic). Darkroom doesn't use them by default; with retention mode `none` they are blocked.
+- The default model ID (`us.anthropic.…`) is a US cross-Region profile: requests stay on AWS's network in the US but may be processed in another US region than `AWS_REGION`. Avoid `global.` model IDs if region matters to you.
+- Don't turn on Bedrock model invocation logging unless you want prompts kept in your own CloudWatch/S3.
 
 ---
 
@@ -113,6 +137,9 @@ cp .env.example .env
 
 #### Option A: Anthropic API (default)
 
+> [!WARNING]
+> Transcripts are sent to **Anthropic, a third party**, outside your machine and your cloud account. See [What leaves your machine](#what-leaves-your-machine). Prefer Option B for anything confidential.
+
 ```env
 AI_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
@@ -120,9 +147,9 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 Get a key at <https://console.anthropic.com> → API Keys → Create Key.
 
-#### Option B: AWS Bedrock
+#### Option B: AWS Bedrock (recommended for privacy)
 
-Requires AWS credentials available in the environment (via `AWS_PROFILE`, `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, or an IAM role) and the model `us.anthropic.claude-sonnet-4-5-20250929-v1:0` enabled in your Bedrock console.
+Transcripts stay in your own AWS account. Requires AWS credentials available in the environment (via `AWS_PROFILE`, `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, or an IAM role) and the model `us.anthropic.claude-sonnet-4-5-20250929-v1:0` enabled in your Bedrock console.
 
 ```env
 AI_PROVIDER=bedrock
@@ -133,6 +160,14 @@ AWS_REGION=us-east-1
 Also install the `boto3` extra:
 ```bash
 pip install -e "backend/[bedrock]"
+```
+
+To make sure Bedrock stores nothing, set your account's data retention mode to `none` in that region (needs `bedrock:PutAccountDataRetention`; see the [AWS data retention docs](https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html) for how to authenticate):
+```bash
+curl -X PUT https://bedrock.us-east-1.amazonaws.com/data-retention \
+  -H "Authorization: Bearer $AWS_BEARER_TOKEN_BEDROCK" \
+  -H "Content-Type: application/json" \
+  -d '{ "mode": "none" }'
 ```
 
 ---
@@ -194,7 +229,7 @@ On macOS the first recording triggers the system microphone prompt. If you decli
 2. **Upload**: add up to 4 camera or audio files, one per speaker. All files must start at the same moment. Darkroom works out whether it's a video or audio-only project from the files. Choose the transcript **language** (defaults to English) and **Whisper model** (defaults to `small` for English on a CPU, where it [benchmarked](docs/fast-transcription.md#phase-0-results-cpu) as accurate as `turbo` at about three times the speed, and to `turbo` for other languages, where `small` made 1.7 times the errors, or on an NVIDIA GPU, where both are fast).
    **Record** (audio only for now): pick up to 4 microphones and name each participant, then record in the studio: live scrolling waveforms and level meters per mic, and as many takes as you like. Each take is saved to disk as it records and transcribed as soon as you stop. Reorder or delete takes, then **Finish & edit**.
 3. **Transcribe**: Whisper runs locally on each file's audio track (for recordings, on each take as it finishes). Silence is skipped (voice activity detection), the model stays loaded between tracks, and it runs in int8 on CPU or float16 on an NVIDIA GPU. The first run downloads the selected model.
-4. **Analyse**: Claude receives the merged transcript and returns an EDL (edit decision list) as JSON with segments and 3–5 suggested Shorts clips.
+4. **Analyse**: Claude receives the merged transcript (sent to your configured provider; see [What leaves your machine](#what-leaves-your-machine)) and returns an EDL (edit decision list) as JSON with segments and 3–5 suggested Shorts clips.
 5. **Review**: video/audio previews, transcript panel, per-segment controls. Toggle cuts, change camera assignments, edit transcript text inline, mute individual words.
 6. **Shorts Builder**: pick any AI-suggested clip or define a custom range. Choose subtitle style, accent colour, opacity, and camera layout. Preview the clip before rendering.
 7. **Render**: choose export targets (16:9 full edit, 9:16 vertical, or a named Short) and FFmpeg renders them with audio normalised to –16 LUFS.
@@ -357,7 +392,7 @@ projects/
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AI_PROVIDER` | `anthropic` | `anthropic` to use the Anthropic API; `bedrock` to use AWS Bedrock |
+| `AI_PROVIDER` | `anthropic` | `anthropic` to use the Anthropic API (third party, see [What leaves your machine](#what-leaves-your-machine)); `bedrock` to use AWS Bedrock in your own account |
 | `ANTHROPIC_API_KEY` | — | **Required when `AI_PROVIDER=anthropic`.** Your Anthropic API key. |
 | `AWS_REGION` | `us-east-1` | AWS region for Bedrock calls (used when `AI_PROVIDER=bedrock`) |
 | `BEDROCK_MODEL_ID` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | Bedrock model ID override |

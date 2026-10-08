@@ -4,8 +4,11 @@ Local-first video and podcast editor: record or upload tracks → transcribe loc
 
 ## Principles (from ROADMAP.md, apply to every change)
 
-- **Local by default.** Everything must work with no cloud set up.
-- **Cloud is opt-in and self-hosted** in the user's own account (AWS or similar). Never add a shared Darkroom service or send user data to a third party. The only thing that leaves the machine today is transcript text in the Analyse step.
+The point of Darkroom is that **nothing leaves the user's control**.
+
+- **Local by default.** Everything must work with no cloud set up, including AI (local models; see `docs/private-ai.md`).
+- **Cloud is opt-in and self-hosted** in the user's own account (AWS or similar), and data stays inside that account. Never add a shared Darkroom service or send user data to a third party by default. The only thing that leaves the machine today is transcript text in the Analyse step: Bedrock keeps it in the user's AWS account; the direct Anthropic API is a third party and must be an explicit, labelled opt-in.
+- **Bedrock:** don't enable invocation logging; prefer data retention mode `none`; don't silently use models that require retention or human review (Claude Fable 5/5.1) or `global.` inference profiles.
 - Cloud resources are **session/job-scoped** and cleaned up automatically.
 - Say plainly in the UI when something will be sent off the machine.
 
@@ -42,7 +45,7 @@ Requires Python 3.11+ (pyproject), Node 18+, full FFmpeg. AI provider config liv
 - `desktop/` — Electron shell: `main.cjs` (spawns backend, permissions, CSP, single instance), `preload.cjs` (bridge)
 - `infra/` — optional AWS CDK (Python) stacks; `infra/bench/run-gpu-benchmark.sh` runs the transcription benchmark on a temporary EC2 GPU instance
 - `backend/bench/` — transcription benchmark (`README.md`: datasets, running locally/on AWS, sharing results); committed results without transcripts in `bench/results/`
-- `docs/` — design plans for roadmap items; `ROADMAP.md` — Done / Next / Ideas
+- `docs/` — design plans for roadmap items (`private-ai.md`: local AI and Bedrock data handling); `ROADMAP.md` — Done / Next / Ideas
 - `projects/` — user data, gitignored; never commit or delete it
 
 ## How things work
