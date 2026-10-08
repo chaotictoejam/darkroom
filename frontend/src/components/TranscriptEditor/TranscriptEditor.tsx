@@ -61,6 +61,20 @@ function getEdlSegment(word: FlatWord, segments: EDLSegment[]): EDLSegment | nul
   return segments.find((s) => word.start < s.end && word.end > s.start) ?? null
 }
 
+/** Pauses at least this long are shown between words. */
+const MIN_PAUSE = 0.5
+
+/**
+ * The EDL segment covering a pause, if it covers only silence (no words), so it
+ * can be cut or restored without touching speech.
+ */
+function silenceSegment(start: number, end: number, segments: EDLSegment[]): EDLSegment | null {
+  const mid = (start + end) / 2
+  const seg = segments.find((s) => mid >= s.start && mid < s.end)
+  if (!seg || seg.start < start - 0.05 || seg.end > end + 0.05) return null
+  return seg
+}
+
 function mergeAndSort(cuts: WordCut[]): WordCut[] {
   if (cuts.length === 0) return []
   const sorted = [...cuts].sort((a, b) => a.start - b.start)
@@ -81,6 +95,7 @@ function mergeAndSort(cuts: WordCut[]): WordCut[] {
 type RenderItem =
   | { kind: 'word'; w: FlatWord }
   | { kind: 'gap'; startTime: number; endTime: number; gapKey: string }
+  | { kind: 'pause'; startTime: number; endTime: number; edlSeg: EDLSegment | null; edlCut: boolean }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -103,6 +118,8 @@ interface Props {
   onMutesChange: (mutes: WordMute[]) => void
   /** Called when the user presses Space — should toggle video play/pause. */
   onTogglePlay?: () => void
+  /** Restore (keep) or cut EDL segments by id — used by pause chips. */
+  onSetEdlKept?: (ids: Set<string>, keep: boolean) => void
 }
 
 interface ToolbarState {
@@ -123,6 +140,7 @@ export default function TranscriptEditor({
   onCutsChange,
   onMutesChange,
   onTogglePlay,
+  onSetEdlKept,
 }: Props) {
   const words = useRef<FlatWord[]>(flattenWords(segments))
   const [selRange, setSelRange] = useState<{ anchor: number; focus: number } | null>(null)
@@ -357,6 +375,7 @@ export default function TranscriptEditor({
     cutRunLast  = null
   }
 
+  let prevWord: FlatWord | null = null
   for (const w of words.current) {
     // Find or create the segment group
     let group = grouped[grouped.length - 1]
@@ -368,6 +387,18 @@ export default function TranscriptEditor({
 
     const cut    = isCut(w, wordCuts)
     const edlCut = !cut && isEdlCut(w, edlSegments)
+
+    // Pause before this word: long silences, or any silence the EDL cut on its own
+    if (prevWord && w.start > prevWord.end) {
+      const pauseStart = prevWord.end
+      const edlSeg = silenceSegment(pauseStart, w.start, edlSegments)
+      const pauseCut = edlSegments.some((s) => !s.keep && pauseStart < s.end && w.start > s.start)
+      if ((w.start - pauseStart >= MIN_PAUSE || edlSeg) && !(cleanView && pauseCut)) {
+        if (cleanView) flushCutRun(group)
+        group.items.push({ kind: 'pause', startTime: pauseStart, endTime: w.start, edlSeg, edlCut: pauseCut })
+      }
+    }
+    prevWord = w
 
     if (cleanView) {
       if (cut) {
@@ -512,6 +543,51 @@ export default function TranscriptEditor({
                       }}
                     >
                       [{dur.toFixed(1)}s]
+                    </span>
+                  )
+                }
+
+                if (item.kind === 'pause') {
+                  const dur = item.endTime - item.startTime
+                  const active = currentTime >= item.startTime && currentTime < item.endTime
+                  const seg = item.edlSeg
+                  return (
+                    <span
+                      key={`pause-${item.startTime}`}
+                      onClick={() => onSeek(item.startTime)}
+                      title={item.edlCut
+                        ? `${dur.toFixed(2)}s pause · cut by the EDL${seg?.reason ? ` (${seg.reason})` : ''}`
+                        : `${dur.toFixed(2)}s pause`}
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 3,
+                        marginRight: 4, padding: '0 4px', borderRadius: 3,
+                        fontSize: 11, fontFamily: 'monospace', verticalAlign: 'middle',
+                        cursor: 'pointer',
+                        color: item.edlCut ? '#e05555' : 'var(--text-muted)',
+                        background: item.edlCut ? 'rgba(229,51,51,0.08)' : 'var(--bg-elevated)',
+                        border: `1px dashed ${item.edlCut ? 'rgba(229,51,51,0.35)' : 'var(--border)'}`,
+                        borderBottom: active ? '2px solid var(--accent)' : undefined,
+                        opacity: item.edlCut ? 0.7 : 1,
+                      }}
+                    >
+                      <span style={{ textDecoration: item.edlCut ? 'line-through' : 'none' }}>
+                        ⏸ {dur.toFixed(1)}s
+                      </span>
+                      {seg && onSetEdlKept && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onSetEdlKept(new Set([seg.id]), !seg.keep)
+                          }}
+                          title={seg.keep ? 'Cut this pause' : 'Restore this pause'}
+                          style={{
+                            background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                            fontSize: 11, color: seg.keep ? 'var(--text-muted)' : '#4db87a',
+                          }}
+                        >
+                          {seg.keep ? '✕' : '↺'}
+                        </button>
+                      )}
                     </span>
                   )
                 }

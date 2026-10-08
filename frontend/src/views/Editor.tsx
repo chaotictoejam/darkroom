@@ -271,6 +271,27 @@ export default function Editor({ project, onChange, onBack }: Props) {
     [project, onChange], // eslint-disable-line react-hooks/exhaustive-deps
   )
 
+  const edlSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  /** Restore (keep) or cut EDL segments by id. */
+  function setSegmentsKept(ids: Set<string>, keep: boolean) {
+    if (!project.edl) return
+    const edl = {
+      ...project.edl,
+      segments: project.edl.segments.map((s) => (ids.has(s.id) ? { ...s, keep } : s)),
+    }
+    onChange({ ...project, edl })
+    if (edlSaveTimer.current) clearTimeout(edlSaveTimer.current)
+    edlSaveTimer.current = setTimeout(() => {
+      api.updateEdl(project.id, edl)
+    }, 600)
+    if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current)
+    if (project.project_type !== 'podcast') {
+      setProxyGenerating(true)
+      previewDebounceRef.current = setTimeout(triggerPreview, 3000)
+    }
+  }
+
   const handleMutesChange = useCallback(
     (newMutes: WordMute[]) => {
       onChange({ ...project, word_mutes: newMutes })
@@ -349,7 +370,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
               open={openPanels.has('edl')}
               onToggle={() => togglePanel('edl')}
             >
-              <EdlPanel edl={project.edl!} onSeek={seekTo} />
+              <EdlPanel edl={project.edl!} onSeek={seekTo} onSetKept={setSegmentsKept} />
             </SidebarSection>
           )}
 
@@ -449,6 +470,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
                     onCutsChange={handleCutsChange}
                     onMutesChange={handleMutesChange}
                     onTogglePlay={togglePlayPause}
+                    onSetEdlKept={setSegmentsKept}
                   />
                 ) : (
                   <p style={{ color: 'var(--text-muted)' }}>No transcript yet.</p>
@@ -632,9 +654,14 @@ function SidebarSection({
 
 // ── EDL panel ─────────────────────────────────────────────────────────────────
 
-function EdlPanel({ edl, onSeek }: { edl: EDL; onSeek: (t: number) => void }) {
+function EdlPanel({ edl, onSeek, onSetKept }: {
+  edl: EDL
+  onSeek: (t: number) => void
+  onSetKept: (ids: Set<string>, keep: boolean) => void
+}) {
   const kept = edl.segments.filter((s) => s.keep).length
   const cut = edl.segments.length - kept
+  const cutIds = new Set(edl.segments.filter((s) => !s.keep).map((s) => s.id))
 
   return (
     <div>
@@ -646,6 +673,18 @@ function EdlPanel({ edl, onSeek }: { edl: EDL; onSeek: (t: number) => void }) {
       }}>
         <span style={{ color: '#4c8' }}>● {kept} kept</span>
         <span style={{ color: '#e55' }}>● {cut} cut</span>
+        {cut > 0 && (
+          <button
+            onClick={() => onSetKept(cutIds, true)}
+            title="Keep every segment the EDL cut"
+            style={{
+              marginLeft: 'auto', background: 'none', border: 'none', padding: 0,
+              color: 'var(--accent)', fontSize: 11, cursor: 'pointer',
+            }}
+          >
+            Restore all
+          </button>
+        )}
       </div>
 
       {edl.segments.map((seg) => (
@@ -686,6 +725,20 @@ function EdlPanel({ edl, onSeek }: { edl: EDL; onSeek: (t: number) => void }) {
                 CAM {seg.camera}
               </span>
             )}
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                onSetKept(new Set([seg.id]), !seg.keep)
+              }}
+              title={seg.keep ? 'Cut this segment' : 'Keep this segment'}
+              style={{
+                marginLeft: 'auto', flexShrink: 0,
+                background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 3,
+                color: 'var(--text-muted)', fontSize: 10, padding: '1px 6px', cursor: 'pointer',
+              }}
+            >
+              {seg.keep ? 'Cut' : 'Restore'}
+            </button>
           </div>
 
           {/* Reason */}

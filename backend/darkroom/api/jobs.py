@@ -295,11 +295,11 @@ def import_edl(project_id: str, body: ImportEdlBody):
 
 @router.put("/projects/{project_id}/edl")
 def update_edl(project_id: str, edl: dict):
-    proj = get_project(project_id)
-    if not proj:
+    try:
+        with editing_project(project_id) as proj:
+            proj["edl"] = edl
+    except LookupError:
         raise HTTPException(404, "Project not found")
-    proj["edl"] = edl
-    save_project(proj)
     return proj
 
 
