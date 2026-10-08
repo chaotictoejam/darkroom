@@ -97,6 +97,6 @@ Roadmap items have a plan in `docs/` with Goals, design, a phased **TODO** check
 
 ## Known gotchas
 
-- The video full edit (`fullEdit` target) renders EDL segments only and ignores `word_cuts`, unlike the preview proxy and the MP3/WAV export (`_apply_word_cuts` in `renderer.py`).
+- Manual `word_cuts`/`word_mutes` apply to the preview, full edit (EDL or split layout), vertical and MP3/WAV renders (`_apply_word_cuts`, `_mute_filter` in `renderer.py`), but not to shorts/clips.
 - `make desktop` needs a built frontend; `make desktop-dev` needs ports 8000 and 5173 free.
 - Upload currently reads whole files into memory (`await f.read()`); fine for audio, heavy for large video (planned fix in `docs/fast-transcription.md`).

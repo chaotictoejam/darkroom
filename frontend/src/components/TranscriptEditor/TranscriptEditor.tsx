@@ -92,12 +92,28 @@ function mergeAndSort(cuts: WordCut[]): WordCut[] {
   return merged
 }
 
+/** Remove [start, end] from the cuts, splitting any cut that spans it. */
+function subtractRange(cuts: WordCut[], start: number, end: number): WordCut[] {
+  const out: WordCut[] = []
+  for (const c of cuts) {
+    if (c.end <= start || c.start >= end) { out.push(c); continue }
+    if (c.start < start) out.push({ start: c.start, end: start })
+    if (c.end > end) out.push({ start: end, end: c.end })
+  }
+  return out
+}
+
+/** Whether a manual cut covers the whole of [start, end]. */
+function rangeCut(start: number, end: number, cuts: WordCut[]): boolean {
+  return cuts.some((c) => c.start <= start + 0.01 && c.end >= end - 0.01)
+}
+
 // ── Render item types ─────────────────────────────────────────────────────────
 
 type RenderItem =
   | { kind: 'word'; w: FlatWord }
   | { kind: 'gap'; startTime: number; endTime: number; gapKey: string }
-  | { kind: 'pause'; startTime: number; endTime: number; edlSeg: EDLSegment | null; edlCut: boolean }
+  | { kind: 'pause'; startTime: number; endTime: number; edlSeg: EDLSegment | null; edlCut: boolean; wordCut: boolean }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -221,8 +237,16 @@ export default function TranscriptEditor({
     if (selected.length === 0) return
     const rangeStart = selected[0].start
     const rangeEnd   = selected[selected.length - 1].end
-    onCutsChange(wordCuts.filter((c) => c.end <= rangeStart || c.start >= rangeEnd))
+    if (wordCuts.some((c) => c.end > rangeStart && c.start < rangeEnd)) {
+      onCutsChange(wordCuts.filter((c) => c.end <= rangeStart || c.start >= rangeEnd))
+    }
+    // Also bring back any EDL segments the AI cut under the selection
+    const edlIds = new Set(
+      edlSegments.filter((s) => !s.keep && selected.some((w) => w.start < s.end && w.end > s.start)).map((s) => s.id),
+    )
+    if (edlIds.size > 0) onSetEdlKept?.(edlIds, true)
     setToolbar(null)
+    setSelRange(null)
   }
 
   function muteToolbarSelection() {
@@ -462,10 +486,11 @@ export default function TranscriptEditor({
     if (prevWord && w.start > prevWord.end) {
       const pauseStart = prevWord.end
       const edlSeg = silenceSegment(pauseStart, w.start, edlSegments)
-      const pauseCut = edlSegments.some((s) => !s.keep && pauseStart < s.end && w.start > s.start)
-      if ((w.start - pauseStart >= MIN_PAUSE || edlSeg) && !(cleanView && pauseCut)) {
+      const pauseEdlCut = edlSegments.some((s) => !s.keep && pauseStart < s.end && w.start > s.start)
+      const pauseWordCut = rangeCut(pauseStart, w.start, wordCuts)
+      if ((w.start - pauseStart >= MIN_PAUSE || edlSeg) && !(cleanView && (pauseEdlCut || pauseWordCut))) {
         if (cleanView) flushCutRun(group)
-        group.items.push({ kind: 'pause', startTime: pauseStart, endTime: w.start, edlSeg, edlCut: pauseCut })
+        group.items.push({ kind: 'pause', startTime: pauseStart, endTime: w.start, edlSeg, edlCut: pauseEdlCut, wordCut: pauseWordCut })
       }
     }
     prevWord = w
@@ -490,8 +515,10 @@ export default function TranscriptEditor({
   const toolbarWords = toolbar
     ? words.current.filter((w) => w.globalIndex >= toolbar.selStart && w.globalIndex <= toolbar.selEnd)
     : []
-  const anyWordCut   = toolbarWords.some((w) => isCut(w, wordCuts))
-  const allWordCut   = toolbarWords.length > 0 && toolbarWords.every((w) => isCut(w, wordCuts))
+  // "Cut" here means removed either by a manual word cut or by the AI's EDL
+  const removed      = (w: FlatWord) => isCut(w, wordCuts) || (!!onSetEdlKept && isEdlCut(w, edlSegments))
+  const anyWordCut   = toolbarWords.some(removed)
+  const allWordCut   = toolbarWords.length > 0 && toolbarWords.every(removed)
   const anyWordMuted = toolbarWords.some((w) => isMuted(w, wordMutes))
   const anchorEdlSeg = toolbarWords.length > 0 ? getEdlSegment(toolbarWords[0], edlSegments) : null
   const canEdit = toolbar !== null && editableSelection(toolbar.selStart, toolbar.selEnd) !== null
@@ -633,41 +660,53 @@ export default function TranscriptEditor({
                   const dur = item.endTime - item.startTime
                   const active = currentTime >= item.startTime && currentTime < item.endTime
                   const seg = item.edlSeg
+                  const { startTime, endTime } = item
+                  const cut = item.edlCut || item.wordCut
+                  // A silence-only EDL segment toggles as a whole; any other pause toggles a manual
+                  // cut. A pause the EDL cut along with speech is restored by restoring that speech.
+                  const toggle =
+                    cut && item.edlCut && !seg ? null
+                    : cut ? () => {
+                        if (item.wordCut) onCutsChange(subtractRange(wordCuts, startTime, endTime))
+                        if (item.edlCut && seg) onSetEdlKept?.(new Set([seg.id]), true)
+                      }
+                    : seg && onSetEdlKept ? () => onSetEdlKept(new Set([seg.id]), false)
+                    : () => onCutsChange(mergeAndSort([...wordCuts, { start: startTime, end: endTime }]))
                   return (
                     <span
                       key={`pause-${item.startTime}`}
                       onClick={() => onSeek(item.startTime)}
                       title={item.edlCut
                         ? `${dur.toFixed(2)}s pause · cut by the EDL${seg?.reason ? ` (${seg.reason})` : ''}`
-                        : `${dur.toFixed(2)}s pause`}
+                        : item.wordCut ? `${dur.toFixed(2)}s pause · cut` : `${dur.toFixed(2)}s pause`}
                       style={{
                         display: 'inline-flex', alignItems: 'center', gap: 3,
                         marginRight: 4, padding: '0 4px', borderRadius: 3,
                         fontSize: 11, fontFamily: 'monospace', verticalAlign: 'middle',
                         cursor: 'pointer',
-                        color: item.edlCut ? '#e05555' : 'var(--text-muted)',
-                        background: item.edlCut ? 'rgba(229,51,51,0.08)' : 'var(--bg-elevated)',
-                        border: `1px dashed ${item.edlCut ? 'rgba(229,51,51,0.35)' : 'var(--border)'}`,
+                        color: cut ? '#e05555' : 'var(--text-muted)',
+                        background: cut ? 'rgba(229,51,51,0.08)' : 'var(--bg-elevated)',
+                        border: `1px dashed ${cut ? 'rgba(229,51,51,0.35)' : 'var(--border)'}`,
                         borderBottom: active ? '2px solid var(--accent)' : undefined,
-                        opacity: item.edlCut ? 0.7 : 1,
+                        opacity: cut ? 0.7 : 1,
                       }}
                     >
-                      <span style={{ textDecoration: item.edlCut ? 'line-through' : 'none' }}>
+                      <span style={{ textDecoration: cut ? 'line-through' : 'none' }}>
                         ⏸ {dur.toFixed(1)}s
                       </span>
-                      {seg && onSetEdlKept && (
+                      {toggle && (
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
-                            onSetEdlKept(new Set([seg.id]), !seg.keep)
+                            toggle()
                           }}
-                          title={seg.keep ? 'Cut this pause' : 'Restore this pause'}
+                          title={cut ? 'Restore this pause' : 'Cut this pause'}
                           style={{
                             background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                            fontSize: 11, color: seg.keep ? 'var(--text-muted)' : '#4db87a',
+                            fontSize: 11, color: cut ? '#4db87a' : 'var(--text-muted)',
                           }}
                         >
-                          {seg.keep ? '✕' : '↺'}
+                          {cut ? '↺' : '✕'}
                         </button>
                       )}
                     </span>

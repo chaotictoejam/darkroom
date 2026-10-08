@@ -201,6 +201,12 @@ def render_project(project: dict, targets: list[str], projects_dir: Path,
     else:
         speakers_dict = all_speakers
 
+    # Manual word cuts and mutes from the editor apply to every full-length target,
+    # so the render matches the preview.
+    word_cuts = project.get("word_cuts") or []
+    word_mutes = project.get("word_mutes") or []
+    kept = _apply_word_cuts([s for s in edl["segments"] if s.get("keep", True)], word_cuts)
+
     results = {}
 
     for target in targets:
@@ -209,7 +215,7 @@ def render_project(project: dict, targets: list[str], projects_dir: Path,
                 out = str(output_dir / "fullEdit.mp4")
                 if camera_layout == "split":
                     input_args, filter_complex = _build_splitscreen_filter_landscape(
-                        speakers_dict, edl["segments"]
+                        speakers_dict, kept, word_mutes
                     )
                     cmd = ["ffmpeg", "-y"] + input_args + [
                         "-filter_complex", filter_complex,
@@ -220,7 +226,7 @@ def render_project(project: dict, targets: list[str], projects_dir: Path,
                     ]
                     _run_ffmpeg(cmd)
                 else:
-                    _render_fulledit(edl["segments"], speakers_dict, out)
+                    _render_fulledit(kept, speakers_dict, out, word_mutes)
                 results["fullEdit"] = {
                     "status": "done",
                     "url": f"/projects/{project['id']}/files/output/fullEdit.mp4",
@@ -229,8 +235,7 @@ def render_project(project: dict, targets: list[str], projects_dir: Path,
 
             elif target in _AUDIO_CODECS:
                 filename = f"fullEdit.{target}"
-                _render_audio(edl["segments"], speakers_dict,
-                              project.get("word_cuts") or [], project.get("word_mutes") or [],
+                _render_audio(edl["segments"], speakers_dict, word_cuts, word_mutes,
                               str(output_dir / filename), target)
                 results[target] = {
                     "status": "done",
@@ -240,7 +245,7 @@ def render_project(project: dict, targets: list[str], projects_dir: Path,
 
             elif target == "vertical":
                 out = str(output_dir / "vertical.mp4")
-                _render_vertical(edl["segments"], speakers_dict, out)
+                _render_vertical(kept, speakers_dict, out, word_mutes)
                 results["vertical"] = {
                     "status": "done",
                     "url": f"/projects/{project['id']}/files/output/vertical.mp4",
@@ -273,13 +278,15 @@ def render_project(project: dict, targets: list[str], projects_dir: Path,
 # Render helpers
 # ---------------------------------------------------------------------------
 
-def _build_concat_filter(kept_segments: list[dict], speakers_dict: dict, vertical: bool = False):
+def _build_concat_filter(kept_segments: list[dict], speakers_dict: dict, vertical: bool = False,
+                         word_mutes: list[dict] | None = None):
     """
     Return (input_args, filter_complex, n_segments) for an ffmpeg concat.
 
     Video: switches per EDL segment camera assignment.
     Audio: ALL cameras' mics are mixed for every segment, so every speaker
-           is always audible regardless of which camera is shown.
+           is always audible regardless of which camera is shown. Word mutes
+           silence the mix over their ranges.
     """
     # ALL cameras in project — inputs and audio sources
     all_cams: list[str] = list(speakers_dict.keys())
@@ -344,9 +351,10 @@ def _build_concat_filter(kept_segments: list[dict], speakers_dict: dict, vertica
             f"setpts=PTS-STARTPTS,{crop_cache[cam]}[v{i}]"
         )
 
+        mute = _mute_filter(word_mutes, s, e)
         if n_all == 1:
             filter_parts.append(
-                f"[{base}:a]asetpts=PTS-STARTPTS[a{i}]"
+                f"[{base}:a]asetpts=PTS-STARTPTS{mute}[a{i}]"
             )
         else:
             for k in range(n_all):
@@ -355,7 +363,7 @@ def _build_concat_filter(kept_segments: list[dict], speakers_dict: dict, vertica
                 )
             amix_in = "".join(f"[am{i}_{k}]" for k in range(n_all))
             filter_parts.append(
-                f"{amix_in}amix=inputs={n_all}:normalize=0:dropout_transition=0[a{i}]"
+                f"{amix_in}amix=inputs={n_all}:normalize=0:dropout_transition=0{mute}[a{i}]"
             )
 
         stream_labels.extend([f"[v{i}]", f"[a{i}]"])
@@ -368,7 +376,8 @@ def _build_concat_filter(kept_segments: list[dict], speakers_dict: dict, vertica
     return input_args, filter_complex, n
 
 
-def _build_splitscreen_filter_landscape(speakers_dict: dict, segments: list[dict]):
+def _build_splitscreen_filter_landscape(speakers_dict: dict, segments: list[dict],
+                                        word_mutes: list[dict] | None = None):
     """
     Build a 16:9 split-screen filter showing all cameras side-by-side for the
     full duration of all kept segments (EDL cuts still applied to timing, but all
@@ -444,7 +453,8 @@ def _build_splitscreen_filter_landscape(speakers_dict: dict, segments: list[dict
                 f"[{base + ki}:a]asetpts=PTS-STARTPTS[sa{si}_{ki}]"
             )
         amix_in = "".join(f"[sa{si}_{ki}]" for ki in range(n_cams))
-        filter_parts.append(f"{amix_in}amix=inputs={n_cams}:normalize=0:dropout_transition=0[sa{si}]")
+        mute = _mute_filter(word_mutes, cs, ce)
+        filter_parts.append(f"{amix_in}amix=inputs={n_cams}:normalize=0:dropout_transition=0{mute}[sa{si}]")
 
         concat_v_labels.append(f"[sv{si}]")
         concat_a_labels.append(f"[sa{si}]")
@@ -565,12 +575,14 @@ def _run_ffmpeg(cmd: list[str]) -> None:
         raise subprocess.CalledProcessError(result.returncode, cmd, result.stderr)
 
 
-def _render_fulledit(segments: list[dict], speakers_dict: dict, output_path: str) -> None:
-    kept = [s for s in segments if s["keep"]]
+def _render_fulledit(segments: list[dict], speakers_dict: dict, output_path: str,
+                     word_mutes: list[dict] | None = None) -> None:
+    kept = [s for s in segments if s.get("keep", True)]
     if not kept:
         raise ValueError("No kept segments to render")
 
-    input_args, filter_complex, _ = _build_concat_filter(kept, speakers_dict, vertical=False)
+    input_args, filter_complex, _ = _build_concat_filter(kept, speakers_dict, vertical=False,
+                                                         word_mutes=word_mutes)
 
     cmd = ["ffmpeg", "-y"]
     cmd.extend(input_args)
@@ -590,12 +602,14 @@ def _render_fulledit(segments: list[dict], speakers_dict: dict, output_path: str
     _run_ffmpeg(cmd)
 
 
-def _render_vertical(segments: list[dict], speakers_dict: dict, output_path: str) -> None:
-    kept = [s for s in segments if s["keep"]]
+def _render_vertical(segments: list[dict], speakers_dict: dict, output_path: str,
+                     word_mutes: list[dict] | None = None) -> None:
+    kept = [s for s in segments if s.get("keep", True)]
     if not kept:
         raise ValueError("No kept segments to render")
 
-    input_args, filter_complex, _ = _build_concat_filter(kept, speakers_dict, vertical=True)
+    input_args, filter_complex, _ = _build_concat_filter(kept, speakers_dict, vertical=True,
+                                                         word_mutes=word_mutes)
 
     cmd = ["ffmpeg", "-y"]
     cmd.extend(input_args)
@@ -619,6 +633,18 @@ _AUDIO_CODECS = {
     "mp3": ["-c:a", "libmp3lame", "-b:a", "192k"],
     "wav": ["-c:a", "pcm_s16le"],
 }
+
+
+def _mute_filter(word_mutes: list[dict] | None, start: float, end: float) -> str:
+    """
+    A `,volume=0:enable=...` suffix silencing the word mutes inside [start, end],
+    shifted to be relative to the clip's start; empty if none overlap.
+    """
+    ranges = [
+        f"between(t,{max(m['start'], start) - start:.3f},{min(m['end'], end) - start:.3f})"
+        for m in word_mutes or [] if m["end"] > start and m["start"] < end
+    ]
+    return f",volume=0:enable='{'+'.join(ranges)}'" if ranges else ""
 
 
 def _render_audio(segments: list[dict], speakers_dict: dict, word_cuts: list[dict],
@@ -647,13 +673,7 @@ def _render_audio(segments: list[dict], speakers_dict: dict, word_cuts: list[dic
             filter_parts.append(f"[{base + k}:a]asetpts=PTS-STARTPTS[am{i}_{k}]")
         labels = "".join(f"[am{i}_{k}]" for k in range(n))
         mix = f"amix=inputs={n}:normalize=0:dropout_transition=0" if n > 1 else "anull"
-        # Mute ranges, shifted to be relative to this segment's start
-        mutes = [
-            f"between(t,{max(m['start'], s) - s:.3f},{min(m['end'], e) - s:.3f})"
-            for m in word_mutes if m["end"] > s and m["start"] < e
-        ]
-        if mutes:
-            mix += f",volume=0:enable='{'+'.join(mutes)}'"
+        mix += _mute_filter(word_mutes, s, e)
         filter_parts.append(f"{labels}{mix}[a{i}]")
 
     concat = "".join(f"[a{i}]" for i in range(len(kept))) + f"concat=n={len(kept)}:v=0:a=1[outa_raw]"
@@ -1129,7 +1149,7 @@ def _apply_word_cuts(segments: list[dict], word_cuts: list[dict]) -> list[dict]:
     """Slice kept segments around word-level cuts, dropping sub-2-frame slivers."""
     refined: list[dict] = []
     for seg in segments:
-        pieces = [{"start": seg["start"], "end": seg["end"], "camera": seg.get("camera")}]
+        pieces = [dict(seg)]
         for cut in word_cuts:
             new_pieces: list[dict] = []
             for p in pieces:
@@ -1137,11 +1157,9 @@ def _apply_word_cuts(segments: list[dict], word_cuts: list[dict]) -> list[dict]:
                     new_pieces.append(p)
                 else:
                     if cut["start"] > p["start"]:
-                        new_pieces.append({"start": p["start"], "end": cut["start"],
-                                           "camera": p["camera"]})
+                        new_pieces.append({**p, "end": cut["start"]})
                     if cut["end"] < p["end"]:
-                        new_pieces.append({"start": cut["end"], "end": p["end"],
-                                           "camera": p["camera"]})
+                        new_pieces.append({**p, "start": cut["end"]})
             pieces = new_pieces
         refined.extend(pieces)
     _MIN = 2 / 30.0
@@ -1152,7 +1170,7 @@ def render_preview(project: dict, projects_dir) -> dict:
     """
     Render a fast low-quality proxy preview that exactly mirrors the final render:
     - Applies EDL keep/cut decisions
-    - Applies word-level cuts
+    - Applies word-level cuts and mutes
     - 960px wide, CRF 42, ultrafast preset (typically 5–20 s for a 10 min clip)
 
     Returns a render result dict with status/url/filename.
@@ -1186,7 +1204,8 @@ def render_preview(project: dict, projects_dir) -> dict:
         raise ValueError("No segments remain after applying cuts")
 
     # ── Build filter complex (reuse existing helper) ──────────────────────────
-    input_args, filter_complex, _ = _build_concat_filter(kept, speakers_dict, vertical=False)
+    input_args, filter_complex, _ = _build_concat_filter(kept, speakers_dict, vertical=False,
+                                                         word_mutes=project.get("word_mutes") or [])
 
     # For preview: skip loudnorm (slow) and scale to 960p
     filter_complex = filter_complex.replace(
