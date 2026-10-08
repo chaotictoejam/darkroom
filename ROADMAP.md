@@ -107,13 +107,21 @@ Full plan, analysis and TODO list: **[docs/fast-transcription.md](docs/fast-tran
 
 Full plan, options comparison and TODO list: **[docs/remote-guests.md](docs/remote-guests.md)**
 
-### 8. Audiograms
+### 9. Audiograms
 
 **Why:** audio-only podcasts need a video for YouTube and social. Today that means a hand-written FFmpeg script with colours and positions hardcoded.
 
 **Involves:** an audiogram export with a visual layout editor: background or cover art, animated audio bars, text with per-episode variables, captions and a progress bar, each draggable and styleable. Reusable templates with layouts for 16:9, 1:1 and 9:16; full episode or clips; rendered locally from the edited mix with FFmpeg.
 
 Full plan, layout model and TODO list: **[docs/audiograms.md](docs/audiograms.md)**
+
+### 10. Timeline editing
+
+**Why:** the timeline can only drag-select and delete, and it shows the source recording rather than the edit. Descript lets you edit right on the timeline: drag a silence shorter, split at the playhead, select a piece and delete it, and set volume and Studio Sound on a selection.
+
+**Involves:** a timeline in edited time with a script lane (phrase and gap blocks) and a waveform lane per speaker; split, select and delete on the timeline; dragging gap edges to shorten (later lengthen, with room tone) silences, plus a bulk "Shorten pauses"; shared selection and undo/redo with the transcript; a Properties panel with track and range volume, Studio sound controls and a loudness target. Reordering clips comes later, designed together with unsynced media.
+
+Full plan and TODO list: **[docs/timeline-editing.md](docs/timeline-editing.md)**
 
 ---
 
