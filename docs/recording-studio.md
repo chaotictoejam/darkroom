@@ -305,7 +305,7 @@ One **Studio sound** switch per project (and per speaker track) that turns raw m
 - [ ] Denoise engines: DeepFilterNet as an optional extra and `arnndn` with a bundled RNNoise model; engine picker with Auto (DeepFilterNet if installed, else RNNoise); report which engine is in use
 - [ ] Background enhancement job with progress; re-run only for tracks whose settings changed
 - [ ] Render, preview proxy, MP3/WAV export and editor waveform use the enhanced track when on
-- [ ] Editor UI: Studio sound switch, strength slider, engine picker, per-track override, A/B playback
+- [ ] Editor UI: Studio sound switch, strength slider, engine picker, per-track override, A/B playback (in the editor's Properties panel from [timeline-editing.md](timeline-editing.md) Phase 3, if it has landed)
 - [ ] Studio: one-time prompt after the first take is finalised offering to turn Studio sound on
 - [ ] Compare transcript accuracy (original vs enhanced, both engines) on noisy samples to decide whether transcription should use enhanced audio
 - [ ] Keep a low room-tone floor between words instead of hard silence
