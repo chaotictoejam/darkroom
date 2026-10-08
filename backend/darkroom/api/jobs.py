@@ -3,10 +3,10 @@ Job endpoints — transcription, AI analysis, rendering.
 WebSocket /api/ws/{project_id} streams progress to the frontend.
 """
 import asyncio
-import os
 import re
 import shutil
 import threading
+import time
 import traceback
 from collections import defaultdict
 from typing import Any, Optional
@@ -14,7 +14,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
-from ..services.editor import build_prompt, generate_edl, generate_skip_edl, validate_edl
+from ..services.editor import ai_status, build_prompt, generate_edl, generate_skip_edl, validate_edl
 from ..services.renderer import (
     _detect_face_center_ratio,
     check_ffmpeg,
@@ -22,7 +22,13 @@ from ..services.renderer import (
     render_project,
     render_short_custom,
 )
-from ..services.transcription import merge_transcripts, transcribe_all
+from ..services.transcription import (
+    default_model,
+    merge_transcripts,
+    preload_model,
+    transcribe_all,
+    transcription_defaults,
+)
 from ..storage import PROJECTS_DIR, editing_project, get_project, save_project
 
 router = APIRouter()
@@ -95,11 +101,7 @@ def _update_progress(project_id: str, **kwargs) -> None:
 
 @router.get("/status")
 def api_status():
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
-    return {
-        "ffmpeg_available": check_ffmpeg(),
-        "anthropic_configured": bool(api_key and api_key not in ("", "your_anthropic_api_key_here")),
-    }
+    return {"ffmpeg_available": check_ffmpeg(), "ai": ai_status()}
 
 
 # ── Render locks (one FFmpeg process per project) ─────────────────────────────
@@ -116,6 +118,27 @@ def _get_render_lock(project_id: str) -> threading.Lock:
 
 
 # ── Transcription ─────────────────────────────────────────────────────────────
+
+class PreloadBody(BaseModel):
+    model: Optional[str] = None  # None: the default for this machine and language
+    language: Optional[str] = "en"  # None: auto-detect
+    # False: load only if already downloaded (e.g. while browsing the model picker)
+    download: bool = False
+
+
+@router.get("/transcription/defaults")
+def get_transcription_defaults(language: str = "en"):
+    """Device (cpu/cuda) and the recommended model for this machine and language
+    (an empty language means auto-detect)."""
+    return transcription_defaults(language or None)
+
+
+@router.post("/transcription/preload")
+def preload_transcription_model(body: PreloadBody):
+    """Load a Whisper model in the background so transcription starts at once."""
+    preload_model(body.model or default_model(body.language), download=body.download)
+    return {"ok": True}
+
 
 @router.post("/projects/{project_id}/transcribe")
 def start_transcription(project_id: str):
@@ -134,8 +157,8 @@ def start_transcription(project_id: str):
                 progress={"step": "transcribing", "percent": 5, "message": "Loading Whisper model…"},
             )
             p = get_project(project_id)
-            model_name = p.get("transcribe_model") or "medium"
             language = p.get("transcribe_language") or None
+            model_name = p.get("transcribe_model") or default_model(language)
             total = len(p["speakers"])
 
             def _progress(overall_frac: float, name: str, i: int, total: int) -> None:
@@ -188,7 +211,24 @@ def analyze_project(project_id: str):
                 progress={"step": "analyzing", "percent": 10, "message": "Sending transcript to Claude…"},
             )
             p = get_project(project_id)
-            edl = generate_edl(p["merged_transcript"], p["speakers"])
+            last_report = 0.0
+
+            def _on_progress(segments: int) -> None:
+                nonlocal last_report
+                # Each update saves the project, so report at most every couple of seconds
+                if time.monotonic() - last_report < 2:
+                    return
+                last_report = time.monotonic()
+                _update_progress(
+                    project_id,
+                    progress={
+                        "step": "analyzing",
+                        "percent": 30,
+                        "message": f"Claude is writing the edit… {segments} segments so far",
+                    },
+                )
+
+            edl = generate_edl(p["merged_transcript"], p["speakers"], on_progress=_on_progress)
             _update_progress(
                 project_id,
                 edl=edl,
@@ -255,11 +295,11 @@ def import_edl(project_id: str, body: ImportEdlBody):
 
 @router.put("/projects/{project_id}/edl")
 def update_edl(project_id: str, edl: dict):
-    proj = get_project(project_id)
-    if not proj:
+    try:
+        with editing_project(project_id) as proj:
+            proj["edl"] = edl
+    except LookupError:
         raise HTTPException(404, "Project not found")
-    proj["edl"] = edl
-    save_project(proj)
     return proj
 
 

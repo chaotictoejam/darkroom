@@ -13,7 +13,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, subscribeToProgress } from '../api/client'
-import type { EDL, EDLSegment, Project, WordCut, WordMute } from '../api/types'
+import type { AiStatus, EDL, EDLSegment, Project, WordCut, WordMute } from '../api/types'
 import VideoPreview, { type VideoPreviewHandle } from '../components/VideoPreview/VideoPreview'
 import TranscriptEditor from '../components/TranscriptEditor/TranscriptEditor'
 
@@ -101,7 +101,10 @@ type PreviewLayout = 'multi' | 'solo'
 
 export default function Editor({ project, onChange, onBack }: Props) {
   const [analyzing, setAnalyzing] = useState(false)
-  const [anthropicConfigured, setAnthropicConfigured] = useState<boolean | null>(null)
+  const [analyzeMessage, setAnalyzeMessage] = useState<string | null>(null)
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null)
+  const analyzeUnsubRef = useRef<(() => void) | null>(null)
+  const [ai, setAi] = useState<AiStatus | null>(null)
   const [openPanels, setOpenPanels] = useState<Set<SidePanel>>(
     () => new Set(project.edl ? (['edl'] as SidePanel[]) : []),
   )
@@ -134,22 +137,61 @@ export default function Editor({ project, onChange, onBack }: Props) {
 
   useEffect(() => {
     api.status().then((s) => {
-      setAnthropicConfigured(s.anthropic_configured)
-      // Auto-open manual analysis panel when no API key
-      if (!s.anthropic_configured && !project.edl) {
+      setAi(s.ai)
+      // Auto-open manual analysis panel when no AI provider is set up
+      if (!s.ai.configured && !project.edl) {
         setOpenPanels((prev) => new Set([...prev, 'manual']))
       }
     })
     // Cleanup on unmount
     return () => {
       previewUnsubRef.current?.()
+      analyzeUnsubRef.current?.()
       if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current)
     }
   }, [])
 
   async function handleAnalyze() {
     setAnalyzing(true)
-    await api.analyze(project.id)
+    setAnalyzeMessage(null)
+    setAnalyzeError(null)
+
+    function finish() {
+      analyzeUnsubRef.current?.()
+      analyzeUnsubRef.current = null
+      setAnalyzing(false)
+      setAnalyzeMessage(null)
+      api.getProject(project.id).then((proj) => {
+        onChange(proj)
+        if (proj.status === 'error') {
+          // The message is a traceback; its last line says what went wrong
+          setAnalyzeError(proj.progress.message.trim().split('\n').pop() ?? 'Analysis failed')
+        } else if (proj.edl) {
+          setOpenPanels((prev) => new Set([...prev, 'edl']))
+        }
+      })
+    }
+
+    // Subscribe before starting the job so the result can't be missed
+    analyzeUnsubRef.current?.()
+    analyzeUnsubRef.current = subscribeToProgress(
+      project.id,
+      (evt) => {
+        if (evt.type) return
+        if (evt.progress?.message) setAnalyzeMessage(evt.progress.message)
+        if (evt.status === 'ready' || evt.status === 'error') finish()
+      },
+      finish,
+    )
+    try {
+      await api.analyze(project.id)
+    } catch (err) {
+      analyzeUnsubRef.current?.()
+      analyzeUnsubRef.current = null
+      setAnalyzing(false)
+      setAnalyzeError(err instanceof Error ? err.message : 'Analysis failed to start')
+      return
+    }
     onChange({ ...project, status: 'analyzing' })
   }
 
@@ -229,6 +271,27 @@ export default function Editor({ project, onChange, onBack }: Props) {
     [project, onChange], // eslint-disable-line react-hooks/exhaustive-deps
   )
 
+  const edlSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  /** Restore (keep) or cut EDL segments by id. */
+  function setSegmentsKept(ids: Set<string>, keep: boolean) {
+    if (!project.edl) return
+    const edl = {
+      ...project.edl,
+      segments: project.edl.segments.map((s) => (ids.has(s.id) ? { ...s, keep } : s)),
+    }
+    onChange({ ...project, edl })
+    if (edlSaveTimer.current) clearTimeout(edlSaveTimer.current)
+    edlSaveTimer.current = setTimeout(() => {
+      api.updateEdl(project.id, edl)
+    }, 600)
+    if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current)
+    if (project.project_type !== 'podcast') {
+      setProxyGenerating(true)
+      previewDebounceRef.current = setTimeout(triggerPreview, 3000)
+    }
+  }
+
   const handleMutesChange = useCallback(
     (newMutes: WordMute[]) => {
       onChange({ ...project, word_mutes: newMutes })
@@ -259,7 +322,17 @@ export default function Editor({ project, onChange, onBack }: Props) {
         <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>· {project.status}</span>
 
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-          {!hasEdl && anthropicConfigured === true && (
+          {analyzeError && (
+            <span style={{ color: '#f55', fontSize: 12, maxWidth: 480 }} title={analyzeError}>
+              {analyzeError}
+            </span>
+          )}
+          {!hasEdl && ai?.configured && (
+            <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+              {analyzing && analyzeMessage ? analyzeMessage : `Sends the transcript to ${ai.destination}`}
+            </span>
+          )}
+          {!hasEdl && ai?.configured && (
             <button
               onClick={handleAnalyze}
               disabled={analyzing}
@@ -272,9 +345,9 @@ export default function Editor({ project, onChange, onBack }: Props) {
               {analyzing ? 'Analyzing…' : 'Analyze with AI →'}
             </button>
           )}
-          {!hasEdl && anthropicConfigured === false && (
+          {!hasEdl && ai?.configured === false && (
             <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>
-              No API key — use Manual Analysis in the sidebar
+              {ai.provider === 'bedrock' ? 'No AWS credentials found' : 'No API key'} — use Manual Analysis in the sidebar
             </span>
           )}
         </div>
@@ -297,7 +370,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
               open={openPanels.has('edl')}
               onToggle={() => togglePanel('edl')}
             >
-              <EdlPanel edl={project.edl!} onSeek={seekTo} />
+              <EdlPanel edl={project.edl!} onSeek={seekTo} onSetKept={setSegmentsKept} />
             </SidebarSection>
           )}
 
@@ -320,7 +393,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
               <ManualAnalysis
                 project={project}
                 onChange={onChange}
-                highlight={anthropicConfigured === false}
+                highlight={ai?.configured === false}
               />
             </SidebarSection>
           )}
@@ -397,6 +470,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
                     onCutsChange={handleCutsChange}
                     onMutesChange={handleMutesChange}
                     onTogglePlay={togglePlayPause}
+                    onSetEdlKept={setSegmentsKept}
                   />
                 ) : (
                   <p style={{ color: 'var(--text-muted)' }}>No transcript yet.</p>
@@ -580,9 +654,14 @@ function SidebarSection({
 
 // ── EDL panel ─────────────────────────────────────────────────────────────────
 
-function EdlPanel({ edl, onSeek }: { edl: EDL; onSeek: (t: number) => void }) {
+function EdlPanel({ edl, onSeek, onSetKept }: {
+  edl: EDL
+  onSeek: (t: number) => void
+  onSetKept: (ids: Set<string>, keep: boolean) => void
+}) {
   const kept = edl.segments.filter((s) => s.keep).length
   const cut = edl.segments.length - kept
+  const cutIds = new Set(edl.segments.filter((s) => !s.keep).map((s) => s.id))
 
   return (
     <div>
@@ -594,6 +673,18 @@ function EdlPanel({ edl, onSeek }: { edl: EDL; onSeek: (t: number) => void }) {
       }}>
         <span style={{ color: '#4c8' }}>● {kept} kept</span>
         <span style={{ color: '#e55' }}>● {cut} cut</span>
+        {cut > 0 && (
+          <button
+            onClick={() => onSetKept(cutIds, true)}
+            title="Keep every segment the EDL cut"
+            style={{
+              marginLeft: 'auto', background: 'none', border: 'none', padding: 0,
+              color: 'var(--accent)', fontSize: 11, cursor: 'pointer',
+            }}
+          >
+            Restore all
+          </button>
+        )}
       </div>
 
       {edl.segments.map((seg) => (
@@ -634,6 +725,20 @@ function EdlPanel({ edl, onSeek }: { edl: EDL; onSeek: (t: number) => void }) {
                 CAM {seg.camera}
               </span>
             )}
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                onSetKept(new Set([seg.id]), !seg.keep)
+              }}
+              title={seg.keep ? 'Cut this segment' : 'Keep this segment'}
+              style={{
+                marginLeft: 'auto', flexShrink: 0,
+                background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 3,
+                color: 'var(--text-muted)', fontSize: 10, padding: '1px 6px', cursor: 'pointer',
+              }}
+            >
+              {seg.keep ? 'Cut' : 'Restore'}
+            </button>
           </div>
 
           {/* Reason */}

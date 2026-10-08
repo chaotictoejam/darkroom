@@ -3,10 +3,10 @@
  * transcription. Files must already be synced (all start at the same moment).
  * Whether the project is video or audio-only is worked out from the files.
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api/client'
 import type { Project } from '../api/types'
-import { LANGUAGES, WHISPER_MODELS } from '../transcriptionOptions'
+import { LANGUAGES, useWhisperModel, whisperModelOptions } from '../transcriptionOptions'
 
 interface SpeakerSlot {
   name: string
@@ -22,10 +22,13 @@ interface Props {
 export default function Setup({ project, onBack, onProcessing }: Props) {
   const [name, setName] = useState(project.name)
   const [speakers, setSpeakers] = useState<SpeakerSlot[]>([{ name: '', file: null }])
-  const [model, setModel] = useState('medium')
   const [language, setLanguage] = useState('en')
+  const { model, setModel, recommended } = useWhisperModel(language)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Warm up the chosen model while files are picked (only if already downloaded).
+  useEffect(() => { if (model) void api.preloadModel(model).catch(() => {}) }, [model])
 
   function addSpeaker() {
     if (speakers.length < 4) setSpeakers((prev) => [...prev, { name: '', file: null }])
@@ -129,7 +132,7 @@ export default function Setup({ project, onBack, onProcessing }: Props) {
           <label style={{ flex: 1 }}>
             <span style={{ color: 'var(--text-muted)', fontSize: 12, display: 'block', marginBottom: 4 }}>Whisper model</span>
             <select value={model} onChange={(e) => setModel(e.target.value)} style={{ width: '100%' }}>
-              {WHISPER_MODELS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+              {whisperModelOptions(recommended).map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
             </select>
           </label>
         </div>

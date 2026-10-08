@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, subscribeToProgress } from '../api/client'
 import type { Project, Take } from '../api/types'
 import { desktop } from '../desktop'
+import { useWhisperModel } from '../transcriptionOptions'
 import { ChunkUploader } from '../components/Studio/chunkUploader'
 import { formatElapsed } from '../components/Studio/format'
 import { MicEngine } from '../components/Studio/micEngine'
@@ -59,7 +60,7 @@ export default function Studio({ project, onBack, onFinished }: Props) {
   const [sources, setSources] = useState<MicChoice[]>(() => initialSources(project))
   const [openKeys, setOpenKeys] = useState<string[]>([])
   const [language, setLanguage] = useState(project.transcribe_language ?? 'en')
-  const [model, setModel] = useState(project.transcribe_model ?? 'medium')
+  const { model, setModel, recommended } = useWhisperModel(language, project.transcribe_model)
   const [takes, setTakes] = useState<Take[]>(project.takes ?? [])
   const [recState, setRecState] = useState<RecState>('idle')
   const [elapsed, setElapsed] = useState(0)
@@ -172,6 +173,8 @@ export default function Studio({ project, onBack, onFinished }: Props) {
   async function enterStudio() {
     try {
       await api.patchProject(project.id, { transcribe_model: model, transcribe_language: language || null })
+      // Load (downloading if needed) now, so the first take transcribes as soon as it stops.
+      void api.preloadModel(model, true).catch(() => {})
       setStage('studio')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -339,6 +342,7 @@ export default function Studio({ project, onBack, onFinished }: Props) {
             usedIds={takes.flatMap((t) => t.participants)}
             language={language}
             model={model}
+            recommendedModel={recommended}
             onLanguageChange={setLanguage}
             onModelChange={setModel}
             permission={permission}

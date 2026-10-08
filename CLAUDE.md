@@ -4,8 +4,11 @@ Local-first video and podcast editor: record or upload tracks → transcribe loc
 
 ## Principles (from ROADMAP.md, apply to every change)
 
-- **Local by default.** Everything must work with no cloud set up.
-- **Cloud is opt-in and self-hosted** in the user's own account (AWS or similar). Never add a shared Darkroom service or send user data to a third party. The only thing that leaves the machine today is transcript text in the Analyse step.
+The point of Darkroom is that **nothing leaves the user's control**.
+
+- **Local by default.** Everything must work with no cloud set up, including AI (local models; see `docs/private-ai.md`).
+- **Cloud is opt-in and self-hosted** in the user's own account (AWS or similar), and data stays inside that account. Never add a shared Darkroom service or send user data to a third party by default. The only thing that leaves the machine today is transcript text in the Analyse step: Bedrock keeps it in the user's AWS account; the direct Anthropic API is a third party and must be an explicit, labelled opt-in.
+- **Bedrock:** don't enable invocation logging; prefer data retention mode `none`; don't silently use models that require retention or human review (Claude Fable 5/5.1) or `global.` inference profiles.
 - Cloud resources are **session/job-scoped** and cleaned up automatically.
 - Say plainly in the UI when something will be sent off the machine.
 
@@ -21,6 +24,7 @@ make desktop           # build, then Electron starts its own backend on a free p
 make desktop-dev       # backend + Vite + Electron with hot reload
 
 cd backend && ../.venv/bin/python -m pytest -q tests   # backend tests (need ffmpeg on PATH)
+cd backend && ../.venv/bin/python bench/transcription.py --help   # transcription benchmark (pip install -e ".[bench]")
 ```
 
 Requires Python 3.11+ (pyproject), Node 18+, full FFmpeg. AI provider config lives in `.env` (see `.env.example`).
@@ -31,7 +35,7 @@ Requires Python 3.11+ (pyproject), Node 18+, full FFmpeg. AI provider config liv
   - `main.py` app + SPA serving; `run()` honours `DARKROOM_PORT`; `__main__.py` lets the desktop app run `python -m darkroom`
   - `storage.py` project JSON persistence + `editing_project()` lock
   - `api/projects.py` CRUD + PATCH · `api/media.py` upload, word cuts/mutes, transcript edits, waveform · `api/jobs.py` transcribe/analyse/render/preview jobs + WebSocket progress · `api/takes.py` recording studio takes, per-take transcription worker, crash recovery
-  - `services/transcription.py` faster-whisper + transcript merge · `services/editor.py` Claude EDL generation (Anthropic API or Bedrock) · `services/renderer.py` FFmpeg rendering (video, and MP3/WAV for audio-only), face-centred crops · `services/takes.py` chunk append, finalise to WAV, join takes, transcript offsets
+  - `services/transcription.py` faster-whisper (cached model, VAD + batched pipeline, int8 CPU / float16 CUDA, default model by device and language: `small` for English on CPU, else `turbo`) + transcript merge · `services/editor.py` Claude EDL generation (Anthropic API or Bedrock) · `services/renderer.py` FFmpeg rendering (video, and MP3/WAV for audio-only), face-centred crops · `services/takes.py` chunk append, finalise to WAV, join takes, transcript offsets
 - `frontend/src/` — React + TypeScript + Vite
   - `App.tsx` routes between views by `project.source` and `project.status` (no router library)
   - `views/` Welcome (New Project: Upload or Record), Setup (upload), Studio (recording), Processing, Editor · `components/` TranscriptEditor, VideoPreview, `Studio/` (mic engine, AudioWorklet, chunk uploader, waveform lanes, meters, takes strip)
@@ -39,8 +43,9 @@ Requires Python 3.11+ (pyproject), Node 18+, full FFmpeg. AI provider config liv
   - `api/client.ts` typed API client + `subscribeToProgress` WebSocket · `api/types.ts` shared types
   - `desktop.ts` typed `window.darkroom` bridge (undefined in a plain browser)
 - `desktop/` — Electron shell: `main.cjs` (spawns backend, permissions, CSP, single instance), `preload.cjs` (bridge)
-- `infra/` — optional AWS CDK (Python) stacks
-- `docs/` — design plans for roadmap items; `ROADMAP.md` — Done / Next / Ideas
+- `infra/` — optional AWS CDK (Python) stacks; `infra/bench/run-gpu-benchmark.sh` runs the transcription benchmark on a temporary EC2 GPU instance
+- `backend/bench/` — transcription benchmark (`README.md`: datasets, running locally/on AWS, sharing results); committed results without transcripts in `bench/results/`
+- `docs/` — design plans for roadmap items (`private-ai.md`: local AI and Bedrock data handling); `ROADMAP.md` — Done / Next / Ideas
 - `projects/` — user data, gitignored; never commit or delete it
 
 ## How things work

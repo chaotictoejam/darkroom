@@ -3,7 +3,7 @@
  * All requests go to the same origin — Vite proxies /api/* in dev,
  * FastAPI serves everything from the same port in production.
  */
-import type { EDL, Participant, Project, ProjectSource, ProjectSummary, RenderShortParams, Take } from './types'
+import type { AiStatus, EDL, Participant, Project, ProjectSource, ProjectSummary, RenderShortParams, Take } from './types'
 
 class ApiError extends Error {
   constructor(
@@ -33,7 +33,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 // ── Projects ──────────────────────────────────────────────────────────────────
 
 export const api = {
-  status: () => request<{ ffmpeg_available: boolean; anthropic_configured: boolean }>('/api/status'),
+  status: () => request<{ ffmpeg_available: boolean; ai: AiStatus }>('/api/status'),
 
   listProjects: () => request<ProjectSummary[]>('/api/projects'),
 
@@ -82,6 +82,15 @@ export const api = {
     request<Project>(`/api/projects/${id}/reset`, { method: 'POST' }),
 
   // ── Jobs ────────────────────────────────────────────────────────────────────
+
+  /** The device transcription runs on, and the recommended model for it and `language` ('' = auto-detect). */
+  transcriptionDefaults: (language: string) =>
+    request<{ device: 'cpu' | 'cuda'; compute_type: string; default_model: string }>(
+      `/api/transcription/defaults?language=${encodeURIComponent(language)}`),
+
+  /** Load a Whisper model in the background. download=false skips models not yet on disk. */
+  preloadModel: (model: string, download = false) =>
+    request<{ ok: boolean }>('/api/transcription/preload', { method: 'POST', body: JSON.stringify({ model, download }) }),
 
   transcribe: (id: string) =>
     request<{ message: string }>(`/api/projects/${id}/transcribe`, { method: 'POST' }),
