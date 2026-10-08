@@ -9,6 +9,8 @@
  *   Delete / Backspace    → cuts the selected words' time range
  *   Space                 → toggles video play/pause
  *   Ctrl+Z / Cmd+Z        → undoes the last cut
+ *   Enter / toolbar Edit  → fixes the selected words' text inline (one segment;
+ *                           Enter saves, Esc cancels; timings are kept)
  *
  * Visual states:
  *   Normal                → plain text
@@ -18,7 +20,7 @@
  *   Active (playing)      → accent underline
  *   Gap chip              → [x.xs] inline badge shown in clean view where cuts were made
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { EDLSegment, TranscriptSegment, WordCut, WordMute } from '../../api/types'
 
 // ── Flat word model ───────────────────────────────────────────────────────────
@@ -120,6 +122,18 @@ interface Props {
   onTogglePlay?: () => void
   /** Restore (keep) or cut EDL segments by id — used by pause chips. */
   onSetEdlKept?: (ids: Set<string>, keep: boolean) => void
+  /** Replace a segment's words `first`..`last` with corrected text. Rejects on failure. */
+  onEditWords?: (segIndex: number, first: number, last: number, text: string) => Promise<void>
+}
+
+interface EditState {
+  segIndex: number
+  /** Global word indices of the words being replaced. */
+  globalStart: number
+  globalEnd: number
+  text: string
+  saving: boolean
+  error: string | null
 }
 
 interface ToolbarState {
@@ -141,6 +155,7 @@ export default function TranscriptEditor({
   onMutesChange,
   onTogglePlay,
   onSetEdlKept,
+  onEditWords,
 }: Props) {
   const words = useRef<FlatWord[]>(flattenWords(segments))
   const [selRange, setSelRange] = useState<{ anchor: number; focus: number } | null>(null)
@@ -148,10 +163,13 @@ export default function TranscriptEditor({
   const isDragging = useRef(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const lastClickRef = useRef<{ idx: number; time: number }>({ idx: -1, time: 0 })
+  const [editing, setEditing] = useState<EditState | null>(null)
+  // Set once an edit is saved or cancelled, so the blur that follows doesn't save it again.
+  const editClosed = useRef(false)
 
-  useEffect(() => {
-    words.current = flattenWords(segments)
-  }, [segments])
+  // Rebuilt during render (not in an effect) so a corrected segment shows at once.
+  const flatWords = useMemo(() => flattenWords(segments), [segments])
+  words.current = flatWords
 
   // ── Active word ───────────────────────────────────────────────────────────
   const activeIndex = words.current.findIndex(
@@ -232,6 +250,53 @@ export default function TranscriptEditor({
     setToolbar(null)
   }
 
+  // ── Inline text correction ─────────────────────────────────────────────────
+  /** The selected words, if they can be edited (all in one segment). */
+  function editableSelection(start: number, end: number): FlatWord[] | null {
+    if (!onEditWords || start < 0) return null
+    const sel = words.current.filter((w) => w.globalIndex >= start && w.globalIndex <= end)
+    if (sel.length === 0 || sel.some((w) => w.segIndex !== sel[0].segIndex)) return null
+    return sel
+  }
+
+  function startEditing(start: number, end: number) {
+    const sel = editableSelection(start, end)
+    if (!sel) return
+    setEditing({
+      segIndex: sel[0].segIndex,
+      globalStart: sel[0].globalIndex,
+      globalEnd: sel[sel.length - 1].globalIndex,
+      text: sel.map((w) => w.word.trim()).join(' '),
+      saving: false,
+      error: null,
+    })
+    editClosed.current = false
+    setToolbar(null)
+    setSelRange(null)
+  }
+
+  async function saveEditing() {
+    if (!editing || editClosed.current || !onEditWords) return
+    editClosed.current = true
+    const sel = words.current.filter(
+      (w) => w.globalIndex >= editing.globalStart && w.globalIndex <= editing.globalEnd,
+    )
+    const original = sel.map((w) => w.word.trim()).join(' ')
+    const text = editing.text.trim().replace(/\s+/g, ' ')
+    if (text === original || sel.length === 0) {
+      setEditing(null)
+      return
+    }
+    setEditing({ ...editing, saving: true, error: null })
+    try {
+      await onEditWords(editing.segIndex, sel[0].wordIndex, sel[sel.length - 1].wordIndex, text)
+      setEditing(null)
+    } catch (err) {
+      editClosed.current = false
+      setEditing({ ...editing, saving: false, error: err instanceof Error ? err.message : 'Could not save' })
+    }
+  }
+
   // ── Keyboard shortcuts ─────────────────────────────────────────────────────
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -253,6 +318,11 @@ export default function TranscriptEditor({
         onCutsChange(wordCuts.slice(0, -1))
         return
       }
+      if (e.key === 'Enter' && selRange !== null && editableSelection(selStart, selEnd)) {
+        e.preventDefault()
+        startEditing(selStart, selEnd)
+        return
+      }
       if (e.key === ' ') {
         e.preventDefault()
         onTogglePlay?.()
@@ -265,7 +335,7 @@ export default function TranscriptEditor({
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [selRange, wordCuts, onCutsChange, onTogglePlay])
+  }, [selRange, wordCuts, onCutsChange, onTogglePlay, onEditWords])
 
   // ── Close toolbar / selection on outside click ─────────────────────────────
   useEffect(() => {
@@ -424,6 +494,7 @@ export default function TranscriptEditor({
   const allWordCut   = toolbarWords.length > 0 && toolbarWords.every((w) => isCut(w, wordCuts))
   const anyWordMuted = toolbarWords.some((w) => isMuted(w, wordMutes))
   const anchorEdlSeg = toolbarWords.length > 0 ? getEdlSegment(toolbarWords[0], edlSegments) : null
+  const canEdit = toolbar !== null && editableSelection(toolbar.selStart, toolbar.selEnd) !== null
 
   return (
     <>
@@ -489,6 +560,17 @@ export default function TranscriptEditor({
             ? <ToolbarBtn label="🔊 Unmute" onClick={unmuteToolbarSelection} />
             : <ToolbarBtn label="🔇 Mute" onClick={muteToolbarSelection} />
           }
+
+          {canEdit && (
+            <>
+              <div style={{ width: 1, background: '#3a3a3a', alignSelf: 'stretch', margin: '3px 2px' }} />
+              <ToolbarBtn
+                label="✎ Edit text"
+                title="Fix the transcription (Enter). The audio is not changed."
+                onClick={() => toolbar && startEditing(toolbar.selStart, toolbar.selEnd)}
+              />
+            </>
+          )}
         </div>
       )}
 
@@ -593,6 +675,36 @@ export default function TranscriptEditor({
                 }
 
                 const { w } = item
+                if (editing && w.globalIndex >= editing.globalStart && w.globalIndex <= editing.globalEnd) {
+                  if (w.globalIndex !== editing.globalStart) return null
+                  return (
+                    <input
+                      key={`edit-${w.globalIndex}`}
+                      autoFocus
+                      value={editing.text}
+                      disabled={editing.saving}
+                      size={Math.max(editing.text.length + 1, 4)}
+                      title={editing.error ?? 'Enter to save · Esc to cancel · leave empty to remove the words from the transcript'}
+                      onChange={(e) => setEditing({ ...editing, text: e.target.value, error: null })}
+                      onFocus={(e) => e.currentTarget.select()}
+                      onBlur={saveEditing}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => {
+                        e.stopPropagation()
+                        if (e.key === 'Enter') { e.preventDefault(); saveEditing() }
+                        if (e.key === 'Escape') { e.preventDefault(); editClosed.current = true; setEditing(null) }
+                      }}
+                      style={{
+                        font: 'inherit', color: 'var(--text)',
+                        background: 'var(--bg-elevated)',
+                        border: `1px solid ${editing.error ? '#e05555' : 'var(--accent)'}`,
+                        borderRadius: 3, padding: '0 4px', marginRight: 3,
+                        outline: 'none', userSelect: 'text', WebkitUserSelect: 'text',
+                        maxWidth: '100%',
+                      }}
+                    />
+                  )
+                }
                 const cut      = isCut(w, wordCuts)
                 const edlCut   = !cut && isEdlCut(w, edlSegments)
                 const muted    = !cut && isMuted(w, wordMutes)
@@ -656,9 +768,10 @@ export default function TranscriptEditor({
 
 // ── Toolbar button ─────────────────────────────────────────────────────────────
 
-function ToolbarBtn({ label, onClick, color }: { label: string; onClick: () => void; color?: string }) {
+function ToolbarBtn({ label, onClick, color, title }: { label: string; onClick: () => void; color?: string; title?: string }) {
   return (
     <button
+      title={title}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={onClick}
       style={{

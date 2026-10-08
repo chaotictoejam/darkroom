@@ -122,6 +122,13 @@ export const api = {
       body: JSON.stringify({ text }),
     }),
 
+  /** Replace words `first`..`last` (inclusive) of a segment with corrected text; timings are kept. */
+  updateTranscriptWords: (id: string, segIndex: number, first: number, last: number, text: string) =>
+    request<{ ok: boolean; segment: import('./types').TranscriptSegment }>(
+      `/api/projects/${id}/transcript/${segIndex}/words`,
+      { method: 'PATCH', body: JSON.stringify({ first, last, text }) },
+    ),
+
   saveWordCuts: (id: string, wordCuts: import('./types').WordCut[]) =>
     request<{ ok: boolean }>(`/api/projects/${id}/word-cuts`, {
       method: 'PUT',

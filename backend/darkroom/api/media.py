@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from ..services.transcription import default_model
-from ..storage import PROJECTS_DIR, get_project, save_project
+from ..storage import PROJECTS_DIR, editing_project, get_project, save_project
 
 router = APIRouter()
 
@@ -185,6 +185,55 @@ def update_transcript_segment(project_id: str, seg_index: int, body: TranscriptP
 
     proj["merged_transcript"] = mt
     save_project(proj)
+    return {"ok": True, "segment": seg}
+
+
+class WordsPatch(BaseModel):
+    first: int
+    last: int
+    text: str
+
+
+def _replace_words(words: list[dict], first: int, last: int, text: str) -> list[dict]:
+    """
+    Replace words[first..last] (inclusive) with the words in `text`, keeping the
+    timing of the span: one-for-one replacements keep each word's own times, and
+    otherwise the span is shared out by word length. Words outside the span are
+    untouched, so cuts and mutes elsewhere still line up with the audio.
+    """
+    old = words[first:last + 1]
+    tokens = text.split()
+    start, end = old[0]["start"], old[-1]["end"]
+    if len(tokens) == len(old):
+        new = [{"word": " " + t, "start": w["start"], "end": w["end"]} for t, w in zip(tokens, old)]
+    else:
+        total = sum(len(t) for t in tokens)
+        new, t0 = [], start
+        for t in tokens:
+            t1 = t0 + (end - start) * len(t) / total
+            new.append({"word": " " + t, "start": t0, "end": t1})
+            t0 = t1
+        if new:
+            new[-1]["end"] = end
+    return words[:first] + new + words[last + 1:]
+
+
+@router.patch("/projects/{project_id}/transcript/{seg_index}/words")
+def update_transcript_words(project_id: str, seg_index: int, body: WordsPatch):
+    """Correct a run of mis-transcribed words in one segment (audio is unchanged)."""
+    try:
+        with editing_project(project_id) as proj:
+            mt = proj.get("merged_transcript", [])
+            if seg_index < 0 or seg_index >= len(mt):
+                raise HTTPException(400, "Segment index out of range")
+            seg = mt[seg_index]
+            words = seg.get("words", [])
+            if not (0 <= body.first <= body.last < len(words)):
+                raise HTTPException(400, "Word range out of range")
+            seg["words"] = _replace_words(words, body.first, body.last, body.text)
+            seg["text"] = "".join(w["word"] for w in seg["words"]).strip()
+    except LookupError:
+        raise HTTPException(404, "Project not found")
     return {"ok": True, "segment": seg}
 
 

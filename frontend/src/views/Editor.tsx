@@ -292,6 +292,15 @@ export default function Editor({ project, onChange, onBack }: Props) {
     }
   }
 
+  /** Fix mis-transcribed words; throws so the editor can keep the edit box open on failure. */
+  async function handleEditWords(segIndex: number, first: number, last: number, text: string) {
+    const { segment } = await api.updateTranscriptWords(project.id, segIndex, first, last, text)
+    onChange({
+      ...project,
+      merged_transcript: project.merged_transcript.map((s, i) => (i === segIndex ? segment : s)),
+    })
+  }
+
   const handleMutesChange = useCallback(
     (newMutes: WordMute[]) => {
       onChange({ ...project, word_mutes: newMutes })
@@ -471,6 +480,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
                     onMutesChange={handleMutesChange}
                     onTogglePlay={togglePlayPause}
                     onSetEdlKept={setSegmentsKept}
+                    onEditWords={handleEditWords}
                   />
                 ) : (
                   <p style={{ color: 'var(--text-muted)' }}>No transcript yet.</p>
