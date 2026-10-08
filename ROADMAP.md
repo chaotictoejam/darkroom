@@ -35,6 +35,13 @@ New Project asks **Upload** (already-synced files; video or audio-only is detect
 - Studio in `frontend/src/views/Studio.tsx` and `frontend/src/components/Studio/`
 - Takes API and transcription worker in `backend/darkroom/api/takes.py`; file handling in `services/takes.py`
 
+### Fast local transcription, Phases 0–1: benchmark and quick wins
+
+A transcription benchmark (solo, 2-mic and 4-mic recordings with real crosstalk) measured speed and word error rate on CPU and an NVIDIA T4, then guided a round of quick wins: VAD skips silence, the model stays loaded between tracks and is preloaded when a project opens or the studio is armed, int8 on CPU and float16 on CUDA, batched decoding, threads set to physical cores, and a default model by device and language (`small` for English on CPU, `turbo` otherwise). A 1-hour, 2-person podcast on CPU went from about 61 minutes to 7 with `small`, under 2 minutes on a T4, with half the error rate. The Apple Silicon baseline is still to do (with the Phase 5 Mac engine).
+
+- Benchmark in `backend/bench/` (results in `bench/results/`); GPU runs via `infra/bench/run-gpu-benchmark.sh`
+- Transcription settings in `backend/darkroom/services/transcription.py`; results and decisions in [docs/fast-transcription.md](docs/fast-transcription.md)
+
 ---
 
 ## Next
@@ -55,11 +62,11 @@ Full plan, Bedrock data-handling validation and TODO list: **[docs/private-ai.md
 
 Full plan, mockups and TODO list: **[docs/recording-studio.md](docs/recording-studio.md)**
 
-### 3. Fast local transcription
+### 3. Fast local transcription (Phases 2–7)
 
-**Why:** Descript and Riverside have transcripts ready moments after an upload or recording ends. Darkroom transcribes each mic's whole track one after another on settings that leave a lot of speed unused.
+**Why:** Descript and Riverside have transcripts ready moments after an upload or recording ends. Darkroom still transcribes each mic's whole track, one after another, and only after each take or upload ends.
 
-**Involves:** quick wins first (skip silence with VAD, int8 on CPU, keep the model loaded, batched decoding, `turbo` as the default model), then transcribing each mic only where its speaker is talking, transcribing while recording so the transcript is ready seconds after Stop, path-based uploads in the desktop app, and a GPU engine for Apple Silicon. Everything stays local by default; an opt-in mode can use GPUs in the user's own cloud account (AWS or similar).
+**Involves:** transcribing each mic only where its speaker is talking, transcribing while recording so the transcript is ready seconds after Stop, path-based uploads in the desktop app, and a GPU engine for Apple Silicon. Everything stays local by default; an opt-in mode can use GPUs in the user's own cloud account (AWS or similar).
 
 Full plan, analysis and TODO list: **[docs/fast-transcription.md](docs/fast-transcription.md)**
 
