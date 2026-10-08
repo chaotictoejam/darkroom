@@ -29,7 +29,8 @@ bench = [
     "pyarrow>=14",
 ]
 bedrock = [
-    "boto3>=1.34.0",
+    # [crt] is needed to use `aws login` credentials
+    "boto3[crt]>=1.34.0",
 ]
 
 [project.scripts]

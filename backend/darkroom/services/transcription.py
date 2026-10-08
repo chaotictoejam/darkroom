@@ -436,16 +436,8 @@ def merge_transcripts(transcripts: dict[str, list], speakers: list[dict]) -> lis
 
 
 def format_for_claude(merged_transcript: list[dict]) -> str:
-    """Format merged transcript as readable text for Claude."""
-    lines = []
-    for seg in merged_transcript:
-        start = _fmt_time(seg["start"])
-        end = _fmt_time(seg["end"])
-        lines.append(f"[{start} - {end}] {seg['speaker_name']}: {seg['text']}")
-    return "\n".join(lines)
-
-
-def _fmt_time(seconds: float) -> str:
-    mins = int(seconds // 60)
-    secs = seconds % 60
-    return f"{mins:02d}:{secs:06.3f}"
+    """Format merged transcript as readable text for Claude, with times in seconds."""
+    return "\n".join(
+        f"[{seg['start']:.2f} - {seg['end']:.2f}] {seg['speaker_name']}: {seg['text']}"
+        for seg in merged_transcript
+    )

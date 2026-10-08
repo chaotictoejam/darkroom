@@ -3,7 +3,7 @@
  * All requests go to the same origin — Vite proxies /api/* in dev,
  * FastAPI serves everything from the same port in production.
  */
-import type { EDL, Participant, Project, ProjectSource, ProjectSummary, RenderShortParams, Take } from './types'
+import type { AiStatus, EDL, Participant, Project, ProjectSource, ProjectSummary, RenderShortParams, Take } from './types'
 
 class ApiError extends Error {
   constructor(
@@ -33,7 +33,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 // ── Projects ──────────────────────────────────────────────────────────────────
 
 export const api = {
-  status: () => request<{ ffmpeg_available: boolean; anthropic_configured: boolean }>('/api/status'),
+  status: () => request<{ ffmpeg_available: boolean; ai: AiStatus }>('/api/status'),
 
   listProjects: () => request<ProjectSummary[]>('/api/projects'),
 

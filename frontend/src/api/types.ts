@@ -71,6 +71,14 @@ export type ProjectStatus =
   | 'error'
 
 /** A deleted time range — from a word-level transcript edit. */
+export interface AiStatus {
+  provider: 'anthropic' | 'bedrock'
+  model: string
+  /** Where the transcript is sent when Analyse runs, e.g. "Bedrock in your AWS account (us-east-1)" */
+  destination: string
+  configured: boolean
+}
+
 export interface WordCut {
   start: number
   end: number

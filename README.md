@@ -149,7 +149,7 @@ Get a key at <https://console.anthropic.com> → API Keys → Create Key.
 
 #### Option B: AWS Bedrock (recommended for privacy)
 
-Transcripts stay in your own AWS account. Requires AWS credentials available in the environment (via `AWS_PROFILE`, `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, or an IAM role) and the model `us.anthropic.claude-sonnet-4-5-20250929-v1:0` enabled in your Bedrock console.
+Transcripts stay in your own AWS account. There's no API key to add: Darkroom uses your normal AWS credentials (`aws login`, `AWS_PROFILE`, `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, or an IAM role) with `bedrock:InvokeModel` on the model below. Check you're signed in with `aws sts get-caller-identity`.
 
 ```env
 AI_PROVIDER=bedrock
@@ -157,18 +157,21 @@ AWS_REGION=us-east-1
 # BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0  # default, override if needed
 ```
 
-Also install the `boto3` extra:
+`BEDROCK_MODEL_ID` must be an inference profile ID (`us.anthropic.…`), not the bare model ID: newer Claude models reject on-demand calls to `anthropic.…`. Keep the geographic `us.`/`eu.` prefix, never `global.`. If a call fails with "… is not available for this account", request access to that model in the Bedrock console (Model catalog) or pick one your account can use; `aws bedrock list-inference-profiles --region us-east-1` lists the IDs.
+
+Also install the `bedrock` extra (boto3, with the CRT it needs for `aws login` credentials):
 ```bash
 pip install -e "backend/[bedrock]"
 ```
 
-To make sure Bedrock stores nothing, set your account's data retention mode to `none` in that region (needs `bedrock:PutAccountDataRetention`; see the [AWS data retention docs](https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html) for how to authenticate):
+To make sure Bedrock stores nothing, set your account's data retention mode to `none` in each region you use (needs `bedrock:PutAccountDataRetention`; see the [AWS data retention docs](https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html)). It applies to all Bedrock use in that region, and models that require retention (Claude Fable 5/5.1) will then refuse requests rather than store them:
 ```bash
-curl -X PUT https://bedrock.us-east-1.amazonaws.com/data-retention \
-  -H "Authorization: Bearer $AWS_BEARER_TOKEN_BEDROCK" \
-  -H "Content-Type: application/json" \
-  -d '{ "mode": "none" }'
+aws bedrock put-account-data-retention --mode none --region us-east-1
+aws bedrock get-account-data-retention --region us-east-1   # should print "mode": "none"
 ```
+If your account is in an AWS Organization, an organization policy may take precedence over the account setting.
+
+When Bedrock is set up, the Editor shows "Sends the transcript to Bedrock in your AWS account (<region>)" next to **Analyze with AI**.
 
 ---
 

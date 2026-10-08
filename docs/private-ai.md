@@ -93,7 +93,7 @@ What the EDL job needs from a local model:
 ## TODO
 
 ### Phase 0: Fixes and visibility
-- [ ] `/api/status` returns `{provider, model, destination, configured}`; fix Bedrock-only setups hiding Analyse
+- [x] `/api/status` returns `{provider, model, destination, configured}`; fix Bedrock-only setups hiding Analyse
 - [ ] Analyse confirmation shows where the transcript will go; note on Manual Analysis
 - [x] README/`.env.example`: "What leaves your machine" section, Anthropic API gap called out, Bedrock data handling summary with links and date checked
 

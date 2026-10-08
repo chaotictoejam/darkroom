@@ -13,7 +13,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, subscribeToProgress } from '../api/client'
-import type { EDL, EDLSegment, Project, WordCut, WordMute } from '../api/types'
+import type { AiStatus, EDL, EDLSegment, Project, WordCut, WordMute } from '../api/types'
 import VideoPreview, { type VideoPreviewHandle } from '../components/VideoPreview/VideoPreview'
 import TranscriptEditor from '../components/TranscriptEditor/TranscriptEditor'
 
@@ -101,7 +101,10 @@ type PreviewLayout = 'multi' | 'solo'
 
 export default function Editor({ project, onChange, onBack }: Props) {
   const [analyzing, setAnalyzing] = useState(false)
-  const [anthropicConfigured, setAnthropicConfigured] = useState<boolean | null>(null)
+  const [analyzeMessage, setAnalyzeMessage] = useState<string | null>(null)
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null)
+  const analyzeUnsubRef = useRef<(() => void) | null>(null)
+  const [ai, setAi] = useState<AiStatus | null>(null)
   const [openPanels, setOpenPanels] = useState<Set<SidePanel>>(
     () => new Set(project.edl ? (['edl'] as SidePanel[]) : []),
   )
@@ -134,22 +137,61 @@ export default function Editor({ project, onChange, onBack }: Props) {
 
   useEffect(() => {
     api.status().then((s) => {
-      setAnthropicConfigured(s.anthropic_configured)
-      // Auto-open manual analysis panel when no API key
-      if (!s.anthropic_configured && !project.edl) {
+      setAi(s.ai)
+      // Auto-open manual analysis panel when no AI provider is set up
+      if (!s.ai.configured && !project.edl) {
         setOpenPanels((prev) => new Set([...prev, 'manual']))
       }
     })
     // Cleanup on unmount
     return () => {
       previewUnsubRef.current?.()
+      analyzeUnsubRef.current?.()
       if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current)
     }
   }, [])
 
   async function handleAnalyze() {
     setAnalyzing(true)
-    await api.analyze(project.id)
+    setAnalyzeMessage(null)
+    setAnalyzeError(null)
+
+    function finish() {
+      analyzeUnsubRef.current?.()
+      analyzeUnsubRef.current = null
+      setAnalyzing(false)
+      setAnalyzeMessage(null)
+      api.getProject(project.id).then((proj) => {
+        onChange(proj)
+        if (proj.status === 'error') {
+          // The message is a traceback; its last line says what went wrong
+          setAnalyzeError(proj.progress.message.trim().split('\n').pop() ?? 'Analysis failed')
+        } else if (proj.edl) {
+          setOpenPanels((prev) => new Set([...prev, 'edl']))
+        }
+      })
+    }
+
+    // Subscribe before starting the job so the result can't be missed
+    analyzeUnsubRef.current?.()
+    analyzeUnsubRef.current = subscribeToProgress(
+      project.id,
+      (evt) => {
+        if (evt.type) return
+        if (evt.progress?.message) setAnalyzeMessage(evt.progress.message)
+        if (evt.status === 'ready' || evt.status === 'error') finish()
+      },
+      finish,
+    )
+    try {
+      await api.analyze(project.id)
+    } catch (err) {
+      analyzeUnsubRef.current?.()
+      analyzeUnsubRef.current = null
+      setAnalyzing(false)
+      setAnalyzeError(err instanceof Error ? err.message : 'Analysis failed to start')
+      return
+    }
     onChange({ ...project, status: 'analyzing' })
   }
 
@@ -259,7 +301,17 @@ export default function Editor({ project, onChange, onBack }: Props) {
         <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>· {project.status}</span>
 
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-          {!hasEdl && anthropicConfigured === true && (
+          {analyzeError && (
+            <span style={{ color: '#f55', fontSize: 12, maxWidth: 480 }} title={analyzeError}>
+              {analyzeError}
+            </span>
+          )}
+          {!hasEdl && ai?.configured && (
+            <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+              {analyzing && analyzeMessage ? analyzeMessage : `Sends the transcript to ${ai.destination}`}
+            </span>
+          )}
+          {!hasEdl && ai?.configured && (
             <button
               onClick={handleAnalyze}
               disabled={analyzing}
@@ -272,9 +324,9 @@ export default function Editor({ project, onChange, onBack }: Props) {
               {analyzing ? 'Analyzing…' : 'Analyze with AI →'}
             </button>
           )}
-          {!hasEdl && anthropicConfigured === false && (
+          {!hasEdl && ai?.configured === false && (
             <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>
-              No API key — use Manual Analysis in the sidebar
+              {ai.provider === 'bedrock' ? 'No AWS credentials found' : 'No API key'} — use Manual Analysis in the sidebar
             </span>
           )}
         </div>
@@ -320,7 +372,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
               <ManualAnalysis
                 project={project}
                 onChange={onChange}
-                highlight={anthropicConfigured === false}
+                highlight={ai?.configured === false}
               />
             </SidebarSection>
           )}
