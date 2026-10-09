@@ -217,14 +217,8 @@ def render_project(project: dict, targets: list[str], projects_dir: Path,
                     input_args, filter_complex = _build_splitscreen_filter_landscape(
                         speakers_dict, kept, word_mutes
                     )
-                    cmd = ["ffmpeg", "-y"] + input_args + [
-                        "-filter_complex", filter_complex,
-                        "-map", "[outv]", "-map", "[outa]",
-                        "-c:v", "libx264", "-preset", "medium", "-crf", "23", "-bf", "0",
-                        "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
-                        out,
-                    ]
-                    _run_ffmpeg(cmd)
+                    _encode_normalized(["ffmpeg", "-y", *input_args, "-filter_complex", filter_complex],
+                                       _VIDEO_CODEC, _AAC, out)
                 else:
                     _render_fulledit(kept, speakers_dict, out, word_mutes)
                 results["fullEdit"] = {
@@ -369,9 +363,8 @@ def _build_concat_filter(kept_segments: list[dict], speakers_dict: dict, vertica
         stream_labels.extend([f"[v{i}]", f"[a{i}]"])
 
     n = len(kept_segments)
-    concat_str = "".join(stream_labels) + f"concat=n={n}:v=1:a=1[outv][outa_raw]"
-    norm_str = "[outa_raw]loudnorm=I=-16:TP=-1.5:LRA=11[outa]"
-    filter_complex = ";".join(filter_parts) + ";" + concat_str + ";" + norm_str
+    concat_str = "".join(stream_labels) + f"concat=n={n}:v=1:a=1[outv][outa]"
+    filter_complex = ";".join(filter_parts) + ";" + concat_str
 
     return input_args, filter_complex, n
 
@@ -461,8 +454,7 @@ def _build_splitscreen_filter_landscape(speakers_dict: dict, segments: list[dict
 
     n = len(kept)
     all_labels = "".join(concat_v_labels[i] + concat_a_labels[i] for i in range(n))
-    filter_parts.append(f"{all_labels}concat=n={n}:v=1:a=1[outv][outa_raw]")
-    filter_parts.append("[outa_raw]loudnorm=I=-16:TP=-1.5:LRA=11[outa]")
+    filter_parts.append(f"{all_labels}concat=n={n}:v=1:a=1[outv][outa]")
 
     return input_args, ";".join(filter_parts)
 
@@ -553,11 +545,9 @@ def _build_splitscreen_filter(clips: list[dict], speakers_dict: dict):
         concat_v_labels.append(f"[cv{ci}]")
         concat_a_labels.append(f"[ca{ci}]")
 
-    # Concat all clips then normalise
     n_clips = len(clips)
     all_labels = "".join(concat_v_labels[i] + concat_a_labels[i] for i in range(n_clips))
-    filter_parts.append(f"{all_labels}concat=n={n_clips}:v=1:a=1[outv][outa_raw]")
-    filter_parts.append("[outa_raw]loudnorm=I=-16:TP=-1.5:LRA=11[outa]")
+    filter_parts.append(f"{all_labels}concat=n={n_clips}:v=1:a=1[outv][outa]")
 
     return input_args, ";".join(filter_parts)
 
@@ -575,6 +565,103 @@ def _run_ffmpeg(cmd: list[str]) -> None:
         raise subprocess.CalledProcessError(result.returncode, cmd, result.stderr)
 
 
+_VIDEO_CODEC = ["-c:v", "libx264", "-preset", "medium", "-crf", "23", "-bf", "0"]
+_AAC = ["-c:a", "aac", "-b:a", "192k"]
+
+# Exports are normalised to podcast loudness, with a limiter catching the
+# odd peak the gain would push over the true-peak ceiling.
+_TARGET_LUFS = -16.0
+_PEAK_CEILING_DB = -1.5
+
+# Bringing a quiet recording up to _TARGET_LUFS lifts its room noise by the
+# same amount, so the export also gets background-noise cleanup: a high-pass
+# for rumble and hum, and a gentle expander that turns pauses down by up to
+# _PAUSE_REDUCTION_DB. The expander opens _GATE_MARGIN_DB above the measured
+# noise floor, but never higher than _GATE_MAX_DB, so quiet speech stays put.
+_HIGHPASS_HZ = 80
+_PAUSE_REDUCTION_DB = 14.0
+_GATE_MARGIN_DB = 10.0
+_GATE_MAX_DB = -30.0
+
+
+def _measure_loudness(audio_path: str) -> tuple[float, float] | None:
+    """
+    Integrated loudness of a file in LUFS and its noise floor in dBFS (the
+    10th percentile of 100 ms RMS levels), or None if it's silent.
+    """
+    rms = ("aresample=48000,asetnsamples=n=4800,"
+           "astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=RMS_level,"
+           "ametadata=print:key=lavfi.astats.Overall.RMS_level")
+    result = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-nostats", "-i", audio_path,
+         "-af", f"{rms},loudnorm=print_format=json", "-f", "null", "-"],
+        capture_output=True, text=True, check=True,
+    )
+    # The JSON block is followed by ffmpeg's own summary lines
+    stats, _ = json.JSONDecoder().raw_decode(result.stderr, result.stderr.rindex("{"))
+    loudness = float(stats["input_i"])  # "-inf" for digital silence
+    levels = sorted(
+        float(line.rsplit("=", 1)[1])
+        for line in result.stderr.splitlines()
+        if "lavfi.astats.Overall.RMS_level=" in line and not line.endswith("inf")
+    )
+    if loudness <= -70 or not levels:
+        return None
+    return loudness, levels[len(levels) // 10]
+
+
+def _cleanup_filter(gain: float, noise_floor: float) -> str:
+    """High-pass plus pause expander for a mix whose noise sits at
+    `noise_floor` dBFS before `gain` dB is applied."""
+    threshold_db = min(noise_floor + gain + _GATE_MARGIN_DB, _GATE_MAX_DB)
+    return (f"highpass=f={_HIGHPASS_HZ},"
+            f"agate=threshold={10 ** (threshold_db / 20):.5f}:ratio=2"
+            f":range={10 ** (-_PAUSE_REDUCTION_DB / 20):.4f}:attack=5:release=250")
+
+
+def _encode_normalized(head: list[str], video_codec: list[str], audio_codec: list[str],
+                       output_path: str) -> None:
+    """
+    Run `head` (ffmpeg, its inputs and a -filter_complex producing [outa], and
+    [outv] when `video_codec` is given) and write `output_path` with the audio
+    brought to _TARGET_LUFS by one constant gain, then cleaned up (see
+    _cleanup_filter).
+
+    A single-pass loudnorm normalises dynamically: it rides the gain up in
+    every pause, so background hiss ends up far louder than in the editor.
+    Instead the mix goes to a lossless temp file, is measured, and is then
+    gained linearly while the already-encoded video is copied through.
+    """
+    with tempfile.TemporaryDirectory(dir=Path(output_path).parent) as tmp:
+        # Float Wave64: no clipping of a hot mix, no 4 GB WAV limit
+        mix = os.path.join(tmp, "mix.w64")
+        video = os.path.join(tmp, "video.mp4") if video_codec else None
+        cmd = list(head)
+        if video:
+            cmd += ["-map", "[outv]", *video_codec, "-an", video]
+        cmd += ["-map", "[outa]", "-c:a", "pcm_f32le", mix]
+        _run_ffmpeg(cmd)
+
+        filters = []
+        measured = _measure_loudness(mix)
+        if measured:
+            loudness, noise_floor = measured
+            gain = _TARGET_LUFS - loudness
+            filters += [f"volume={gain:.2f}dB", _cleanup_filter(gain, noise_floor)]
+        limit = 10 ** (_PEAK_CEILING_DB / 20)
+        audio_filter = ",".join([*filters, f"alimiter=limit={limit:.4f}:level=0"])
+
+        cmd = ["ffmpeg", "-y"]
+        if video:
+            cmd += ["-i", video, "-i", mix, "-map", "0:v", "-map", "1:a", "-c:v", "copy"]
+        else:
+            cmd += ["-i", mix]
+        cmd += ["-af", audio_filter, "-ar", "48000", *audio_codec]
+        if video:
+            cmd += ["-movflags", "+faststart"]
+        _run_ffmpeg([*cmd, output_path])
+
+
 def _render_fulledit(segments: list[dict], speakers_dict: dict, output_path: str,
                      word_mutes: list[dict] | None = None) -> None:
     kept = [s for s in segments if s.get("keep", True)]
@@ -584,22 +671,8 @@ def _render_fulledit(segments: list[dict], speakers_dict: dict, output_path: str
     input_args, filter_complex, _ = _build_concat_filter(kept, speakers_dict, vertical=False,
                                                          word_mutes=word_mutes)
 
-    cmd = ["ffmpeg", "-y"]
-    cmd.extend(input_args)
-    cmd.extend([
-        "-filter_complex", filter_complex,
-        "-map", "[outv]",
-        "-map", "[outa]",
-        "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "23",
-        "-bf", "0",
-        "-c:a", "aac",
-        "-b:a", "192k",
-        "-movflags", "+faststart",
-        output_path,
-    ])
-    _run_ffmpeg(cmd)
+    _encode_normalized(["ffmpeg", "-y", *input_args, "-filter_complex", filter_complex],
+                       _VIDEO_CODEC, _AAC, output_path)
 
 
 def _render_vertical(segments: list[dict], speakers_dict: dict, output_path: str,
@@ -611,22 +684,8 @@ def _render_vertical(segments: list[dict], speakers_dict: dict, output_path: str
     input_args, filter_complex, _ = _build_concat_filter(kept, speakers_dict, vertical=True,
                                                          word_mutes=word_mutes)
 
-    cmd = ["ffmpeg", "-y"]
-    cmd.extend(input_args)
-    cmd.extend([
-        "-filter_complex", filter_complex,
-        "-map", "[outv]",
-        "-map", "[outa]",
-        "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "23",
-        "-bf", "0",
-        "-c:a", "aac",
-        "-b:a", "192k",
-        "-movflags", "+faststart",
-        output_path,
-    ])
-    _run_ffmpeg(cmd)
+    _encode_normalized(["ffmpeg", "-y", *input_args, "-filter_complex", filter_complex],
+                       _VIDEO_CODEC, _AAC, output_path)
 
 
 _AUDIO_CODECS = {
@@ -676,16 +735,9 @@ def _render_audio(segments: list[dict], speakers_dict: dict, word_cuts: list[dic
         mix += _mute_filter(word_mutes, s, e)
         filter_parts.append(f"{labels}{mix}[a{i}]")
 
-    concat = "".join(f"[a{i}]" for i in range(len(kept))) + f"concat=n={len(kept)}:v=0:a=1[outa_raw]"
-    norm = "[outa_raw]loudnorm=I=-16:TP=-1.5:LRA=11[outa]"
-    cmd = ["ffmpeg", "-y", *input_args,
-           "-filter_complex", ";".join([*filter_parts, concat, norm]),
-           "-map", "[outa]",
-           # loudnorm upsamples to 192 kHz internally; bring it back down
-           "-ar", "48000",
-           *_AUDIO_CODECS[fmt],
-           output_path]
-    _run_ffmpeg(cmd)
+    concat = "".join(f"[a{i}]" for i in range(len(kept))) + f"concat=n={len(kept)}:v=0:a=1[outa]"
+    _encode_normalized(["ffmpeg", "-y", *input_args, "-filter_complex", ";".join([*filter_parts, concat])],
+                       [], _AUDIO_CODECS[fmt], output_path)
 
 
 # ---------------------------------------------------------------------------
@@ -1127,22 +1179,8 @@ def render_short_custom(
             escaped = _ffmpeg_escape_path(ass_path)
             filter_complex += f";[outv_presub]ass=filename='{escaped}'[outv]"
 
-    cmd = ["ffmpeg", "-y"]
-    cmd.extend(input_args)
-    cmd.extend([
-        "-filter_complex", filter_complex,
-        "-map", "[outv]",
-        "-map", "[outa]",
-        "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "23",
-        "-bf", "0",
-        "-c:a", "aac",
-        "-b:a", "192k",
-        "-movflags", "+faststart",
-        output_path,
-    ])
-    _run_ffmpeg(cmd)
+    _encode_normalized(["ffmpeg", "-y", *input_args, "-filter_complex", filter_complex],
+                       _VIDEO_CODEC, _AAC, output_path)
 
 
 def _apply_word_cuts(segments: list[dict], word_cuts: list[dict]) -> list[dict]:
@@ -1207,11 +1245,7 @@ def render_preview(project: dict, projects_dir) -> dict:
     input_args, filter_complex, _ = _build_concat_filter(kept, speakers_dict, vertical=False,
                                                          word_mutes=project.get("word_mutes") or [])
 
-    # For preview: skip loudnorm (slow) and scale to 960p
-    filter_complex = filter_complex.replace(
-        "[outa_raw]loudnorm=I=-16:TP=-1.5:LRA=11[outa]",
-        "[outa_raw]anull[outa]",
-    )
+    # For preview: skip loudness normalisation (slow) and scale to 960p
     # [outv] appears exactly once in the concat output; rename it so we can scale
     filter_complex = filter_complex.replace("[outv]", "[outv_raw]", 1)
     filter_complex += ";[outv_raw]scale=960:-2[outv]"
@@ -1260,19 +1294,5 @@ def _render_clip(clip: dict, segments: list[dict], speakers_dict: dict, output_p
 
     input_args, filter_complex, _ = _build_concat_filter(clip_segs, speakers_dict, vertical=vertical)
 
-    cmd = ["ffmpeg", "-y"]
-    cmd.extend(input_args)
-    cmd.extend([
-        "-filter_complex", filter_complex,
-        "-map", "[outv]",
-        "-map", "[outa]",
-        "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "23",
-        "-bf", "0",
-        "-c:a", "aac",
-        "-b:a", "192k",
-        "-movflags", "+faststart",
-        output_path,
-    ])
-    _run_ffmpeg(cmd)
+    _encode_normalized(["ffmpeg", "-y", *input_args, "-filter_complex", filter_complex],
+                       _VIDEO_CODEC, _AAC, output_path)
