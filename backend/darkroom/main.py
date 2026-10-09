@@ -59,7 +59,9 @@ app.include_router(takes.router,    prefix="/api")
 # ── Project file serving ──────────────────────────────────────────────────────
 @app.get("/projects/{project_id}/files/{filename:path}")
 async def serve_project_file(project_id: str, filename: str):
-    return FileResponse(str(PROJECTS_DIR / project_id / filename))
+    # Renders reuse their filenames, so make the browser revalidate (cheap: ETag)
+    return FileResponse(str(PROJECTS_DIR / project_id / filename),
+                        headers={"Cache-Control": "no-cache"})
 
 # ── Frontend serving ──────────────────────────────────────────────────────────
 # In dev, Vite runs on :5173 and proxies /api/* here.

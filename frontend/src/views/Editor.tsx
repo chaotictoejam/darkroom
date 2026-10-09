@@ -12,7 +12,7 @@
  *   └──────────┴─────────────────────────────────────────┘
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, subscribeToProgress } from '../api/client'
+import { api, ApiError, subscribeToProgress } from '../api/client'
 import type { AiStatus, EDL, EDLSegment, Project, WordCut, WordMute } from '../api/types'
 import VideoPreview, { type VideoPreviewHandle } from '../components/VideoPreview/VideoPreview'
 import TranscriptEditor from '../components/TranscriptEditor/TranscriptEditor'
@@ -918,16 +918,45 @@ function download(filename: string, content: string, mime: string) {
 // ── Render content (sidebar) ───────────────────────────────────────────────────
 
 function RenderContent({ project, onChange }: { project: Project; onChange: (p: Project) => void }) {
-  const [rendering, setRendering] = useState(false)
+  const [starting, setStarting] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  const [renderedAt, setRenderedAt] = useState(0)
+  const unsubRef = useRef<(() => void) | null>(null)
   const isAudio = project.project_type === 'podcast'
+  const rendering = starting || project.status === 'rendering'
+
+  useEffect(() => () => unsubRef.current?.(), [])
+
+  /** Follow a running render, then reload the project so its new files show up. */
+  function watchRender() {
+    unsubRef.current?.()
+    unsubRef.current = subscribeToProgress(project.id, async (evt) => {
+      if (evt.progress?.message) setMessage(evt.progress.message)
+      if (evt.status !== 'ready' && evt.status !== 'error') return
+      unsubRef.current?.()
+      unsubRef.current = null
+      onChange(await api.getProject(project.id))
+      // Same filenames as last time: make the download links fetch the new files
+      setRenderedAt(Date.now())
+    })
+  }
 
   async function handleRender(target: string) {
-    setRendering(true)
+    setStarting(true)
+    setMessage(null)
     try {
       await api.render(project.id, [target])
       onChange({ ...project, status: 'rendering' })
+      watchRender()
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        setMessage('A render is already running; export again when it finishes.')
+        watchRender()
+      } else {
+        setMessage(e instanceof Error ? e.message : String(e))
+      }
     } finally {
-      setRendering(false)
+      setStarting(false)
     }
   }
 
@@ -965,10 +994,14 @@ function RenderContent({ project, onChange }: { project: Project; onChange: (p: 
         </button>
       )}
 
+      {message && (
+        <p style={{ color: 'var(--text-muted)', fontSize: 12, margin: '10px 0 0' }}>{message}</p>
+      )}
+
       {Object.entries(project.renders).map(([name, render]) => (
         <div key={name} style={{ marginTop: 10, padding: 10, background: 'var(--bg-card)', borderRadius: 6 }}>
           <div style={{ fontWeight: 500, fontSize: 13, marginBottom: 4 }}>{render.filename}</div>
-          <a href={render.url} download style={{ color: 'var(--accent)', fontSize: 12 }}>
+          <a href={renderedAt ? `${render.url}?t=${renderedAt}` : render.url} download style={{ color: 'var(--accent)', fontSize: 12 }}>
             Download
           </a>
         </div>
