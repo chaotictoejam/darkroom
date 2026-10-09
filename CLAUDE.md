@@ -38,7 +38,7 @@ Requires Python 3.11+ (pyproject), Node 18+, full FFmpeg. AI provider config liv
   - `services/transcription.py` faster-whisper (cached model, VAD + batched pipeline, int8 CPU / float16 CUDA, default model by device and language: `small` for English on CPU, else `turbo`) + transcript merge · `services/editor.py` Claude EDL generation (Anthropic API or Bedrock) · `services/renderer.py` FFmpeg rendering (video, and MP3/WAV for audio-only), face-centred crops · `services/takes.py` chunk append, finalise to WAV, join takes, transcript offsets
 - `frontend/src/` — React + TypeScript + Vite
   - `App.tsx` routes between views by `project.source` and `project.status` (no router library)
-  - `views/` Welcome (New Project: Upload or Record), Setup (upload), Studio (recording), Processing, Editor · `components/` TranscriptEditor, VideoPreview, `Studio/` (mic engine, AudioWorklet, chunk uploader, waveform lanes, meters, takes strip)
+  - `views/` Welcome (New Project: Upload or Record), Setup (upload), Studio (recording), Processing, Editor · `components/` TranscriptEditor, VideoPreview, `Timeline/` (timeline, `timeMap.ts` source ↔ edited time), `Editor/` (sidebar panels: EDL, render, manual analysis, advanced tools), `Studio/` (mic engine, AudioWorklet, chunk uploader, waveform lanes, meters, takes strip)
   - `transcriptionOptions.ts` Whisper model and language lists shared by Setup and Studio
   - `api/client.ts` typed API client + `subscribeToProgress` WebSocket · `api/types.ts` shared types
   - `desktop.ts` typed `window.darkroom` bridge (undefined in a plain browser)
