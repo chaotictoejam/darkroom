@@ -54,7 +54,15 @@ A transcription benchmark (solo, 2-mic and 4-mic recordings with real crosstalk)
 
 Full plan, Bedrock data-handling validation and TODO list: **[docs/private-ai.md](docs/private-ai.md)**
 
-### 2. Recording studio and new project flow (Phases 2–7)
+### 2. Timeline editing, Phase 1: edited time and lanes
+
+**Why:** several items put things on the editor timeline: take dividers and music/sound-effect tracks (recording studio Phases 4 and 6), unsynced clips, and the Properties panel that Studio sound uses. Today the timeline shows the source recording with one waveform, so each of those would build against it and be redone later.
+
+**Involves:** moving the timeline out of `Editor.tsx` into `components/Timeline/`; a ruler and lanes in edited time with cut markers; a script lane of phrase and gap blocks; one waveform lane per speaker; shared selection with the transcript.
+
+Phase 1 of **[docs/timeline-editing.md](docs/timeline-editing.md)**; the rest is item 10.
+
+### 3. Recording studio and new project flow (Phases 2–7)
 
 **Why:** the studio records microphones only. Video podcasts and screen recordings need cameras, screens and recording more from the editor, and most shows need intro music and sound effects.
 
@@ -62,7 +70,7 @@ Full plan, Bedrock data-handling validation and TODO list: **[docs/private-ai.md
 
 Full plan, mockups and TODO list: **[docs/recording-studio.md](docs/recording-studio.md)**
 
-### 3. Fast local transcription (Phases 2–7)
+### 4. Fast local transcription (Phases 2–7)
 
 **Why:** Descript and Riverside have transcripts ready moments after an upload or recording ends. Darkroom still transcribes each mic's whole track, one after another, and only after each take or upload ends.
 
@@ -70,13 +78,13 @@ Full plan, mockups and TODO list: **[docs/recording-studio.md](docs/recording-st
 
 Full plan, analysis and TODO list: **[docs/fast-transcription.md](docs/fast-transcription.md)**
 
-### 4. Unsynced media on the timeline
+### 5. Unsynced media on the timeline
 
 **Why:** Upload only works for files that all start at the same moment. Footage from separate devices, or B-roll and inserts, can't be used today.
 
 **Involves:** uploading files into an existing project and placing them on the timeline: drag to position, auto-sync by audio where possible (cross-correlation, as planned for remote guests), and render support for clips that don't span the whole edit.
 
-### 5. Installable desktop builds
+### 6. Installable desktop builds
 
 **Why:** the desktop app currently needs a repo checkout plus `make install`. Most podcasters won't have Python, Node and FFmpeg set up.
 
@@ -87,19 +95,19 @@ Full plan, analysis and TODO list: **[docs/fast-transcription.md](docs/fast-tran
 - Storing projects in the OS app-data folder (`app.getPath('userData')`) rather than the repo's `projects/`
 - Packaging with electron-builder or Electron Forge for `.dmg`, `.exe` and `.AppImage`
 
-### 6. macOS signing and notarization
+### 7. macOS signing and notarization
 
 **Why:** a packaged, unsigned app can't reliably get microphone, camera or screen recording permission on macOS, and Gatekeeper blocks it by default.
 
 **Involves:** hardened runtime with the `com.apple.security.device.audio-input` and `com.apple.security.device.camera` entitlements, `NSMicrophoneUsageDescription` and `NSCameraUsageDescription` in `Info.plist`, Screen Recording permission guidance, code signing and notarization in CI. Windows code signing as a follow-on.
 
-### 7. Multi-channel audio interfaces
+### 8. Multi-channel audio interfaces
 
 **Why:** a common podcast setup is one USB interface (e.g. Focusrite Scarlett 2i2) with a mic on each input. The browser sees that as a single stereo device, so both people end up in one track.
 
 **Involves:** letting a recorder track pick a channel of a multi-channel device (split with a Web Audio `ChannelSplitterNode`, or with FFmpeg on upload), so each input becomes its own participant.
 
-### 8. Remote guests
+### 9. Remote guests
 
 **Why:** many podcasts have guests who aren't in the room. Today every participant needs a mic plugged into the host's computer.
 
@@ -107,7 +115,7 @@ Full plan, analysis and TODO list: **[docs/fast-transcription.md](docs/fast-tran
 
 Full plan, options comparison and TODO list: **[docs/remote-guests.md](docs/remote-guests.md)**
 
-### 9. Audiograms
+### 10. Audiograms
 
 **Why:** audio-only podcasts need a video for YouTube and social. Today that means a hand-written FFmpeg script with colours and positions hardcoded.
 
@@ -115,11 +123,11 @@ Full plan, options comparison and TODO list: **[docs/remote-guests.md](docs/remo
 
 Full plan, layout model and TODO list: **[docs/audiograms.md](docs/audiograms.md)**
 
-### 10. Timeline editing
+### 11. Timeline editing, Phases 2–4
 
-**Why:** the timeline can only drag-select and delete, and it shows the source recording rather than the edit. Descript lets you edit right on the timeline: drag a silence shorter, split at the playhead, select a piece and delete it, and set volume and Studio Sound on a selection.
+**Why:** the timeline can only drag-select and delete. Descript lets you edit right on the timeline: drag a silence shorter, split at the playhead, select a piece and delete it, and set volume and Studio Sound on a selection.
 
-**Involves:** a timeline in edited time with a script lane (phrase and gap blocks) and a waveform lane per speaker; split, select and delete on the timeline; dragging gap edges to shorten (later lengthen, with room tone) silences, plus a bulk "Shorten pauses"; shared selection and undo/redo with the transcript; a Properties panel with track and range volume, Studio sound controls and a loudness target. Reordering clips comes later, designed together with unsynced media.
+**Involves:** building on the Phase 1 timeline (item 2): split, select and delete on the timeline; dragging gap edges to shorten (later lengthen, with room tone) silences, plus a bulk "Shorten pauses"; undo/redo shared with the transcript; a Properties panel with track and range volume, Studio sound controls and a loudness target. Reordering clips comes later, designed together with unsynced media.
 
 Full plan and TODO list: **[docs/timeline-editing.md](docs/timeline-editing.md)**
 

@@ -234,6 +234,7 @@ New project fields (in `new_project()` **and** `_DEFAULTS`, plus `api/types.ts`)
 | Where does a shortened gap's cut go? | **Centred in the gap**, keeping at least 0.1 s, so word tails and onsets are never clipped whichever edge is dragged |
 | Re-dragging a gap? | **Replaces** that gap's manual cut rather than adding another |
 | Do cuts affect one track or all? | **All tracks**, as now. Per-track edits are out of scope |
+| When does this land relative to other roadmap items? | **Phase 1 early** (roadmap item 2, after Private AI), because take dividers, music/SFX tracks, unsynced clips and the Properties panel all build on its lanes. Phases 2–4 stay later |
 | Are splits persisted? | **Yes**, `timeline_splits` on the project, so they survive reloads and can become clip boundaries for Phase 5 |
 | Inserted silence: digital silence or room tone? | **Room tone** from the same speaker's track |
 | Where do volume, Studio sound and loudness live? | **Volume** (track and range gain) in this plan; **Studio sound** in recording-studio Phase 7, with controls in this plan's Properties panel; **loudness** stays the final `loudnorm` after the mix, with a selectable target |
