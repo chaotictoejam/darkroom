@@ -573,18 +573,50 @@ _AAC = ["-c:a", "aac", "-b:a", "192k"]
 _TARGET_LUFS = -16.0
 _PEAK_CEILING_DB = -1.5
 
+# Bringing a quiet recording up to _TARGET_LUFS lifts its room noise by the
+# same amount, so the export also gets background-noise cleanup: a high-pass
+# for rumble and hum, and a gentle expander that turns pauses down by up to
+# _PAUSE_REDUCTION_DB. The expander opens _GATE_MARGIN_DB above the measured
+# noise floor, but never higher than _GATE_MAX_DB, so quiet speech stays put.
+_HIGHPASS_HZ = 80
+_PAUSE_REDUCTION_DB = 14.0
+_GATE_MARGIN_DB = 10.0
+_GATE_MAX_DB = -30.0
 
-def _measure_loudness(audio_path: str) -> float | None:
-    """Integrated loudness of a file in LUFS, or None if it's silent."""
+
+def _measure_loudness(audio_path: str) -> tuple[float, float] | None:
+    """
+    Integrated loudness of a file in LUFS and its noise floor in dBFS (the
+    10th percentile of 100 ms RMS levels), or None if it's silent.
+    """
+    rms = ("aresample=48000,asetnsamples=n=4800,"
+           "astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=RMS_level,"
+           "ametadata=print:key=lavfi.astats.Overall.RMS_level")
     result = subprocess.run(
         ["ffmpeg", "-hide_banner", "-nostats", "-i", audio_path,
-         "-af", "loudnorm=print_format=json", "-f", "null", "-"],
+         "-af", f"{rms},loudnorm=print_format=json", "-f", "null", "-"],
         capture_output=True, text=True, check=True,
     )
     # The JSON block is followed by ffmpeg's own summary lines
     stats, _ = json.JSONDecoder().raw_decode(result.stderr, result.stderr.rindex("{"))
     loudness = float(stats["input_i"])  # "-inf" for digital silence
-    return loudness if loudness > -70 else None
+    levels = sorted(
+        float(line.rsplit("=", 1)[1])
+        for line in result.stderr.splitlines()
+        if "lavfi.astats.Overall.RMS_level=" in line and not line.endswith("inf")
+    )
+    if loudness <= -70 or not levels:
+        return None
+    return loudness, levels[len(levels) // 10]
+
+
+def _cleanup_filter(gain: float, noise_floor: float) -> str:
+    """High-pass plus pause expander for a mix whose noise sits at
+    `noise_floor` dBFS before `gain` dB is applied."""
+    threshold_db = min(noise_floor + gain + _GATE_MARGIN_DB, _GATE_MAX_DB)
+    return (f"highpass=f={_HIGHPASS_HZ},"
+            f"agate=threshold={10 ** (threshold_db / 20):.5f}:ratio=2"
+            f":range={10 ** (-_PAUSE_REDUCTION_DB / 20):.4f}:attack=5:release=250")
 
 
 def _encode_normalized(head: list[str], video_codec: list[str], audio_codec: list[str],
@@ -592,7 +624,8 @@ def _encode_normalized(head: list[str], video_codec: list[str], audio_codec: lis
     """
     Run `head` (ffmpeg, its inputs and a -filter_complex producing [outa], and
     [outv] when `video_codec` is given) and write `output_path` with the audio
-    brought to _TARGET_LUFS by one constant gain.
+    brought to _TARGET_LUFS by one constant gain, then cleaned up (see
+    _cleanup_filter).
 
     A single-pass loudnorm normalises dynamically: it rides the gain up in
     every pause, so background hiss ends up far louder than in the editor.
@@ -609,10 +642,14 @@ def _encode_normalized(head: list[str], video_codec: list[str], audio_codec: lis
         cmd += ["-map", "[outa]", "-c:a", "pcm_f32le", mix]
         _run_ffmpeg(cmd)
 
-        loudness = _measure_loudness(mix)
-        gain = _TARGET_LUFS - loudness if loudness is not None else 0.0
+        filters = []
+        measured = _measure_loudness(mix)
+        if measured:
+            loudness, noise_floor = measured
+            gain = _TARGET_LUFS - loudness
+            filters += [f"volume={gain:.2f}dB", _cleanup_filter(gain, noise_floor)]
         limit = 10 ** (_PEAK_CEILING_DB / 20)
-        audio_filter = f"volume={gain:.2f}dB,alimiter=limit={limit:.4f}:level=0"
+        audio_filter = ",".join([*filters, f"alimiter=limit={limit:.4f}:level=0"])
 
         cmd = ["ffmpeg", "-y"]
         if video:

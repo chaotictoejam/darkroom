@@ -51,3 +51,10 @@ def test_mute_filter_is_relative_to_clip():
     assert renderer._mute_filter([{"start": 5.2, "end": 5.4}], 5.0, 8.0) == \
         ",volume=0:enable='between(t,0.200,0.400)'"
     assert renderer._mute_filter([{"start": 1, "end": 2}], 5.0, 8.0) == ""
+
+
+def test_cleanup_gate_tracks_noise_floor():
+    # Noise at -70 dBFS lifted by 20 dB: the expander opens 10 dB above it
+    assert "agate=threshold=0.00316:" in renderer._cleanup_filter(20, -70)
+    # A noisy recording never gets a threshold above -30 dBFS, so speech is left alone
+    assert "agate=threshold=0.03162:" in renderer._cleanup_filter(22, -60)
