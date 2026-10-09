@@ -60,7 +60,7 @@ Full plan, Bedrock data-handling validation and TODO list: **[docs/private-ai.md
 
 **Involves:** moving the timeline out of `Editor.tsx` into `components/Timeline/`; a ruler and lanes in edited time with cut markers; a script lane of phrase and gap blocks; one waveform lane per speaker; shared selection with the transcript.
 
-Phase 1 of **[docs/timeline-editing.md](docs/timeline-editing.md)**; the rest is item 10.
+Phase 1 of **[docs/timeline-editing.md](docs/timeline-editing.md)**; the rest is item 11.
 
 ### 3. Recording studio and new project flow (Phases 2–7)
 
