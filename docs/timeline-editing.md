@@ -39,7 +39,7 @@ Make the editor's timeline a place to edit, not just to look. Today most editing
 
 Related pieces this plan builds on:
 
-- `buildKeptRanges`, `sourceToOutputTime` and `outputToSourceTime` in `Editor.tsx` already convert between source and edited time for the preview proxy.
+- `buildKeptRanges`, `sourceToOutputTime` and `outputToSourceTime` in `components/Timeline/timeMap.ts` already convert between source and edited time for the preview proxy.
 - The transcript already shows pause chips (≥ 0.5 s, `MIN_PAUSE`) and gap chips where cuts were made, toggles silence-only EDL segments as a whole, and has "undo last cut" (`Ctrl+Z`, cuts only).
 - `word_cuts` and `word_mutes` already apply in the preview, full edit, vertical and MP3/WAV renders. So shortening gaps and deleting split pieces need **no renderer changes**; only lengthening a gap does.
 
@@ -155,7 +155,7 @@ Shortcuts are ignored while typing in an input or editing a transcript word.
 
 ### Code layout
 
-`Editor.tsx` is ~1,500 lines; the timeline moves to `frontend/src/components/Timeline/`:
+The timeline lives in `frontend/src/components/Timeline/`:
 
 - `Timeline.tsx` (container: zoom/pan, ruler, playhead, selection, keyboard)
 - `ScriptLane.tsx`, `WaveformLane.tsx`, `CutMarker.tsx`
@@ -182,7 +182,7 @@ New project fields (in `new_project()` **and** `_DEFAULTS`, plus `api/types.ts`)
 
 ### Phase 1: Timeline in edited time, with lanes
 
-- [ ] Move `Timeline` and the source ↔ output mapping out of `Editor.tsx` into `components/Timeline/` (no behaviour change)
+- [x] Move `Timeline` and the source ↔ output mapping out of `Editor.tsx` into `components/Timeline/` (no behaviour change)
 - [ ] Ruler and lanes in output time; cut markers with hover details and click-to-restore; **Show cuts** toggle for source time
 - [ ] Script lane: phrase blocks per speaker and gap blocks with duration labels; word-level blocks at high zoom; render only the visible window
 - [ ] One waveform lane per speaker
