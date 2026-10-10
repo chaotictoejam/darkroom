@@ -76,6 +76,8 @@ export interface AiStatus {
   model: string
   /** Where the transcript is sent when Analyse runs, e.g. "Bedrock in your AWS account (us-east-1)" */
   destination: string
+  /** One line on where it's processed and who can see it, shown before Analyse runs */
+  detail: string
   configured: boolean
 }
 
