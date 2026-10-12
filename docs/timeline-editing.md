@@ -39,7 +39,7 @@ Make the editor's timeline a place to edit, not just to look. Today most editing
 
 Related pieces this plan builds on:
 
-- `buildKeptRanges`, `sourceToOutputTime` and `outputToSourceTime` in `Editor.tsx` already convert between source and edited time for the preview proxy.
+- `buildKeptRanges`, `sourceToOutputTime` and `outputToSourceTime` in `components/Timeline/timeMap.ts` already convert between source and edited time for the preview proxy.
 - The transcript already shows pause chips (≥ 0.5 s, `MIN_PAUSE`) and gap chips where cuts were made, toggles silence-only EDL segments as a whole, and has "undo last cut" (`Ctrl+Z`, cuts only).
 - `word_cuts` and `word_mutes` already apply in the preview, full edit, vertical and MP3/WAV renders. So shortening gaps and deleting split pieces need **no renderer changes**; only lengthening a gap does.
 
@@ -155,7 +155,7 @@ Shortcuts are ignored while typing in an input or editing a transcript word.
 
 ### Code layout
 
-`Editor.tsx` is ~1,500 lines; the timeline moves to `frontend/src/components/Timeline/`:
+The timeline lives in `frontend/src/components/Timeline/`:
 
 - `Timeline.tsx` (container: zoom/pan, ruler, playhead, selection, keyboard)
 - `ScriptLane.tsx`, `WaveformLane.tsx`, `CutMarker.tsx`
@@ -182,7 +182,7 @@ New project fields (in `new_project()` **and** `_DEFAULTS`, plus `api/types.ts`)
 
 ### Phase 1: Timeline in edited time, with lanes
 
-- [ ] Move `Timeline` and the source ↔ output mapping out of `Editor.tsx` into `components/Timeline/` (no behaviour change)
+- [x] Move `Timeline` and the source ↔ output mapping out of `Editor.tsx` into `components/Timeline/` (no behaviour change)
 - [ ] Ruler and lanes in output time; cut markers with hover details and click-to-restore; **Show cuts** toggle for source time
 - [ ] Script lane: phrase blocks per speaker and gap blocks with duration labels; word-level blocks at high zoom; render only the visible window
 - [ ] One waveform lane per speaker
@@ -234,6 +234,7 @@ New project fields (in `new_project()` **and** `_DEFAULTS`, plus `api/types.ts`)
 | Where does a shortened gap's cut go? | **Centred in the gap**, keeping at least 0.1 s, so word tails and onsets are never clipped whichever edge is dragged |
 | Re-dragging a gap? | **Replaces** that gap's manual cut rather than adding another |
 | Do cuts affect one track or all? | **All tracks**, as now. Per-track edits are out of scope |
+| When does this land relative to other roadmap items? | **Phase 1 early** (roadmap item 2, after Private AI), because take dividers, music/SFX tracks, unsynced clips and the Properties panel all build on its lanes. Phases 2–4 stay later |
 | Are splits persisted? | **Yes**, `timeline_splits` on the project, so they survive reloads and can become clip boundaries for Phase 5 |
 | Inserted silence: digital silence or room tone? | **Room tone** from the same speaker's track |
 | Where do volume, Studio sound and loudness live? | **Volume** (track and range gain) in this plan; **Studio sound** in recording-studio Phase 7, with controls in this plan's Properties panel; **loudness** stays the final `loudnorm` after the mix, with a selectable target |
