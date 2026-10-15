@@ -12,6 +12,15 @@ _TRANSCRIPT = [
 _SPEAKERS = [{"id": "A", "name": "Joanne"}]
 
 
+def _raise(exc: Exception):
+    raise exc
+
+
+def _client_error(code: str, operation: str):
+    from botocore.exceptions import ClientError
+    return ClientError({"Error": {"Code": code, "Message": "nope"}}, operation)
+
+
 class _FakeBedrock:
     """Stands in for boto3's bedrock-runtime client; streams `text` in small chunks."""
 
@@ -37,6 +46,7 @@ def bedrock(monkeypatch):
     fake = _FakeBedrock([])
     monkeypatch.setenv("AI_PROVIDER", "bedrock")
     monkeypatch.setattr(boto3, "client", lambda *a, **k: fake)
+    monkeypatch.setattr(editor, "_profile_prefixes", lambda region, model: {"us", "eu", "global"})
     return fake
 
 
@@ -110,11 +120,29 @@ def test_transcript_times_are_given_in_seconds():
 # ── ai_status: where Analyse sends the transcript ─────────────────────────────
 
 
+# Inference profiles for Sonnet 4.5 per region, from ListInferenceProfiles on 15 Oct 2026
+_PROFILES = {
+    "us-east-1": {"us", "global"},
+    "eu-west-1": {"eu", "global"},
+    "ap-northeast-1": {"jp", "global"},
+    "ap-southeast-2": {"au", "global"},
+    "ap-south-1": {"global"},
+    "ca-central-1": {"us", "global"},
+    "sa-east-1": {"global"},
+}
+
+
 @pytest.fixture
 def bedrock_env(monkeypatch):
     monkeypatch.setenv("AI_PROVIDER", "bedrock")
     monkeypatch.setenv("AWS_REGION", "eu-west-1")
+    monkeypatch.delenv("BEDROCK_MODEL_ID", raising=False)
+    monkeypatch.delenv("BEDROCK_IN_REGION", raising=False)
+    monkeypatch.delenv("BEDROCK_ALLOW_RETENTION_MODELS", raising=False)
     monkeypatch.setattr(editor, "_bedrock_credentials_found", lambda: True)
+    monkeypatch.setattr(editor, "_account_retention_mode", lambda region: "none")
+    monkeypatch.setattr(editor, "_profile_prefixes", lambda region, model: _PROFILES[region])
+    monkeypatch.setattr(editor, "_supports_in_region", lambda region, model: False)
     return monkeypatch
 
 
@@ -156,18 +184,219 @@ def test_ai_status_bedrock_geographic_profile_warns_other_regions(bedrock_env, p
     assert "not only eu-west-1" in detail
 
 
-def test_ai_status_bedrock_global_profile_says_worldwide(bedrock_env):
+def test_ai_status_bedrock_global_profile_is_blocked(bedrock_env):
     bedrock_env.setenv("BEDROCK_MODEL_ID", "global.anthropic.claude-sonnet-4-5-20250929-v1:0")
-    assert "any AWS commercial region worldwide" in editor.ai_status()["detail"]
-
-
-def test_ai_status_bedrock_default_model_is_us_profile(bedrock_env):
-    bedrock_env.delenv("BEDROCK_MODEL_ID", raising=False)
     status = editor.ai_status()
-    assert status["model"].startswith("us.")
-    assert "other regions in the US" in status["detail"]
+    assert "any AWS commercial region worldwide" in status["detail"]
+    assert "global inference profile" in status["blocked"]
+    assert editor.ai_refusal() == status["blocked"]
+
+
+@pytest.mark.parametrize("region, prefix", [
+    ("us-east-1", "us."),
+    ("eu-west-1", "eu."),
+    ("ap-northeast-1", "jp."),
+    ("ap-southeast-2", "au."),
+])
+def test_ai_status_bedrock_default_model_uses_regions_profile(bedrock_env, region, prefix):
+    bedrock_env.setenv("AWS_REGION", region)
+    status = editor.ai_status()
+    assert status["model"] == prefix + editor._BEDROCK_BASE_MODEL
+    assert status["warnings"] == []
+    assert status["blocked"] is None
+
+
+def test_default_model_never_falls_back_to_another_geography(bedrock_env):
+    bedrock_env.setenv("AWS_REGION", "ca-central-1")
+    blocked = editor.ai_status()["blocked"]
+    assert "no inference profile for ca-central-1's geography" in blocked
+    assert f"us.{editor._BEDROCK_BASE_MODEL} (the US)" in blocked
+    assert editor.ai_refusal() == blocked
+
+
+@pytest.mark.parametrize("region", ["ap-south-1", "sa-east-1"])
+def test_default_model_with_only_global_profile_is_blocked(bedrock_env, region):
+    bedrock_env.setenv("AWS_REGION", region)
+    assert "only a global one (refused)" in editor.ai_status()["blocked"]
+
+
+def test_failed_profile_lookup_uses_confirmed_fallback_with_warning(bedrock_env):
+    def _denied(region, model):
+        raise _client_error("AccessDeniedException", "ListInferenceProfiles")
+
+    bedrock_env.setattr(editor, "_profile_prefixes", _denied)
+    status = editor.ai_status()
+    assert status["model"] == "eu." + editor._BEDROCK_BASE_MODEL
+    assert status["blocked"] is None
+    assert any("lack bedrock:ListInferenceProfiles" in w for w in status["warnings"])
+
+
+def test_failed_profile_lookup_without_confirmed_fallback_is_blocked(bedrock_env):
+    bedrock_env.setenv("AWS_REGION", "ca-central-1")
+    bedrock_env.setattr(editor, "_profile_prefixes", lambda region, model: _raise(OSError("offline")))
+    assert "Set BEDROCK_MODEL_ID" in editor.ai_status()["blocked"]
+
+
+def test_ai_status_without_credentials_makes_no_lookups(bedrock_env):
+    bedrock_env.setattr(editor, "_bedrock_credentials_found", lambda: False)
+    bedrock_env.setattr(editor, "_profile_prefixes", lambda region, model: _raise(AssertionError("looked up")))
+    status = editor.ai_status()
+    assert status["configured"] is False
+    assert status["model"] == "eu." + editor._BEDROCK_BASE_MODEL
+
+
+def test_explicit_model_id_skips_profile_lookup(bedrock_env):
+    bedrock_env.setenv("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
+    bedrock_env.setattr(editor, "_profile_prefixes", lambda region, model: _raise(AssertionError("looked up")))
+    assert editor.ai_status()["model"] == "us.anthropic.claude-sonnet-4-6"
+
+
+def test_in_region_unsupported_model_is_blocked(bedrock_env):
+    bedrock_env.setenv("BEDROCK_IN_REGION", "1")
+    status = editor.ai_status()
+    assert status["model"] == editor._BEDROCK_BASE_MODEL
+    assert "can't be called in-region in eu-west-1" in status["blocked"]
+
+
+def test_in_region_supported_model_processes_in_region_only(bedrock_env):
+    bedrock_env.setenv("BEDROCK_IN_REGION", "1")
+    bedrock_env.setattr(editor, "_supports_in_region", lambda region, model: True)
+    status = editor.ai_status()
+    assert status["blocked"] is None
+    assert status["detail"].startswith("Processed in eu-west-1 only.")
+
+
+def test_in_region_check_failure_warns(bedrock_env):
+    bedrock_env.setenv("BEDROCK_IN_REGION", "1")
+    bedrock_env.setattr(editor, "_supports_in_region", lambda region, model: _raise(OSError("offline")))
+    status = editor.ai_status()
+    assert status["blocked"] is None
+    assert any("Couldn't check" in w and "in-region" in w for w in status["warnings"])
+
+
+def test_ai_status_bedrock_profile_outside_region_geography_warns(bedrock_env):
+    bedrock_env.setenv("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+    assert any("outside eu-west-1's geography" in w for w in editor.ai_status()["warnings"])
 
 
 def test_ai_status_bedrock_without_credentials_is_not_configured(bedrock_env):
     bedrock_env.setattr(editor, "_bedrock_credentials_found", lambda: False)
     assert editor.ai_status()["configured"] is False
+
+
+# ── Bedrock lock-down: retention mode, retention-only models ──────────────────
+
+def test_ai_status_bedrock_retention_none_says_not_stored(bedrock_env):
+    status = editor.ai_status()
+    assert status["retention_mode"] == "none"
+    assert status["detail"].endswith("Not stored: your account's data retention mode is none.")
+    assert status["warnings"] == []
+    assert status["blocked"] is None
+
+
+@pytest.mark.parametrize("mode", ["default", "aws_review", "provider_data_share", "inherit"])
+def test_ai_status_bedrock_other_retention_mode_warns_without_blocking(bedrock_env, mode):
+    bedrock_env.setattr(editor, "_account_retention_mode", lambda region: mode)
+    status = editor.ai_status()
+    assert status["retention_mode"] == mode
+    assert "Not stored" not in status["detail"]
+    assert any(f'"{mode}", not "none"' in w for w in status["warnings"])
+    assert status["blocked"] is None
+
+
+def test_ai_status_bedrock_failed_retention_check_warns(bedrock_env):
+    pytest.importorskip("botocore")
+
+    def _denied(region):
+        raise _client_error("AccessDeniedException", "GetAccountDataRetention")
+
+    bedrock_env.setattr(editor, "_account_retention_mode", _denied)
+    status = editor.ai_status()
+    assert status["retention_mode"] is None
+    assert "Not stored" not in status["detail"]
+    assert any("lack bedrock:GetAccountDataRetention" in w for w in status["warnings"])
+    assert status["blocked"] is None
+
+
+def test_ai_status_bedrock_without_credentials_skips_retention_check(bedrock_env):
+    bedrock_env.setattr(editor, "_bedrock_credentials_found", lambda: False)
+
+    def _unexpected(region):
+        raise AssertionError("retention checked without credentials")
+
+    bedrock_env.setattr(editor, "_account_retention_mode", _unexpected)
+    assert editor.ai_status()["retention_mode"] is None
+
+
+@pytest.mark.parametrize("model", [
+    "us.anthropic.claude-fable-5-v1:0",
+    "eu.anthropic.claude-fable-5-1-v1:0",
+])
+def test_retention_only_models_are_refused_by_default(bedrock_env, model):
+    bedrock_env.setenv("BEDROCK_MODEL_ID", model)
+    status = editor.ai_status()
+    assert "BEDROCK_ALLOW_RETENTION_MODELS=1" in status["blocked"]
+    assert editor.ai_refusal() == status["blocked"]
+
+
+def test_retention_only_model_allowed_with_flag_warns(bedrock_env):
+    bedrock_env.setenv("BEDROCK_MODEL_ID", "eu.anthropic.claude-fable-5-1-v1:0")
+    bedrock_env.setenv("BEDROCK_ALLOW_RETENTION_MODELS", "1")
+    status = editor.ai_status()
+    assert status["blocked"] is None
+    assert "Not stored" not in status["detail"]
+    assert any("up to 30 days" in w for w in status["warnings"])
+
+
+def test_refused_model_is_never_called(bedrock, monkeypatch):
+    monkeypatch.setenv("BEDROCK_MODEL_ID", "global.anthropic.claude-sonnet-4-5-20250929-v1:0")
+    with pytest.raises(ValueError, match="global inference profile"):
+        editor.generate_edl(_TRANSCRIPT, _SPEAKERS)
+    assert bedrock.calls == 0
+
+
+def test_ai_refusal_ignores_other_providers(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDER", "anthropic")
+    monkeypatch.setenv("BEDROCK_MODEL_ID", "global.anthropic.claude-sonnet-4-5-20250929-v1:0")
+    assert editor.ai_refusal() is None
+
+
+# ── Live lookups: parsing and caching ─────────────────────────────────────────
+
+class _FakeControl:
+    """Stands in for boto3's bedrock client: two pages of inference profiles."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def list_inference_profiles(self, **kwargs):
+        self.calls += 1
+        if "nextToken" not in kwargs:
+            return {"inferenceProfileSummaries": [
+                {"inferenceProfileId": f"us.{editor._BEDROCK_BASE_MODEL}"},
+                {"inferenceProfileId": "us.anthropic.claude-sonnet-4-6"},
+            ], "nextToken": "page2"}
+        return {"inferenceProfileSummaries": [{"inferenceProfileId": f"global.{editor._BEDROCK_BASE_MODEL}"}]}
+
+
+def test_profile_prefixes_reads_every_page_and_is_cached(monkeypatch):
+    fake = _FakeControl()
+    monkeypatch.setattr(editor, "_bedrock_control_client", lambda region: fake)
+    monkeypatch.setattr(editor, "_lookup_cache", {})
+    assert editor._profile_prefixes("us-east-1", editor._BEDROCK_BASE_MODEL) == {"us", "global"}
+    assert editor._profile_prefixes("us-east-1", editor._BEDROCK_BASE_MODEL) == {"us", "global"}
+    assert fake.calls == 2  # one lookup, two pages
+
+
+def test_failed_lookup_is_cached_briefly(monkeypatch):
+    calls = []
+
+    def _fetch():
+        calls.append(1)
+        raise OSError("offline")
+
+    monkeypatch.setattr(editor, "_lookup_cache", {})
+    for _ in range(2):
+        with pytest.raises(OSError):
+            editor._cached(("test",), _fetch)
+    assert len(calls) == 1

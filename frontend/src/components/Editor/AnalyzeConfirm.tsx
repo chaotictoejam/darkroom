@@ -45,6 +45,9 @@ export default function AnalyzeConfirm({
             <code style={{ fontSize: 12 }}>{ai.model}</code> can write the edit decision list.
           </div>
           <div style={{ color: thirdParty ? '#e8a33d' : 'inherit' }}>{ai.detail}</div>
+          {ai.warnings.map((w) => (
+            <div key={w} style={{ color: '#e8a33d' }}>⚠ {w}</div>
+          ))}
         </div>
         <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
           <button

@@ -79,8 +79,8 @@ export default function Editor({ project, onChange, onBack }: Props) {
   useEffect(() => {
     api.status().then((s) => {
       setAi(s.ai)
-      // Auto-open manual analysis panel when no AI provider is set up
-      if (!s.ai.configured && !project.edl) {
+      // Auto-open manual analysis panel when no AI provider is set up (or it is refused)
+      if ((!s.ai.configured || s.ai.blocked) && !project.edl) {
         setOpenPanels((prev) => new Set([...prev, 'manual']))
       }
     })
@@ -278,12 +278,12 @@ export default function Editor({ project, onChange, onBack }: Props) {
               {analyzeError}
             </span>
           )}
-          {!hasEdl && ai?.configured && (
+          {!hasEdl && ai?.configured && !ai.blocked && (
             <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>
               {analyzing && analyzeMessage ? analyzeMessage : `Sends the transcript to ${ai.destination}`}
             </span>
           )}
-          {!hasEdl && ai?.configured && (
+          {!hasEdl && ai?.configured && !ai.blocked && (
             <button
               onClick={() => setConfirmingAnalyze(true)}
               disabled={analyzing}
@@ -295,6 +295,11 @@ export default function Editor({ project, onChange, onBack }: Props) {
             >
               {analyzing ? 'Analyzing…' : 'Analyze with AI →'}
             </button>
+          )}
+          {!hasEdl && ai?.configured && ai.blocked && (
+            <span title={ai.blocked} style={{ color: '#e8a33d', fontSize: 12, maxWidth: 420 }}>
+              Analyse refused: {ai.blocked}
+            </span>
           )}
           {!hasEdl && ai?.configured === false && (
             <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>

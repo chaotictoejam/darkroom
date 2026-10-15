@@ -5,6 +5,8 @@ editor.py — Claude EDL generation via Anthropic API or AWS Bedrock
 import json
 import os
 import re
+import threading
+import time
 from typing import Callable
 
 from .transcription import format_for_claude
@@ -84,7 +86,7 @@ def generate_skip_edl(merged_transcript: list[dict], speakers: list[dict]) -> di
 
 
 _ANTHROPIC_MODEL = "claude-sonnet-4-6"
-_DEFAULT_BEDROCK_MODEL = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+_BEDROCK_BASE_MODEL = "anthropic.claude-sonnet-4-5-20250929-v1:0"
 
 
 def _bedrock_credentials_found() -> bool:
@@ -108,16 +110,222 @@ _PROFILE_GEOGRAPHIES = {
     "ca": "Canada",
 }
 
+# Profiles used when the live lookup fails: only those confirmed with ListInferenceProfiles
+# for _BEDROCK_BASE_MODEL (15 Oct 2026). There was no apac. or ca. profile for it.
+_FALLBACK_PREFIXES = {"us", "eu", "jp", "au"}
+
+# Models that only run with the account's data retention mode set to `aws_review`
+# (https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html)
+_RETENTION_REQUIRED_MODELS = ("anthropic.claude-fable-5",)
+
+
+def _region_geographies(region: str) -> list[str]:
+    """Inference-profile prefixes that keep a request in `region`'s own geography, narrowest first."""
+    if region.startswith("us-gov-"):
+        return ["us-gov"]
+    if region in ("ap-northeast-1", "ap-northeast-3"):
+        return ["jp", "apac"]
+    if region in ("ap-southeast-2", "ap-southeast-4"):
+        return ["au", "apac"]
+    for geo_prefix, profile in (("us-", "us"), ("eu-", "eu"), ("ap-", "apac"), ("ca-", "ca")):
+        if region.startswith(geo_prefix):
+            return [profile]
+    return []
+
+
+def _model_prefix(model: str) -> str:
+    """The inference-profile prefix of a Bedrock model ID ("" for an in-region model ID)."""
+    prefix = model.split(".", 1)[0] if "." in model else ""
+    return prefix if prefix in _PROFILE_GEOGRAPHIES or prefix == "global" else ""
+
+
+# ── Live Bedrock lookups (cached; they run while the Editor loads) ─────────────
+
+_LOOKUP_TTL = 600
+_LOOKUP_FAILURE_TTL = 60
+_lookup_cache: dict[tuple, tuple[float, object]] = {}
+_lookup_lock = threading.Lock()
+
+
+def _bedrock_control_client(region: str):
+    import boto3
+    from botocore.config import Config
+    # Short timeouts: this runs while the Editor loads, and may be offline
+    config = Config(connect_timeout=3, read_timeout=5, retries={"max_attempts": 1})
+    return boto3.client("bedrock", region_name=region, config=config)
+
+
+def _cached(key: tuple, fetch: Callable[[], object]):
+    """fetch()'s result for `key`, cached; a failure is cached briefly and re-raised."""
+    now = time.monotonic()
+    with _lookup_lock:
+        hit = _lookup_cache.get(key)
+    if hit and hit[0] > now:
+        if isinstance(hit[1], Exception):
+            raise hit[1]
+        return hit[1]
+    try:
+        value = fetch()
+    except Exception as exc:
+        with _lookup_lock:
+            _lookup_cache[key] = (now + _LOOKUP_FAILURE_TTL, exc)
+        raise
+    with _lookup_lock:
+        _lookup_cache[key] = (now + _LOOKUP_TTL, value)
+    return value
+
+
+def _profile_prefixes(region: str, base_model: str) -> set[str]:
+    """Prefixes of the AWS-defined inference profiles for `base_model` that `region` can call."""
+    def _fetch() -> set[str]:
+        client = _bedrock_control_client(region)
+        prefixes: set[str] = set()
+        token = None
+        while True:
+            kwargs = {"typeEquals": "SYSTEM_DEFINED", "maxResults": 1000}
+            if token:
+                kwargs["nextToken"] = token
+            response = client.list_inference_profiles(**kwargs)
+            for profile in response["inferenceProfileSummaries"]:
+                prefix, _, model = profile["inferenceProfileId"].partition(".")
+                if model == base_model:
+                    prefixes.add(prefix)
+            token = response.get("nextToken")
+            if not token:
+                return prefixes
+    return _cached(("profiles", region, base_model), _fetch)
+
+
+def _supports_in_region(region: str, base_model: str) -> bool:
+    """Whether `base_model` can be called directly in `region`, without an inference profile."""
+    def _fetch() -> bool:
+        details = _bedrock_control_client(region).get_foundation_model(modelIdentifier=base_model)
+        return "ON_DEMAND" in details["modelDetails"]["inferenceTypesSupported"]
+    return _cached(("in_region", region, base_model), _fetch)
+
+
+def _account_retention_mode(region: str) -> str:
+    """The account's Bedrock data retention mode in `region` (raises if it can't be read)."""
+    return _bedrock_control_client(region).get_account_data_retention()["mode"]
+
+
+def _lookup_error(exc: Exception, permission: str) -> str:
+    code = getattr(exc, "response", {}).get("Error", {}).get("Code", "")
+    if code in ("AccessDeniedException", "AccessDenied", "UnauthorizedOperation"):
+        return f"your AWS credentials lack {permission}"
+    return str(exc) or type(exc).__name__
+
+
+# ── Choosing and checking the Bedrock model ───────────────────────────────────
+
+def _resolve_in_region(region: str, lookup: bool) -> tuple[str, str | None, list[str]]:
+    model = _BEDROCK_BASE_MODEL
+    if not lookup:
+        return model, None, []
+    try:
+        if not _supports_in_region(region, model):
+            return model, (
+                f"{model} can't be called in-region in {region}, only through an inference profile. "
+                f"Unset BEDROCK_IN_REGION to use the profile for {region}'s geography."
+            ), []
+    except Exception as exc:
+        return model, None, [
+            f"Couldn't check that {model} can be called in-region in {region} "
+            f"({_lookup_error(exc, 'bedrock:GetFoundationModel')})."
+        ]
+    return model, None, []
+
+
+def _resolve_bedrock_model(region: str, lookup: bool = True) -> tuple[str, str | None, list[str]]:
+    """The model ID Analyse will use from `region`, why it's refused (or None), and warnings.
+
+    BEDROCK_MODEL_ID wins. Otherwise the default model goes through the inference profile for
+    `region`'s own geography, found with a live lookup (`lookup=False` skips AWS calls and uses
+    the confirmed fallbacks). Never silently picks a profile in another geography.
+    BEDROCK_IN_REGION=1 uses the plain model ID, so requests are processed in `region` only.
+    """
+    if model := os.getenv("BEDROCK_MODEL_ID"):
+        return model, None, []
+    if os.getenv("BEDROCK_IN_REGION") == "1":
+        return _resolve_in_region(region, lookup)
+
+    base = _BEDROCK_BASE_MODEL
+    geographies = _region_geographies(region)
+    warnings = []
+    available = None
+    if lookup:
+        try:
+            available = _profile_prefixes(region, base)
+        except Exception as exc:
+            warnings.append(
+                f"Couldn't look up Bedrock inference profiles in {region} "
+                f"({_lookup_error(exc, 'bedrock:ListInferenceProfiles')}); using Darkroom's built-in default."
+            )
+
+    if available is None:
+        prefix = next((p for p in geographies if p in _FALLBACK_PREFIXES), None)
+        if prefix is None:
+            return base, (
+                f"Darkroom doesn't know an inference profile for {base} in {region}'s geography. "
+                "Set BEDROCK_MODEL_ID to a geographic (us., eu., …) model ID you accept."
+            ), warnings
+        return f"{prefix}.{base}", None, warnings
+
+    prefix = next((p for p in geographies if p in available), None)
+    if prefix is not None:
+        return f"{prefix}.{base}", None, warnings
+    others = sorted(p for p in available if p in _PROFILE_GEOGRAPHIES)
+    if others:
+        options = ", ".join(f"{p}.{base} ({_PROFILE_GEOGRAPHIES[p]})" for p in others)
+        return base, (
+            f"{base} has no inference profile for {region}'s geography. Available from {region}: "
+            f"{options}. Set BEDROCK_MODEL_ID to one of them to accept processing there."
+        ), warnings
+    return base, (
+        f"{base} has no inference profile for {region}'s geography, only a global one (refused). "
+        f"Use another AWS_REGION, or set BEDROCK_MODEL_ID to a model available in {region}."
+    ), warnings
+
+
+def _allows_retention_models() -> bool:
+    return os.getenv("BEDROCK_ALLOW_RETENTION_MODELS") == "1"
+
+
+def _requires_retention(model: str) -> bool:
+    return any(m in model for m in _RETENTION_REQUIRED_MODELS)
+
+
+def _bedrock_refusal(model: str) -> str | None:
+    """Why Darkroom won't send a transcript to `model`, or None if it may."""
+    if _model_prefix(model) == "global":
+        return (
+            f"{model} is a global inference profile, which can be processed in any AWS region "
+            "worldwide. Use a geographic (us., eu., …) or in-region model ID."
+        )
+    if _requires_retention(model) and not _allows_retention_models():
+        return (
+            f"{model} requires Bedrock data retention mode aws_review: AWS keeps every request for "
+            "up to 30 days and staff may review flagged ones. Set BEDROCK_ALLOW_RETENTION_MODELS=1 "
+            "to allow it, or use a model that supports zero retention."
+        )
+    return None
+
+
+def _bedrock_choice(region: str, lookup: bool = True) -> tuple[str, str | None, list[str]]:
+    """_resolve_bedrock_model, plus Darkroom's refusals (global profiles, retention-only models)."""
+    model, blocked, warnings = _resolve_bedrock_model(region, lookup)
+    return model, blocked or _bedrock_refusal(model), warnings
+
 
 def _bedrock_detail(model: str, region: str) -> str:
     """Where Bedrock may process a request for `model`, called from `region`."""
-    prefix = model.split(".", 1)[0] if "." in model else ""
+    prefix = _model_prefix(model)
     if prefix == "global":
         return (
             "Global inference profile: may be processed in any AWS commercial region "
             "worldwide. Stays in AWS, not shared with Anthropic."
         )
-    if prefix in _PROFILE_GEOGRAPHIES:
+    if prefix:
         return (
             f"Cross-Region inference profile: may be processed in other regions in "
             f"{_PROFILE_GEOGRAPHIES[prefix]}, not only {region}. Stays in AWS, not shared with Anthropic."
@@ -125,18 +333,78 @@ def _bedrock_detail(model: str, region: str) -> str:
     return f"Processed in {region} only. Stays in AWS, not shared with Anthropic."
 
 
+def _geography_warning(model: str, region: str) -> str | None:
+    """A warning when `model`'s profile processes outside `region`'s geography."""
+    prefix = _model_prefix(model)
+    geographies = _region_geographies(region)
+    if not prefix or prefix == "global" or not geographies or prefix in geographies:
+        return None
+    # jp. and au. are narrower than apac., so either suits any Asia Pacific region
+    if prefix in ("jp", "au") and "apac" in geographies:
+        return None
+    return (
+        f"{model} is a profile for {_PROFILE_GEOGRAPHIES[prefix]} but AWS_REGION is {region}: "
+        f"requests are processed in {_PROFILE_GEOGRAPHIES[prefix]}, outside {region}'s geography."
+    )
+
+
+def _retention_warnings(model: str, mode: str | None, region: str) -> list[str]:
+    """What the Analyse confirmation should warn about, given the account's retention mode."""
+    warnings = []
+    if _requires_retention(model):
+        warnings.append(
+            f"{model} requires data retention mode aws_review: AWS keeps this transcript for up to "
+            "30 days for abuse detection and staff may review it if flagged. It is not shared with Anthropic."
+        )
+    if mode is not None and mode != "none":
+        warnings.append(
+            f"Your account's Bedrock data retention mode in {region} is \"{mode}\", not \"none\", so "
+            "AWS may store requests for models that allow it. Set it to none to guarantee nothing is kept."
+        )
+    return warnings
+
+
+def ai_refusal() -> str | None:
+    """Why Analyse must not run with the configured provider, or None (Bedrock lookups are cached)."""
+    if os.getenv("AI_PROVIDER", "anthropic").lower() != "bedrock":
+        return None
+    return _bedrock_choice(os.getenv("AWS_REGION", "us-east-1"))[1]
+
+
 def ai_status() -> dict:
     """Which AI provider Analyse will use, where the transcript goes, and whether it's set up."""
     provider = os.getenv("AI_PROVIDER", "anthropic").lower()
     if provider == "bedrock":
-        model = os.getenv("BEDROCK_MODEL_ID", _DEFAULT_BEDROCK_MODEL)
         region = os.getenv("AWS_REGION", "us-east-1")
+        configured = _bedrock_credentials_found()
+        # Without credentials the AWS lookups would only fail, so skip them
+        model, blocked, warnings = _bedrock_choice(region, lookup=configured)
+        detail = _bedrock_detail(model, region)
+        mode = None
+
+        if geography := _geography_warning(model, region):
+            warnings.append(geography)
+        if configured:
+            try:
+                mode = _account_retention_mode(region)
+            except Exception as exc:
+                warnings.append(
+                    f"Couldn't check your account's Bedrock data retention mode in {region} "
+                    f"({_lookup_error(exc, 'bedrock:GetAccountDataRetention')}). Make sure it is set to none."
+                )
+        if mode == "none" and not _requires_retention(model):
+            detail += " Not stored: your account's data retention mode is none."
+        warnings += _retention_warnings(model, mode, region)
+
         return {
             "provider": "bedrock",
             "model": model,
             "destination": f"Bedrock in your AWS account ({region})",
-            "detail": _bedrock_detail(model, region),
-            "configured": _bedrock_credentials_found(),
+            "detail": detail,
+            "configured": configured,
+            "retention_mode": mode,
+            "warnings": warnings,
+            "blocked": blocked,
         }
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
     return {
@@ -145,6 +413,9 @@ def ai_status() -> dict:
         "destination": "Anthropic's API (third party)",
         "detail": "Leaves this computer and is handled by Anthropic under its API data policy.",
         "configured": bool(api_key and api_key != "your_anthropic_api_key_here"),
+        "retention_mode": None,
+        "warnings": [],
+        "blocked": None,
     }
 
 
@@ -169,8 +440,10 @@ def _call_anthropic(prompt: str, on_text: Callable[[str], None]) -> tuple[str, s
 
 def _call_bedrock(prompt: str, on_text: Callable[[str], None]) -> tuple[str, str | None]:
     import boto3
-    model_id = os.getenv("BEDROCK_MODEL_ID", _DEFAULT_BEDROCK_MODEL)
     region = os.getenv("AWS_REGION", "us-east-1")
+    model_id, refusal, _ = _bedrock_choice(region)
+    if refusal:
+        raise ValueError(refusal)
     client = boto3.client("bedrock-runtime", region_name=region)
     body = json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
