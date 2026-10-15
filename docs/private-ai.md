@@ -94,7 +94,7 @@ What the EDL job needs from a local model:
 
 ### Phase 0: Fixes and visibility
 - [x] `/api/status` returns `{provider, model, destination, configured}`; fix Bedrock-only setups hiding Analyse
-- [ ] Analyse confirmation shows where the transcript will go; note on Manual Analysis
+- [x] Analyse confirmation shows where the transcript will go; note on Manual Analysis
 - [x] README/`.env.example`: "What leaves your machine" section, Anthropic API gap called out, Bedrock data handling summary with links and date checked
 
 ### Phase 1: Bedrock lock-down
@@ -125,6 +125,7 @@ What the EDL job needs from a local model:
 | Only Bedrock counts as "your cloud" for AI today | Prompts are processed in AWS-owned accounts the model provider can't access, and under the user's own AWS agreement, IAM and CloudTrail. |
 | Require (or strongly push) Bedrock data retention mode `none` | It's the only mode where AWS guarantees nothing is persisted, and it makes retention-requiring models fail closed. |
 | Keep the direct Anthropic API, as an opt-in, with the gap called out in the README | Easiest setup and a path for users without AWS or a capable machine, but it's a third party. The README's "What leaves your machine" section, the provider options and `.env.example` all say so. |
+| Analyse confirmation reads the region scope from the Bedrock model ID prefix (`us.`, `eu.`, `global.`, none) and doesn't say "not stored" yet | The prefix decides where a request can be processed, so the dialog can say it without an AWS call. "Not stored" is only true once Phase 1 checks the account's retention mode, so the dialog adds it then. |
 | Local provider must be loopback-only | "Local" has to mean the transcript never leaves the computer, not "whatever URL is in `.env`". |
 
 ## Open questions

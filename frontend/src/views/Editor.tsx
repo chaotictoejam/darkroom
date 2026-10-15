@@ -21,6 +21,7 @@ import EdlPanel from '../components/Editor/EdlPanel'
 import AdvancedTools from '../components/Editor/AdvancedTools'
 import RenderPanel from '../components/Editor/RenderPanel'
 import ManualAnalysis from '../components/Editor/ManualAnalysis'
+import AnalyzeConfirm from '../components/Editor/AnalyzeConfirm'
 import Timeline from '../components/Timeline/Timeline'
 import {
   buildKeptRanges,
@@ -44,6 +45,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
   const [analyzeError, setAnalyzeError] = useState<string | null>(null)
   const analyzeUnsubRef = useRef<(() => void) | null>(null)
   const [ai, setAi] = useState<AiStatus | null>(null)
+  const [confirmingAnalyze, setConfirmingAnalyze] = useState(false)
   const [openPanels, setOpenPanels] = useState<Set<SidePanel>>(
     () => new Set(project.edl ? (['edl'] as SidePanel[]) : []),
   )
@@ -91,6 +93,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
   }, [])
 
   async function handleAnalyze() {
+    setConfirmingAnalyze(false)
     setAnalyzing(true)
     setAnalyzeMessage(null)
     setAnalyzeError(null)
@@ -282,7 +285,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
           )}
           {!hasEdl && ai?.configured && (
             <button
-              onClick={handleAnalyze}
+              onClick={() => setConfirmingAnalyze(true)}
               disabled={analyzing}
               style={{
                 background: 'var(--accent)', color: '#fff', border: 'none',
@@ -300,6 +303,10 @@ export default function Editor({ project, onChange, onBack }: Props) {
           )}
         </div>
       </header>
+
+      {confirmingAnalyze && ai && (
+        <AnalyzeConfirm ai={ai} onCancel={() => setConfirmingAnalyze(false)} onConfirm={handleAnalyze} />
+      )}
 
       {/* ── Body ───────────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>

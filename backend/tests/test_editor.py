@@ -105,3 +105,69 @@ def test_validate_edl_rejects_large_overlap_of_kept_segments():
 def test_transcript_times_are_given_in_seconds():
     text = editor.build_prompt(_TRANSCRIPT, _SPEAKERS)
     assert "[13.00 - 30.00] Joanne: Um, so, today." in text
+
+
+# ── ai_status: where Analyse sends the transcript ─────────────────────────────
+
+
+@pytest.fixture
+def bedrock_env(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDER", "bedrock")
+    monkeypatch.setenv("AWS_REGION", "eu-west-1")
+    monkeypatch.setattr(editor, "_bedrock_credentials_found", lambda: True)
+    return monkeypatch
+
+
+def test_ai_status_anthropic_is_labelled_third_party(monkeypatch):
+    monkeypatch.delenv("AI_PROVIDER", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    status = editor.ai_status()
+    assert status["provider"] == "anthropic"
+    assert status["configured"] is True
+    assert "third party" in status["destination"]
+    assert "Leaves this computer" in status["detail"]
+
+
+def test_ai_status_anthropic_placeholder_key_is_not_configured(monkeypatch):
+    monkeypatch.setenv("AI_PROVIDER", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "your_anthropic_api_key_here")
+    assert editor.ai_status()["configured"] is False
+
+
+def test_ai_status_bedrock_names_account_and_region(bedrock_env):
+    bedrock_env.setenv("BEDROCK_MODEL_ID", "anthropic.claude-sonnet-4-5-20250929-v1:0")
+    status = editor.ai_status()
+    assert status["provider"] == "bedrock"
+    assert status["configured"] is True
+    assert status["destination"] == "Bedrock in your AWS account (eu-west-1)"
+    assert status["detail"].startswith("Processed in eu-west-1 only.")
+
+
+@pytest.mark.parametrize("prefix, geography", [
+    ("us", "the US"),
+    ("eu", "the EU"),
+    ("apac", "Asia Pacific"),
+    ("us-gov", "AWS GovCloud (US)"),
+])
+def test_ai_status_bedrock_geographic_profile_warns_other_regions(bedrock_env, prefix, geography):
+    bedrock_env.setenv("BEDROCK_MODEL_ID", f"{prefix}.anthropic.claude-sonnet-4-5-20250929-v1:0")
+    detail = editor.ai_status()["detail"]
+    assert f"other regions in {geography}" in detail
+    assert "not only eu-west-1" in detail
+
+
+def test_ai_status_bedrock_global_profile_says_worldwide(bedrock_env):
+    bedrock_env.setenv("BEDROCK_MODEL_ID", "global.anthropic.claude-sonnet-4-5-20250929-v1:0")
+    assert "any AWS commercial region worldwide" in editor.ai_status()["detail"]
+
+
+def test_ai_status_bedrock_default_model_is_us_profile(bedrock_env):
+    bedrock_env.delenv("BEDROCK_MODEL_ID", raising=False)
+    status = editor.ai_status()
+    assert status["model"].startswith("us.")
+    assert "other regions in the US" in status["detail"]
+
+
+def test_ai_status_bedrock_without_credentials_is_not_configured(bedrock_env):
+    bedrock_env.setattr(editor, "_bedrock_credentials_found", lambda: False)
+    assert editor.ai_status()["configured"] is False

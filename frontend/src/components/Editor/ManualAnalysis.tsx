@@ -5,6 +5,8 @@ import { useState } from 'react'
 import { api } from '../../api/client'
 import type { Project } from '../../api/types'
 
+export const MANUAL_NOTE = "Pasting the prompt into Claude sends the transcript to Anthropic (a third party)."
+
 export default function ManualAnalysis({
   project,
   onChange,
@@ -46,6 +48,7 @@ export default function ManualAnalysis({
         1. Copy the prompt and paste it into <strong style={{ color: highlight ? 'var(--accent)' : 'inherit' }}>Claude.ai</strong>.<br />
         2. Paste the JSON response back here and click Import.
       </p>
+      <p style={{ color: 'var(--text-muted)', fontSize: 12, margin: 0 }}>{MANUAL_NOTE}</p>
       <button
         onClick={handleCopy}
         style={{

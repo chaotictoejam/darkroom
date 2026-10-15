@@ -96,6 +96,35 @@ def _bedrock_credentials_found() -> bool:
         return False
 
 
+# Inference-profile prefixes and the geography each can process in
+# (https://docs.aws.amazon.com/bedrock/latest/userguide/geographic-cross-region-inference.html)
+_PROFILE_GEOGRAPHIES = {
+    "us": "the US",
+    "us-gov": "AWS GovCloud (US)",
+    "eu": "the EU",
+    "apac": "Asia Pacific",
+    "jp": "Japan",
+    "au": "Australia",
+    "ca": "Canada",
+}
+
+
+def _bedrock_detail(model: str, region: str) -> str:
+    """Where Bedrock may process a request for `model`, called from `region`."""
+    prefix = model.split(".", 1)[0] if "." in model else ""
+    if prefix == "global":
+        return (
+            "Global inference profile: may be processed in any AWS commercial region "
+            "worldwide. Stays in AWS, not shared with Anthropic."
+        )
+    if prefix in _PROFILE_GEOGRAPHIES:
+        return (
+            f"Cross-Region inference profile: may be processed in other regions in "
+            f"{_PROFILE_GEOGRAPHIES[prefix]}, not only {region}. Stays in AWS, not shared with Anthropic."
+        )
+    return f"Processed in {region} only. Stays in AWS, not shared with Anthropic."
+
+
 def ai_status() -> dict:
     """Which AI provider Analyse will use, where the transcript goes, and whether it's set up."""
     provider = os.getenv("AI_PROVIDER", "anthropic").lower()
@@ -106,6 +135,7 @@ def ai_status() -> dict:
             "provider": "bedrock",
             "model": model,
             "destination": f"Bedrock in your AWS account ({region})",
+            "detail": _bedrock_detail(model, region),
             "configured": _bedrock_credentials_found(),
         }
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
@@ -113,6 +143,7 @@ def ai_status() -> dict:
         "provider": "anthropic",
         "model": _ANTHROPIC_MODEL,
         "destination": "Anthropic's API (third party)",
+        "detail": "Leaves this computer and is handled by Anthropic under its API data policy.",
         "configured": bool(api_key and api_key != "your_anthropic_api_key_here"),
     }
 

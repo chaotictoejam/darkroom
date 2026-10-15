@@ -5,6 +5,7 @@ import { useState } from 'react'
 import { api } from '../../api/client'
 import type { Project } from '../../api/types'
 import { formatTimestamp } from '../../formatTime'
+import { MANUAL_NOTE } from './ManualAnalysis'
 
 export default function AdvancedTools({
   project,
@@ -83,6 +84,9 @@ export default function AdvancedTools({
               <div style={{ color: 'var(--text-muted)', fontSize: 13, lineHeight: 1.5 }}>
                 This will clear the current EDL and copy the analysis prompt to your clipboard.
                 Paste it into Claude to generate a new EDL.
+              </div>
+              <div style={{ color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.5, marginTop: 8 }}>
+                {MANUAL_NOTE}
               </div>
             </div>
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
