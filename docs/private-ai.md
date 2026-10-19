@@ -1,6 +1,6 @@
 # Private AI: Plan
 
-Status: **planned**, not started. Tracked in [ROADMAP.md](../ROADMAP.md).
+Status: **in progress** (Phases 0–1 done). Tracked in [ROADMAP.md](../ROADMAP.md).
 
 Darkroom's promise is that **nothing leaves your control**. Media and transcripts stay on your machine by default; when you want more speed or a bigger model, it runs in **your own cloud account** and stays there. The Analyse step (Claude generating the edit decision list) is the one place this isn't fully true today. This plan fixes that: add local AI models so Analyse works with nothing leaving the computer, and make the cloud option provably stay inside the user's AWS account.
 
@@ -73,7 +73,7 @@ What the EDL job needs from a local model:
 ### 2. Lock down Bedrock
 
 - **Check retention before calling.** Read the account's data retention mode for `AWS_REGION` (`GET /data-retention`, needs `bedrock:GetAccountDataRetention`). If it isn't `none`, warn in the UI. Refuse models that require `aws_review` unless the user explicitly allows it, with the 30-day/human-review explanation.
-- **Region control.** Default to a geographic profile matching `AWS_REGION` (never `global.`), and offer an in-region model ID for users who want processing to stay in exactly one region. Show the region(s) in the Analyse confirmation.
+- **Region control.** Default to a geographic profile matching `AWS_REGION` (never `global.`), and offer an in-region model ID for users who want processing to stay in exactly one region. Show the region(s) in the Analyse confirmation. Profile availability varies by model and region, so look it up rather than assume it (see Decisions).
 - **Least-privilege IAM.** Add an optional `infra/` stack (or documented policy) granting only `bedrock:InvokeModel` on the chosen profile/model plus `bedrock:GetAccountDataRetention`, and an example SCP that pins data retention to `none`.
 - **Never enable invocation logging** from Darkroom; mention in the docs that if the user has enabled it, prompts land in their own CloudWatch/S3.
 
@@ -98,10 +98,10 @@ What the EDL job needs from a local model:
 - [x] README/`.env.example`: "What leaves your machine" section, Anthropic API gap called out, Bedrock data handling summary with links and date checked
 
 ### Phase 1: Bedrock lock-down
-- [ ] Check account data retention mode before calling; warn when not `none`
-- [ ] Refuse `aws_review`-only models (Claude Fable 5/5.1) unless explicitly allowed
-- [ ] Geographic profile matching `AWS_REGION` by default; in-region option; never `global.`
-- [ ] Least-privilege IAM policy and example retention SCP (`infra/` or docs)
+- [x] Check account data retention mode before calling; warn when not `none`
+- [x] Refuse `aws_review`-only models (Claude Fable 5/5.1) unless explicitly allowed
+- [x] Geographic profile matching `AWS_REGION` by default (live `ListInferenceProfiles` lookup); in-region option; never `global.`
+- [x] Least-privilege IAM policy and example retention SCP ([bedrock-iam.md](bedrock-iam.md))
 
 ### Phase 2: Local provider (server)
 - [ ] `AI_PROVIDER=local` with OpenAI-compatible base URL, loopback-only
@@ -126,10 +126,15 @@ What the EDL job needs from a local model:
 | Require (or strongly push) Bedrock data retention mode `none` | It's the only mode where AWS guarantees nothing is persisted, and it makes retention-requiring models fail closed. |
 | Keep the direct Anthropic API, as an opt-in, with the gap called out in the README | Easiest setup and a path for users without AWS or a capable machine, but it's a third party. The README's "What leaves your machine" section, the provider options and `.env.example` all say so. |
 | Analyse confirmation reads the region scope from the Bedrock model ID prefix (`us.`, `eu.`, `global.`, none) and doesn't say "not stored" yet | The prefix decides where a request can be processed, so the dialog can say it without an AWS call. "Not stored" is only true once Phase 1 checks the account's retention mode, so the dialog adds it then. |
+| Claude Fable 5/5.1 on Bedrock are allowed only with `BEDROCK_ALLOW_RETENTION_MODELS=1` | They require retention mode `aws_review` (up to 30 days, possible AWS staff review). Without the flag Darkroom refuses them before sending anything; with it, the Analyse confirmation spells out the retention. |
+| Retention mode other than `none` warns, doesn't block | The user may have reasons (or an org-managed setting); the Analyse confirmation shows the actual mode so the choice is informed. "Not stored" is only shown for `none`. |
+| A failed retention check warns, doesn't block | Usually a missing `bedrock:GetAccountDataRetention` permission or no network; that's not a data risk, so the dialog says the mode couldn't be checked and how to fix it. |
+| The default model's profile is found with a live `ListInferenceProfiles` lookup, and a region whose own geography has no profile is refused | Checked on 15 Oct 2026: Sonnet 4.5 has `us.`, `eu.`, `jp.` and `au.` profiles, but `ca-central-1` only offers `us.` and `ap-south-1`/`ap-southeast-1`/`ap-northeast-2`/`sa-east-1` only `global.`, so a hardcoded region → prefix table was wrong. Silently using `us.` from Canada would send the transcript to another country. If the lookup fails, Darkroom falls back to the confirmed prefixes only. |
+| `BEDROCK_IN_REGION=1` stays, checked with `GetFoundationModel` | Current Claude models on Bedrock are `INFERENCE_PROFILE`-only (no in-region calls in us-east-1 or eu-west-1), so it's refused for them today, but it's the right option for models that support it. |
+| `global.` model IDs are refused | They can route anywhere in the world; the default and the recommended IDs are geographic (`us.`, `eu.`, …) or in-region. |
 | Local provider must be loopback-only | "Local" has to mean the transcript never leaves the computer, not "whatever URL is in `.env`". |
 
 ## Open questions
 
-- Allow Claude Fable 5/5.1 on Bedrock behind an "I accept 30-day retention and possible AWS review" switch, or not at all?
 - Which local models to recommend per hardware tier (8 GB laptop, 16–32 GB Apple Silicon, NVIDIA GPU)? Decided by the EDL benchmark.
 - Other self-hosted clouds (Azure OpenAI, Vertex AI in the user's own project) later, under the same retention checks?

@@ -39,9 +39,9 @@ Darkroom's goal is that **nothing leaves your control**. Recording, transcriptio
 **Bedrock details** (checked against AWS docs on 8 Oct 2026; full notes and sources in [docs/private-ai.md](docs/private-ai.md#validation-what-bedrock-does-with-your-data)):
 
 - Models run in AWS-owned accounts that model providers (Anthropic) cannot access. Prompts and outputs are not shared with them and are not used for training.
-- Claude models released before Claude Fable 5 support **zero data retention**: nothing is stored. To guarantee it, set your account's Bedrock data retention mode to `none` in your region.
-- **Claude Fable 5 / 5.1 are different:** they require retention mode `aws_review`, and AWS keeps all traffic for up to 30 days and may have staff review flagged requests (still not shared with Anthropic). Darkroom doesn't use them by default; with retention mode `none` they are blocked.
-- The default model ID (`us.anthropic.…`) is a US cross-Region profile: requests stay on AWS's network in the US but may be processed in another US region than `AWS_REGION`. Avoid `global.` model IDs if region matters to you.
+- Claude models released before Claude Fable 5 support **zero data retention**: nothing is stored. To guarantee it, set your account's Bedrock data retention mode to `none` in your region. Darkroom checks the mode before Analyse and warns if it isn't `none` (or can't be read); [docs/bedrock-iam.md](docs/bedrock-iam.md) has a least-privilege IAM policy and an SCP that keeps it at `none`.
+- **Claude Fable 5 / 5.1 are different:** they require retention mode `aws_review`, and AWS keeps all traffic for up to 30 days and may have staff review flagged requests (still not shared with Anthropic). Darkroom refuses them unless you set `BEDROCK_ALLOW_RETENTION_MODELS=1`; with retention mode `none` AWS blocks them anyway.
+- By default Darkroom looks up the cross-Region inference profile for your `AWS_REGION`'s own geography (`us.`, `eu.`, `jp.`, `au.`, …): requests stay on AWS's network in that geography but may be processed in another region in it. If your region has no such profile (e.g. `ca-central-1` only offers `us.`), Analyse is refused until you choose a model with `BEDROCK_MODEL_ID`, so a transcript is never routed to another geography without you choosing it. `global.` model IDs are always refused. Current Claude models can't be called in a single region, only through a profile.
 - Don't turn on Bedrock model invocation logging unless you want prompts kept in your own CloudWatch/S3.
 
 ---

@@ -14,7 +14,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
-from ..services.editor import ai_status, build_prompt, generate_edl, generate_skip_edl, validate_edl
+from ..services.editor import ai_refusal, ai_status, build_prompt, generate_edl, generate_skip_edl, validate_edl
 from ..services.renderer import (
     _detect_face_center_ratio,
     check_ffmpeg,
@@ -202,6 +202,8 @@ def analyze_project(project_id: str):
     proj = get_project(project_id)
     if not proj:
         raise HTTPException(404, "Project not found")
+    if refusal := ai_refusal():
+        raise HTTPException(400, refusal)
 
     def _run():
         try:

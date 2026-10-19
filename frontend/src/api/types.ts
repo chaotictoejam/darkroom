@@ -79,6 +79,12 @@ export interface AiStatus {
   /** One line on where it's processed and who can see it, shown before Analyse runs */
   detail: string
   configured: boolean
+  /** Bedrock: the account's data retention mode in AWS_REGION, or null if unknown / not Bedrock */
+  retention_mode: string | null
+  /** Things the user should know before sending, shown in the Analyse confirmation */
+  warnings: string[]
+  /** Why Analyse is refused with this configuration (e.g. a global. model ID), or null */
+  blocked: string | null
 }
 
 export interface WordCut {
