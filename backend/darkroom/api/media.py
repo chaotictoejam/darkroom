@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 
 from ..services.transcription import default_model
@@ -235,6 +235,37 @@ def update_transcript_words(project_id: str, seg_index: int, body: WordsPatch):
     except LookupError:
         raise HTTPException(404, "Project not found")
     return {"ok": True, "segment": seg}
+
+
+class SpeakerPatch(BaseModel):
+    name: str = Field(max_length=60)
+
+
+@router.patch("/projects/{project_id}/speakers/{speaker_id}")
+def rename_speaker(project_id: str, speaker_id: str, body: SpeakerPatch):
+    """Rename a speaker everywhere the name is stored (it's copied onto segments)."""
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "Speaker name cannot be empty")
+    try:
+        with editing_project(project_id) as proj:
+            speaker = next((s for s in proj.get("speakers", []) if s["id"] == speaker_id), None)
+            if speaker is None:
+                raise HTTPException(404, "Speaker not found")
+            speaker["name"] = name
+            # Recorded projects: keep the studio's name in step, so it sticks if
+            # the takes are joined again.
+            for p in proj.get("participants", []):
+                if p["id"] == speaker_id:
+                    p["name"] = name
+            for seg in proj.get("transcripts", {}).get(speaker_id, []):
+                seg["speaker_name"] = name
+            for seg in proj.get("merged_transcript", []):
+                if seg.get("speaker_id") == speaker_id:
+                    seg["speaker_name"] = name
+    except LookupError:
+        raise HTTPException(404, "Project not found")
+    return proj
 
 
 @router.get("/projects/{project_id}/waveform")

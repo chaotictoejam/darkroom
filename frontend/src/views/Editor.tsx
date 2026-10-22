@@ -20,6 +20,7 @@ import SidebarSection from '../components/Editor/SidebarSection'
 import EdlPanel from '../components/Editor/EdlPanel'
 import AdvancedTools from '../components/Editor/AdvancedTools'
 import RenderPanel from '../components/Editor/RenderPanel'
+import SpeakersPanel from '../components/Editor/SpeakersPanel'
 import ManualAnalysis from '../components/Editor/ManualAnalysis'
 import AnalyzeConfirm from '../components/Editor/AnalyzeConfirm'
 import Timeline from '../components/Timeline/Timeline'
@@ -36,7 +37,7 @@ interface Props {
   onBack: () => void
 }
 
-type SidePanel = 'edl' | 'shorts' | 'render' | 'manual' | 'advanced'
+type SidePanel = 'edl' | 'shorts' | 'speakers' | 'render' | 'manual' | 'advanced'
 type PreviewLayout = 'multi' | 'solo'
 
 export default function Editor({ project, onChange, onBack }: Props) {
@@ -357,6 +358,14 @@ export default function Editor({ project, onChange, onBack }: Props) {
               />
             </SidebarSection>
           )}
+
+          <SidebarSection
+            label="Speakers"
+            open={openPanels.has('speakers')}
+            onToggle={() => togglePanel('speakers')}
+          >
+            <SpeakersPanel project={project} onChange={onChange} />
+          </SidebarSection>
 
           <SidebarSection
             label="Render"
