@@ -129,6 +129,12 @@ export const api = {
       { method: 'PATCH', body: JSON.stringify({ first, last, text }) },
     ),
 
+  renameSpeaker: (id: string, speakerId: string, name: string) =>
+    request<Project>(`/api/projects/${id}/speakers/${speakerId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+
   saveWordCuts: (id: string, wordCuts: import('./types').WordCut[]) =>
     request<{ ok: boolean }>(`/api/projects/${id}/word-cuts`, {
       method: 'PUT',
