@@ -207,7 +207,7 @@ launch=(aws ec2 run-instances
   --instance-initiated-shutdown-behavior terminate
   --metadata-options HttpTokens=required
   --block-device-mappings 'DeviceName=/dev/sda1,Ebs={VolumeSize=100,VolumeType=gp3,DeleteOnTermination=true}'
-  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$RUN_ID},{Key=darkroom-bench,Value=$RUN_ID}]"
+  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$RUN_ID},{Key=darkroom-bench,Value=$RUN_ID},{Key=Project,Value=Darkroom}]" "ResourceType=volume,Tags=[{Key=darkroom-bench,Value=$RUN_ID},{Key=Project,Value=Darkroom}]"
   --query 'Instances[0].InstanceId' --output text)
 [[ $SPOT == true ]] && launch+=(--instance-market-options 'MarketType=spot,SpotOptions={SpotInstanceType=one-time,InstanceInterruptionBehavior=terminate}')
 [[ -n $SUBNET_ID ]] && launch+=(--subnet-id "$SUBNET_ID")

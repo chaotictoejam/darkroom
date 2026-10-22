@@ -436,6 +436,22 @@ The stack outputs:
 
 The Lambda accepts `{ "prompt": "<formatted prompt>", "retry": false }` and returns `{ "edl_raw": "<json string>" }`.
 
+### Cost Explorer tags
+
+Every resource in the stack is tagged `Project=Darkroom` (the GPU benchmark's EC2 instance and disk too). Add your own tags with the `tags` context, in `cdk.json` or on the command line:
+
+```bash
+cdk deploy -c tags='{"CostCenter": "podcast"}'
+```
+
+To filter and group by them in Cost Explorer, activate the keys once they appear (about a day after the first deploy), under **Billing and Cost Management → Cost allocation tags** or with:
+
+```bash
+aws ce update-cost-allocation-tags-status --cost-allocation-tags-status TagKey=Project,Status=Active
+```
+
+Costs from before activation aren't tagged, and Bedrock token charges are billed to the model, not the Lambda, so they don't carry the stack's tags.
+
 ---
 
 ## Costs
