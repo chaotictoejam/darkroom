@@ -6,6 +6,8 @@ A local-first video and podcast editor. Upload your pre-aligned camera or audio 
 
 See [ROADMAP.md](ROADMAP.md) for what's done and what's planned next.
 
+*Darkroom is an independent open-source project and is not affiliated with, endorsed by or connected to any other app, product or company called "Darkroom". There are several. Apparently every photo-adjacent software product reaches for the same word, and we are no exception. If you were looking for Darkroom: Photo & Video Editor by Bergen Co., it's in the App Store, where things install with one tap. This one requires Python, Node, FFmpeg and a little patience. Welcome.*
+
 ---
 
 ## Stack
