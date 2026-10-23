@@ -2,7 +2,8 @@
  * Editor timeline: a time ruler, a lane of phrase and pause chips, and the
  * waveform with EDL shading and cuts, with zoom/pan and drag-to-select cutting.
  * Click a chip to select it (Shift+click or drag along the lane to select
- * several), then Delete or Cut removes it. Pause chips can be dragged shorter
+ * several), then Delete or Cut removes it. Split (or S) breaks the chip under
+ * the playhead in two, for custom chunks; click a split's ruler marker to remove it. Pause chips can be dragged shorter
  * (or back out to their recorded length), which writes a manual cut inside the
  * gap. Times are in source seconds.
  */
@@ -20,6 +21,7 @@ const MIN_VISIBLE = 3        // seconds — most zoomed-in view
 const WAVEFORM_RATE = 40     // waveform values per second of audio
 const BAR_PX = 2             // px per waveform bar
 const CHIP_MIN_PX = 6        // narrower chips are hidden
+const SPLIT_EDGE = 0.02      // seconds — splits closer than this to a chunk edge are ignored
 const NOISE_HEADROOM_DB = 4  // the waveform floor sits this far above the background noise
 const DRAG_PX_THRESHOLD = 4  // pixels — less than this is a click, not a drag
 const SCROLLBAR_H = 7        // px — height of the scrollbar strip
@@ -62,6 +64,8 @@ export default function Timeline({
   speakerFile,
   onSeek,
   onCutsChange,
+  splits,
+  onSplitsChange,
 }: {
   duration: number
   currentTime: number
@@ -74,6 +78,9 @@ export default function Timeline({
   speakerFile: string | undefined
   onSeek: (t: number) => void
   onCutsChange: (cuts: WordCut[]) => void
+  /** Source times where the user split chunks. */
+  splits: number[]
+  onSplitsChange: (splits: number[]) => void
 }) {
   const [waveform, setWaveform] = useState<number[]>([])
   const [selection, setSelection] = useState<{ start: number; end: number } | null>(null)
@@ -192,7 +199,8 @@ export default function Timeline({
 
   // ── Phrases and pauses ───────────────────────────────────────────────────────
   // Words closer than PAUSE_MIN form one phrase chip; longer gaps (including
-  // leading and trailing silence) become pause chips.
+  // leading and trailing silence) become pause chips. User splits then break
+  // any chip in two at the split time.
   const { phrases, pauses } = useMemo(() => {
     const words = segments.flatMap((s) => s.words).sort((a, b) => a.start - b.start)
     const edlCuts = edlSegments.filter((s) => !s.keep)
@@ -201,32 +209,56 @@ export default function Timeline({
       return wordCuts.some((c) => c.start <= mid && c.end >= mid)
         || edlCuts.some((s) => s.start <= mid && s.end > mid)
     }
+    /** [start, end] broken at the splits strictly inside it. */
+    const pieces = (start: number, end: number): Array<[number, number]> => {
+      const points = [start, ...splits.filter((t) => t > start + SPLIT_EDGE && t < end - SPLIT_EDGE), end]
+      return points.slice(1).map((t, i) => [points[i], t])
+    }
     const phrases: Phrase[] = []
     const pauses: Pause[] = []
-    const addPause = (start: number, end: number) => {
-      // Locked: cut by the EDL, or inside a manual cut that runs past both ends
-      const locked = edlCuts.some((s) => s.start < end - 0.05 && s.end > start + 0.05)
-        || wordCuts.some((c) => c.start < start - 0.01 && c.end > end + 0.01)
-      pauses.push({ start, end, kept: Math.max(0, end - start - cutLength(wordCuts, start, end)), locked })
+    const addPhrase = (start: number, end: number, ws: typeof words) => {
+      for (const [ps, pe] of pieces(start, end)) {
+        const inside = ws.filter((w) => (w.start + w.end) / 2 >= ps && (w.start + w.end) / 2 < pe)
+        phrases.push({
+          start: ps, end: pe,
+          text: inside.map((w) => w.word.trim()).join(' '),
+          cut: inside.length > 0 ? inside.every((w) => isCut(w.start, w.end)) : isCut(ps, pe),
+        })
+      }
     }
-    let current: { start: number; end: number; words: string[]; cut: boolean[] } | null = null
+    const addPause = (start: number, end: number) => {
+      for (const [ps, pe] of pieces(start, end)) {
+        // Locked: cut by the EDL, or inside a manual cut that runs past both ends
+        const locked = edlCuts.some((s) => s.start < pe - 0.05 && s.end > ps + 0.05)
+          || wordCuts.some((c) => c.start < ps - 0.01 && c.end > pe + 0.01)
+        pauses.push({ start: ps, end: pe, kept: Math.max(0, pe - ps - cutLength(wordCuts, ps, pe)), locked })
+      }
+    }
+    let current: { start: number; end: number; words: typeof words } | null = null
     let lastEnd = 0
     for (const w of words) {
       if (w.start - lastEnd >= PAUSE_MIN) {
-        if (current) phrases.push({ start: current.start, end: current.end, text: current.words.join(' '), cut: current.cut.every(Boolean) })
+        if (current) addPhrase(current.start, current.end, current.words)
         current = null
         addPause(lastEnd, w.start)
       }
-      if (!current) current = { start: w.start, end: w.end, words: [], cut: [] }
-      current.words.push(w.word.trim())
-      current.cut.push(isCut(w.start, w.end))
+      if (!current) current = { start: w.start, end: w.end, words: [] }
+      current.words.push(w)
       current.end = Math.max(current.end, w.end)
       lastEnd = Math.max(lastEnd, w.end)
     }
-    if (current) phrases.push({ start: current.start, end: current.end, text: current.words.join(' '), cut: current.cut.every(Boolean) })
+    if (current) addPhrase(current.start, current.end, current.words)
     if (words.length > 0 && duration - lastEnd >= PAUSE_MIN) addPause(lastEnd, duration)
     return { phrases, pauses }
-  }, [segments, wordCuts, edlSegments, duration])
+  }, [segments, wordCuts, edlSegments, duration, splits])
+
+  /** Split the chunk under the playhead at the playhead. */
+  function splitAtPlayhead() {
+    const t = Math.round(currentTime * 1000) / 1000
+    const chunk = chunks.find((c) => t > c.start + SPLIT_EDGE && t < c.end - SPLIT_EDGE)
+    if (!chunk || splits.some((s) => Math.abs(s - t) < SPLIT_EDGE)) return
+    onSplitsChange([...splits, t].sort((a, b) => a - b))
+  }
 
   const chunks: Chunk[] = useMemo(
     () => [...phrases, ...pauses].sort((a, b) => a.start - b.start),
@@ -281,6 +313,19 @@ export default function Timeline({
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [selection, wordCuts]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // S splits the chunk under the playhead
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key.toLowerCase() !== 's' || e.ctrlKey || e.metaKey || e.altKey) return
+      const target = e.target as HTMLElement
+      if (['INPUT', 'TEXTAREA'].includes(target.tagName) || target.isContentEditable) return
+      e.preventDefault()
+      splitAtPlayhead()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [currentTime, chunks, splits]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Maps screen x → source time, accounting for zoom/pan
   function pxToTime(clientX: number): number {
@@ -472,6 +517,22 @@ export default function Timeline({
           }
         </span>
 
+        {/* Split at playhead */}
+        <button
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={splitAtPlayhead}
+          disabled={duration === 0}
+          title="Split the chunk under the playhead (S)"
+          style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text)', fontSize: 12, padding: '2px 10px', cursor: 'pointer' }}
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden>
+            <rect x="0.65" y="2.65" width="4" height="6.7" rx="1" />
+            <rect x="7.35" y="2.65" width="4" height="6.7" rx="1" />
+            <path d="M6 0.5v11" strokeDasharray="1.5 1.2" />
+          </svg>
+          Split
+        </button>
+
         {/* Zoom controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <button
@@ -653,6 +714,24 @@ export default function Timeline({
                     pointerEvents: 'none',
                   }}
                 />
+              ))}
+
+              {/* Split markers — dashed line through the lanes, ruler tab removes the split */}
+              {splits.filter((t) => inView(t, t)).map((t) => (
+                <div key={`s${t}`}>
+                  <div style={{ position: 'absolute', top: LANE_TOP, bottom: 0, left: toLeft(t), width: 0, borderLeft: '1px dashed rgba(250,204,21,0.8)', pointerEvents: 'none', zIndex: 2 }} />
+                  <div
+                    data-handle="split"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => onSplitsChange(splits.filter((x) => x !== t))}
+                    title={`Split at ${formatTimecode(t)} — click to remove`}
+                    style={{
+                      position: 'absolute', top: 2, left: toLeft(t), transform: 'translateX(-50%)',
+                      width: 10, height: RULER_H - 4, borderRadius: 2,
+                      background: 'rgb(250,204,21)', cursor: 'pointer', zIndex: 5,
+                    }}
+                  />
+                </div>
               ))}
 
               {/* Playhead */}
