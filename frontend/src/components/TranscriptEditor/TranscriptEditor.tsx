@@ -8,7 +8,7 @@
  *   Shift+click           → extends selection
  *   Delete / Backspace    → cuts the selected words' time range
  *   Space                 → toggles video play/pause
- *   Ctrl+Z / Cmd+Z        → undoes the last cut
+ *   Ctrl+Z / Cmd+Z        → undoes the last cut change (handled by the Editor view)
  *   Enter / toolbar Edit  → fixes the selected words' text inline (one segment;
  *                           Enter saves, Esc cancels; timings are kept)
  *
@@ -22,6 +22,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { EDLSegment, TranscriptSegment, WordCut, WordMute } from '../../api/types'
+import { subtractRange } from '../Timeline/timeMap'
 
 // ── Flat word model ───────────────────────────────────────────────────────────
 
@@ -92,17 +93,6 @@ function mergeAndSort(cuts: WordCut[]): WordCut[] {
   return merged
 }
 
-/** Remove [start, end] from the cuts, splitting any cut that spans it. */
-function subtractRange(cuts: WordCut[], start: number, end: number): WordCut[] {
-  const out: WordCut[] = []
-  for (const c of cuts) {
-    if (c.end <= start || c.start >= end) { out.push(c); continue }
-    if (c.start < start) out.push({ start: c.start, end: start })
-    if (c.end > end) out.push({ start: end, end: c.end })
-  }
-  return out
-}
-
 /** Whether a manual cut covers the whole of [start, end]. */
 function rangeCut(start: number, end: number, cuts: WordCut[]): boolean {
   return cuts.some((c) => c.start <= start + 0.01 && c.end >= end - 0.01)
@@ -133,6 +123,8 @@ interface Props {
   onSeek: (time: number) => void
   /** Called whenever the cut list changes (after delete or undo). */
   onCutsChange: (cuts: WordCut[]) => void
+  /** Undo the last cut change; undefined when there's nothing to undo. */
+  onUndoCuts?: () => void
   onMutesChange: (mutes: WordMute[]) => void
   /** Called when the user presses Space — should toggle video play/pause. */
   onTogglePlay?: () => void
@@ -168,6 +160,7 @@ export default function TranscriptEditor({
   cleanView = false,
   onSeek,
   onCutsChange,
+  onUndoCuts,
   onMutesChange,
   onTogglePlay,
   onSetEdlKept,
@@ -335,11 +328,6 @@ export default function TranscriptEditor({
         onCutsChange(mergeAndSort([...wordCuts, newCut]))
         setSelRange(null)
         setToolbar(null)
-        return
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && wordCuts.length > 0) {
-        e.preventDefault()
-        onCutsChange(wordCuts.slice(0, -1))
         return
       }
       if (e.key === 'Enter' && selRange !== null && editableSelection(selStart, selEnd)) {
@@ -785,13 +773,17 @@ export default function TranscriptEditor({
         {wordCuts.length > 0 && (
           <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-muted)' }}>
             {wordCuts.length} cut{wordCuts.length !== 1 ? 's' : ''} ·{' '}
-            <button
-              onClick={() => onCutsChange(wordCuts.slice(0, -1))}
-              style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12, padding: 0 }}
-            >
-              Undo last (Ctrl+Z)
-            </button>
-            {' · '}
+            {onUndoCuts && (
+              <>
+                <button
+                  onClick={onUndoCuts}
+                  style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12, padding: 0 }}
+                >
+                  Undo (Ctrl+Z)
+                </button>
+                {' · '}
+              </>
+            )}
             <button
               onClick={() => onCutsChange([])}
               style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12, padding: 0 }}

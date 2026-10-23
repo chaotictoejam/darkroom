@@ -21,6 +21,7 @@ import EdlPanel from '../components/Editor/EdlPanel'
 import AdvancedTools from '../components/Editor/AdvancedTools'
 import RenderPanel from '../components/Editor/RenderPanel'
 import SpeakersPanel from '../components/Editor/SpeakersPanel'
+import ProjectName from '../components/Editor/ProjectName'
 import ManualAnalysis from '../components/Editor/ManualAnalysis'
 import AnalyzeConfirm from '../components/Editor/AnalyzeConfirm'
 import Timeline from '../components/Timeline/Timeline'
@@ -36,6 +37,9 @@ interface Props {
   onChange: (project: Project) => void
   onBack: () => void
 }
+
+/** Cut changes kept for undo. */
+const CUT_HISTORY_LIMIT = 100
 
 type SidePanel = 'edl' | 'shorts' | 'speakers' | 'render' | 'manual' | 'advanced'
 type PreviewLayout = 'multi' | 'solo'
@@ -55,6 +59,9 @@ export default function Editor({ project, onChange, onBack }: Props) {
   const [duration, setDuration] = useState(0)
   const [cleanView, setCleanView] = useState(false)
   const videoRef = useRef<VideoPreviewHandle>(null)
+  // For async callbacks that finish after the project may have changed
+  const latestProject = useRef(project)
+  latestProject.current = project
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // ── Proxy preview state ──────────────────────────────────────────────────────
@@ -199,7 +206,12 @@ export default function Editor({ project, onChange, onBack }: Props) {
   const wordMutes: WordMute[] = project.word_mutes ?? []
   const hasEdl = !!project.edl
 
-  const handleCutsChange = useCallback(
+  // Undo/redo history of the cut list, shared by the transcript and timeline
+  const cutsHistory = useRef<{ undo: WordCut[][]; redo: WordCut[][] }>({ undo: [], redo: [] })
+  const [, setHistoryVersion] = useState(0)
+
+  /** Apply and save a cut list without touching the history. */
+  const applyCuts = useCallback(
     (newCuts: WordCut[]) => {
       onChange({ ...project, word_cuts: newCuts })
       if (saveTimer.current) clearTimeout(saveTimer.current)
@@ -213,6 +225,51 @@ export default function Editor({ project, onChange, onBack }: Props) {
     },
     [project, onChange], // eslint-disable-line react-hooks/exhaustive-deps
   )
+
+  const handleCutsChange = useCallback(
+    (newCuts: WordCut[]) => {
+      const history = cutsHistory.current
+      history.undo = [...history.undo, wordCuts].slice(-CUT_HISTORY_LIMIT)
+      history.redo = []
+      setHistoryVersion((v) => v + 1)
+      applyCuts(newCuts)
+    },
+    [applyCuts, wordCuts],
+  )
+
+  /** Step the cut list back (or forward) through the history. */
+  const stepCutsHistory = useCallback(
+    (direction: 'undo' | 'redo') => {
+      const history = cutsHistory.current
+      const from = direction === 'undo' ? history.undo : history.redo
+      const target = from[from.length - 1]
+      if (!target) return
+      from.pop()
+      ;(direction === 'undo' ? history.redo : history.undo).push(wordCuts)
+      setHistoryVersion((v) => v + 1)
+      applyCuts(target)
+    },
+    [applyCuts, wordCuts],
+  )
+
+  // Ctrl/Cmd+Z undoes a cut change; Ctrl/Cmd+Shift+Z or Ctrl+Y redoes it
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey)) return
+      const target = e.target as HTMLElement
+      if (['INPUT', 'TEXTAREA'].includes(target.tagName) || target.isContentEditable) return
+      const key = e.key.toLowerCase()
+      if (key === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        stepCutsHistory('undo')
+      } else if ((key === 'z' && e.shiftKey) || key === 'y') {
+        e.preventDefault()
+        stepCutsHistory('redo')
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [stepCutsHistory])
 
   const edlSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -270,7 +327,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
         >
           ←
         </button>
-        <span style={{ fontWeight: 600 }}>{project.name}</span>
+        <ProjectName project={project} onRenamed={(name) => onChange({ ...latestProject.current, name })} />
         <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>· {project.status}</span>
 
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -437,6 +494,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
                     cleanView={cleanView}
                     onSeek={seekTo}
                     onCutsChange={handleCutsChange}
+                    onUndoCuts={cutsHistory.current.undo.length > 0 ? () => stepCutsHistory('undo') : undefined}
                     onMutesChange={handleMutesChange}
                     onTogglePlay={togglePlayPause}
                     onSetEdlKept={setSegmentsKept}

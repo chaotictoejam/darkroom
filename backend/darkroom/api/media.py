@@ -272,7 +272,7 @@ def rename_speaker(project_id: str, speaker_id: str, body: SpeakerPatch):
 def get_waveform(
     project_id: str,
     speaker: str = Query(..., description="Filename of the speaker's media file"),
-    buckets: int = Query(400, ge=50, le=2000),
+    buckets: int = Query(400, ge=50, le=200_000),
 ):
     """Extract audio amplitude as a normalized waveform for timeline display."""
     proj = get_project(project_id)
@@ -283,14 +283,14 @@ def get_waveform(
     if not file_path.exists():
         raise HTTPException(404, "File not found")
 
-    # Resample to 200 Hz mono — fast even for hour-long files (~2.9 MB for 60 min)
+    # Resample to 2 kHz mono 16-bit: keeps most speech energy and is ~14 MB for 60 min
     cmd = [
         "ffmpeg", "-i", str(file_path),
         "-ac", "1",
-        "-af", "aresample=200",
+        "-af", "aresample=2000",
         "-map", "a",
-        "-c:a", "pcm_f32le",
-        "-f", "f32le",
+        "-c:a", "pcm_s16le",
+        "-f", "s16le",
         "pipe:1",
     ]
     try:
@@ -303,16 +303,19 @@ def get_waveform(
     if not result.stdout:
         return {"waveform": [0.0] * buckets}
 
-    samples = np.frombuffer(result.stdout, dtype=np.float32)
+    samples = np.frombuffer(result.stdout, dtype=np.int16).astype(np.float32)
     if len(samples) == 0:
         return {"waveform": [0.0] * buckets}
 
+    # Buckets split the whole file (sizes differ by at most one sample), so the
+    # waveform spans the full duration; whole-sample buckets would drop the tail
+    # and stretch the rest out of line with the transcript.
     actual_buckets = min(buckets, len(samples))
-    bucket_size = max(1, len(samples) // actual_buckets)
-    trimmed = samples[: actual_buckets * bucket_size]
-    rms = np.sqrt(np.mean(trimmed.reshape(actual_buckets, bucket_size) ** 2, axis=1))
+    edges = np.linspace(0, len(samples), actual_buckets + 1).astype(np.int64)
+    sums = np.add.reduceat(samples.astype(np.float64) ** 2, edges[:-1])
+    rms = np.sqrt(sums / np.diff(edges)).astype(np.float32)
 
     max_val = float(rms.max())
-    normalized = (rms / max_val).tolist() if max_val > 0 else rms.tolist()
+    normalized = (rms / max_val if max_val > 0 else rms).round(3).tolist()
 
     return {"waveform": normalized}
