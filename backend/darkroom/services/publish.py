@@ -28,6 +28,7 @@ EPISODE_TYPES = ("full", "trailer", "bonus")
 _CUE_MAX_SECONDS = 6.0
 _CUE_MAX_CHARS = 84
 _CUE_PAUSE = 1.0
+_CUE_MIN_SECONDS = 0.1
 
 BUNDLE_DIR = "darkrelay"
 BUNDLE_ZIP = "darkrelay.zip"
@@ -54,14 +55,24 @@ def to_edited(t: float, ranges: list[tuple[float, float]]) -> float | None:
     return None
 
 
-def _snap_to_edited(t: float, ranges: list[tuple[float, float]]) -> float:
-    """Like to_edited, but a cut time moves forward to where the edit resumes."""
+def _snap_to_edited(t: float, ranges: list[tuple[float, float]]) -> float | None:
+    """Like to_edited, but a cut time moves forward to where the edit resumes (None after the end)."""
     out = 0.0
     for start, end in ranges:
-        if t <= end:
+        if t < end:
             return out + max(t - start, 0.0)
         out += end - start
-    return out
+    return None
+
+
+def _piece_at(t: float, ranges: list[tuple[float, float]]) -> tuple[float, float, float] | None:
+    """(edited time where it starts, start, end) of the kept piece holding source time `t`."""
+    out = 0.0
+    for start, end in ranges:
+        if start <= t <= end:
+            return out, start, end
+        out += end - start
+    return None
 
 
 def edited_words(project: dict) -> list[dict]:
@@ -77,14 +88,13 @@ def edited_words(project: dict) -> list[dict]:
             mid = (w["start"] + w["end"]) / 2
             if any(m["start"] <= mid <= m["end"] for m in mutes):
                 continue
-            t = to_edited(mid, ranges)
-            if t is None:
+            piece = _piece_at(mid, ranges)
+            if piece is None:
                 continue
-            start = to_edited(w["start"], ranges)
-            end = to_edited(w["end"], ranges)
+            offset, piece_start, piece_end = piece
             # A word straddling a cut keeps the part that is heard
-            start = t if start is None or start > t else start
-            end = t if end is None or end < t else end
+            start = offset + max(w["start"], piece_start) - piece_start
+            end = offset + min(w["end"], piece_end) - piece_start
             words.append({"text": w["word"].strip(), "start": start, "end": end,
                           "speaker": seg.get("speaker_name") or seg.get("speaker_id", "")})
     words = [w for w in words if w["text"]]
@@ -92,8 +102,11 @@ def edited_words(project: dict) -> list[dict]:
     return words
 
 
-def _cues(words: list[dict]) -> list[dict]:
-    """Group words into caption cues, breaking on speaker changes, pauses and length."""
+def _cues(words: list[dict], duration: float | None = None) -> list[dict]:
+    """
+    Group words into caption cues, breaking on speaker changes, pauses and length.
+    Every cue lasts at least _CUE_MIN_SECONDS and, given the audio's duration, ends inside it.
+    """
     cues: list[dict] = []
     for w in words:
         cur = cues[-1] if cues else None
@@ -105,7 +118,14 @@ def _cues(words: list[dict]) -> list[dict]:
         else:
             cur["text"] += " " + w["text"]
             cur["end"] = max(cur["end"], w["end"])
-    return cues
+    prev_start = 0.0
+    for c in cues:
+        c["end"] = max(c["end"], c["start"] + _CUE_MIN_SECONDS)
+        if duration is not None and c["end"] > duration:
+            c["end"] = duration
+            c["start"] = max(min(c["start"], duration - _CUE_MIN_SECONDS), prev_start, 0.0)
+        prev_start = c["start"]
+    return [c for c in cues if c["end"] > c["start"]]
 
 
 def _timestamp(seconds: float, sep: str) -> str:
@@ -157,9 +177,10 @@ def chapters_json(project: dict, duration: float) -> dict | None:
         title = (ch.get("title") or "").strip()
         if not title:
             continue
-        t = round(_snap_to_edited(ch["start"], ranges), 3)
-        if t >= duration:
+        snapped = _snap_to_edited(ch["start"], ranges)
+        if snapped is None or snapped >= duration:
             continue
+        t = round(snapped, 3)
         if out and t <= out[-1]["startTime"]:
             out[-1] = {"startTime": out[-1]["startTime"], "title": title}
             continue
@@ -225,7 +246,8 @@ def episode_json(details: dict, duration: float, language: str | None) -> dict:
         "keywords": [k.strip() for k in details.get("keywords") or [] if k.strip()],
     }
     if details.get("pub_date"):
-        ep["pubDate"] = details["pub_date"]
+        # Python reads more ISO forms than DarkRelay does; write the one it reads
+        ep["pubDate"] = datetime.fromisoformat(details["pub_date"]).isoformat(timespec="seconds")
     for key in ("season", "episode"):
         if details.get(key) is not None:
             ep[key] = details[key]
@@ -292,7 +314,7 @@ def build_bundle(project: dict, projects_dir: Path, on_step=lambda msg, pct: Non
         shutil.copy2(output_dir / "fullEdit.mp4", bundle_dir / "video.mp4")
 
     on_step("Writing transcript and chapters…", 85)
-    cues = _cues(edited_words(project))
+    cues = _cues(edited_words(project), duration)
     if cues:
         (bundle_dir / "transcript.vtt").write_text(transcript_vtt(cues), encoding="utf-8")
         (bundle_dir / "transcript.srt").write_text(transcript_srt(cues), encoding="utf-8")

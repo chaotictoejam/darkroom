@@ -18,7 +18,8 @@ from .jobs import _get_render_lock, _update_progress
 
 router = APIRouter()
 
-_COVER_TYPES = {"image/jpeg": ".jpg", "image/png": ".png"}
+# Named by content, not the browser's label, so cover.png is always a PNG
+_COVER_SIGNATURES = {b"\x89PNG\r\n\x1a\n": ".png", b"\xff\xd8\xff": ".jpg"}
 _COVER_MAX_BYTES = 20 * 1024 * 1024
 
 
@@ -56,10 +57,10 @@ def save_publish_details(project_id: str, body: PublishDetails):
 
 @router.post("/projects/{project_id}/publish/cover")
 async def upload_cover(project_id: str, file: UploadFile = File(...)):
-    ext = _COVER_TYPES.get(file.content_type or "")
+    content = await file.read()
+    ext = next((e for sig, e in _COVER_SIGNATURES.items() if content.startswith(sig)), None)
     if not ext:
         raise HTTPException(400, "Cover art must be a JPEG or PNG")
-    content = await file.read()
     if len(content) > _COVER_MAX_BYTES:
         raise HTTPException(400, "Cover art is over 20 MB")
     if get_project(project_id) is None:
