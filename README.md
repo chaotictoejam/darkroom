@@ -4,7 +4,7 @@
 
 A local-first video and podcast editor. Upload your pre-aligned camera or audio files (or record a podcast in the built-in studio), get an AI-generated edit decision list from Claude, review and tweak cuts in the browser, then render final exports via FFmpeg. Your media and transcripts stay on your machine. The one exception is the optional AI **Analyse** step, which sends transcript text to the AI provider you configure: see [What leaves your machine](#what-leaves-your-machine) before choosing one.
 
-Darkroom is the editing half of a pair. Its publishing half is **[DarkRelay](https://github.com/chaotictoejam/darkrelay)**: self-hosted, serverless podcast hosting and analytics in your own AWS account. Darkroom records, edits and exports; DarkRelay publishes and measures. See [Publishing with DarkRelay](#publishing-with-darkrelay).
+Darkroom is the editing half of a pair. Its publishing half is **[DarkRelay](https://github.com/chaotictoejam/darkrelay)**: self-hosted, serverless podcast hosting and analytics in your own AWS account. Darkroom records, edits and exports; DarkRelay publishes and measures. See [docs/publishing-darkrelay.md](docs/publishing-darkrelay.md) for how to publish an episode.
 
 See [ROADMAP.md](ROADMAP.md) for what's done and what's planned next.
 
@@ -48,7 +48,7 @@ Darkroom's goal is that **nothing leaves your control**. Recording, transcriptio
 - By default Darkroom looks up the cross-Region inference profile for your `AWS_REGION`'s own geography (`us.`, `eu.`, `jp.`, `au.`, …): requests stay on AWS's network in that geography but may be processed in another region in it. If your region has no such profile (e.g. `ca-central-1` only offers `us.`), Analyse is refused until you choose a model with `BEDROCK_MODEL_ID`, so a transcript is never routed to another geography without you choosing it. `global.` model IDs are always refused. Current Claude models can't be called in a single region, only through a profile.
 - Don't turn on Bedrock model invocation logging unless you want prompts kept in your own CloudWatch/S3.
 
-**Publishing** an episode doesn't send anything from Darkroom: the [DarkRelay](https://github.com/chaotictoejam/darkrelay) export writes files on your computer, and you upload them yourself with the DarkRelay CLI into your own AWS account.
+**Publishing** sends nothing from Darkroom: the [DarkRelay](https://github.com/chaotictoejam/darkrelay) export writes files on your computer, and you upload them yourself into your own AWS account ([details](docs/publishing-darkrelay.md)).
 
 ---
 
@@ -242,7 +242,7 @@ On macOS the first recording triggers the system microphone prompt. If you decli
 5. **Review**: video/audio previews, transcript panel, per-segment controls. Toggle cuts, change camera assignments, edit transcript text inline, mute individual words.
 6. **Shorts Builder**: pick any AI-suggested clip or define a custom range. Choose subtitle style, accent colour, opacity, and camera layout. Preview the clip before rendering.
 7. **Render**: choose export targets (16:9 full edit, 9:16 vertical, or a named Short) and FFmpeg renders them with audio normalised to –16 LUFS.
-8. **Publish to DarkRelay** (optional): fill in the episode details and export a bundle for [DarkRelay](https://github.com/chaotictoejam/darkrelay), self-hosted podcast hosting in your own AWS account. The bundle has the MP3, transcripts and chapters timed to the edit, cover art and `episode.json`; publish it with `npx darkrelay publish <folder> --show <slug>`. Exporting writes files on this computer only. See [docs/publishing-darkrelay.md](docs/publishing-darkrelay.md).
+8. **Publish to DarkRelay** (optional): export an episode bundle for [DarkRelay](https://github.com/chaotictoejam/darkrelay) and publish it to your own AWS account. See [docs/publishing-darkrelay.md](docs/publishing-darkrelay.md).
 9. **Redo EDL**: re-run the AI analysis on the existing transcript without re-transcribing (sidebar danger zone).
 
 ---
@@ -254,24 +254,6 @@ Multi-camera interviews, talking heads, or any recording with video. Supports ca
 
 ### Podcast
 Audio-only recordings, uploaded or recorded in the studio. No camera switching. Exports a mixed MP3 or a lossless WAV, with cuts and word mutes applied. The editor adapts automatically: the camera layout toggle is hidden.
-
----
-
-## Publishing with DarkRelay
-
-[DarkRelay](https://github.com/chaotictoejam/darkrelay) hosts podcasts from your own AWS account: an RSS feed with iTunes and Podcasting 2.0 tags, media served by CloudFront, download analytics, video (HLS) and YouTube uploads. Set it up and create a show by following [its README](https://github.com/chaotictoejam/darkrelay#readme).
-
-In Darkroom's editor, open **Publish to DarkRelay** in the sidebar:
-
-1. **Details…**: the show's DarkRelay slug, episode title, show notes, release time, season and episode, chapters, cover art and, optionally, YouTube's own title and description. Saved with the project.
-2. **Export bundle**: renders the edit and writes an [episode bundle](https://github.com/chaotictoejam/darkrelay#episode-bundles) to `projects/<id>/output/darkrelay/` (also as a zip): `episode.json`, `audio.mp3`, VTT/SRT/JSON transcripts and `chapters.json` timed to the edit, cover art, and `video.mp4` for video projects.
-3. **Publish** with the command the panel shows (it has a copy button):
-
-   ```bash
-   npx darkrelay publish /path/to/projects/<id>/output/darkrelay --show <slug>
-   ```
-
-Exporting again after more edits updates the same episode in DarkRelay rather than adding a new one. Design and decisions: [docs/publishing-darkrelay.md](docs/publishing-darkrelay.md).
 
 ---
 

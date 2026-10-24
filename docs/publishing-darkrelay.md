@@ -1,6 +1,24 @@
-# Publishing to DarkRelay: Plan
+# Publishing to DarkRelay
 
-[DarkRelay](https://github.com/chaotictoejam/darkrelay) is the publishing half of Darkroom: self-hosted podcast hosting, RSS feeds and analytics in the user's own AWS account. Darkroom records, edits and exports; DarkRelay publishes and measures. This plan covers getting an edited episode from Darkroom into DarkRelay.
+[DarkRelay](https://github.com/chaotictoejam/darkrelay) is the publishing half of Darkroom: self-hosted podcast hosting, RSS feeds and analytics in the user's own AWS account. Darkroom records, edits and exports; DarkRelay publishes and measures. This doc covers getting an edited episode from Darkroom into DarkRelay: how to do it, then the plan behind it.
+
+## How to publish an episode
+
+[DarkRelay](https://github.com/chaotictoejam/darkrelay) hosts podcasts from your own AWS account: an RSS feed with iTunes and Podcasting 2.0 tags, media served by CloudFront, download analytics, video (HLS) and YouTube uploads. Set it up and create a show by following [its README](https://github.com/chaotictoejam/darkrelay#readme).
+
+In Darkroom's editor, open **Publish to DarkRelay** in the sidebar:
+
+1. **Details…**: the show's DarkRelay slug, episode title, show notes, release time, season and episode, chapters, cover art and, optionally, YouTube's own title and description. Saved with the project.
+2. **Export bundle**: renders the edit and writes an [episode bundle](https://github.com/chaotictoejam/darkrelay#episode-bundles) to `projects/<id>/output/darkrelay/` (also as a zip): `episode.json`, `audio.mp3`, VTT/SRT/JSON transcripts and `chapters.json` timed to the edit, cover art, and `video.mp4` for video projects.
+3. **Publish** with the command the panel shows (it has a copy button), from your DarkRelay checkout:
+
+   ```bash
+   npx darkrelay publish /path/to/projects/<id>/output/darkrelay --show <slug>
+   ```
+
+Exporting again after more edits updates the same episode in DarkRelay rather than adding a new one.
+
+The rest of this doc is the design: goals, how the bundle is built, the TODO list and decisions.
 
 ## Goals
 
