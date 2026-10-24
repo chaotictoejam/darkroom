@@ -238,7 +238,8 @@ On macOS the first recording triggers the system microphone prompt. If you decli
 5. **Review**: video/audio previews, transcript panel, per-segment controls. Toggle cuts, change camera assignments, edit transcript text inline, mute individual words.
 6. **Shorts Builder**: pick any AI-suggested clip or define a custom range. Choose subtitle style, accent colour, opacity, and camera layout. Preview the clip before rendering.
 7. **Render**: choose export targets (16:9 full edit, 9:16 vertical, or a named Short) and FFmpeg renders them with audio normalised to –16 LUFS.
-8. **Redo EDL**: re-run the AI analysis on the existing transcript without re-transcribing (sidebar danger zone).
+8. **Publish to DarkRelay** (optional): fill in the episode details and export a bundle for [DarkRelay](https://github.com/chaotictoejam/darkrelay), self-hosted podcast hosting in your own AWS account. The bundle has the MP3, transcripts and chapters timed to the edit, cover art and `episode.json`; publish it with `npx darkrelay publish <folder> --show <slug>`. Exporting writes files on this computer only. See [docs/publishing-darkrelay.md](docs/publishing-darkrelay.md).
+9. **Redo EDL**: re-run the AI analysis on the existing transcript without re-transcribing (sidebar danger zone).
 
 ---
 
@@ -321,6 +322,8 @@ projects/
         ├── vertical.mp4
         ├── clip_001.mp4      # named Short exports
         ├── preview.mp4       # proxy preview (regenerated on edit)
+        ├── darkrelay/        # DarkRelay episode bundle (episode.json, audio.mp3, transcripts, chapters)
+        ├── darkrelay.zip     # the same bundle as a zip
         └── subtitles.ass     # generated subtitle file
 ```
 
@@ -387,6 +390,9 @@ projects/
 | PUT | `/api/projects/:id/word-mutes` | Save word-level mute list |
 | POST | `/api/projects/:id/render` | Start FFmpeg render `{targets:[…]}` |
 | POST | `/api/projects/:id/render-short` | Render a named Short with subtitle options |
+| PUT | `/api/projects/:id/publish` | Save DarkRelay episode details |
+| POST / DELETE | `/api/projects/:id/publish/cover` | Set or remove episode cover art (JPEG or PNG) |
+| POST | `/api/projects/:id/publish/bundle` | Export the DarkRelay bundle (async) |
 | POST | `/api/projects/:id/preview` | Generate proxy preview video (async) |
 | GET | `/api/ws/:id` | WebSocket, streams job progress events |
 | GET | `/projects/:id/files/:path` | Serve project file (video / output) |
