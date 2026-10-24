@@ -31,6 +31,28 @@ _DEFAULTS = {
 }
 
 
+def default_publish() -> dict:
+    """Episode details for DarkRelay (`services/publish.py`), before the user fills anything in."""
+    return {
+        "show": "",
+        "guid": None,  # set on the first bundle and never changed
+        "title": "",
+        "notes": "",
+        "pub_date": None,
+        "episode_type": "full",
+        "season": None,
+        "episode": None,
+        "explicit": None,
+        "keywords": [],
+        "chapters": [],  # [{start, title}] in source time
+        "include_video": True,
+        "yt_title": "",
+        "yt_description": "",
+        "cover": None,
+        "bundle": None,
+    }
+
+
 def get_project(project_id: str) -> dict | None:
     path = project_path(project_id)
     if not path.exists():
@@ -42,6 +64,11 @@ def get_project(project_id: str) -> dict | None:
     for key, default in _DEFAULTS.items():
         if key not in proj:
             proj[key] = default
+            changed = True
+    publish = proj.setdefault("publish", {})
+    for key, default in default_publish().items():
+        if key not in publish:
+            publish[key] = default
             changed = True
     if changed:
         save_project(proj)
@@ -111,5 +138,6 @@ def new_project(name: str, source: str = "upload") -> dict:
         "word_cuts": [],
         "word_mutes": [],
         "renders": {},
+        "publish": default_publish(),
         "progress": {"step": "", "percent": 0, "message": ""},
     }

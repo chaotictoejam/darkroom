@@ -34,11 +34,11 @@ Requires Python 3.11+ (pyproject), Node 18+, full FFmpeg. AI provider config liv
 - `backend/darkroom/` — FastAPI app
   - `main.py` app + SPA serving; `run()` honours `DARKROOM_PORT`; `__main__.py` lets the desktop app run `python -m darkroom`
   - `storage.py` project JSON persistence + `editing_project()` lock
-  - `api/projects.py` CRUD + PATCH · `api/media.py` upload, word cuts/mutes, transcript edits, waveform · `api/jobs.py` transcribe/analyse/render/preview jobs + WebSocket progress · `api/takes.py` recording studio takes, per-take transcription worker, crash recovery
-  - `services/transcription.py` faster-whisper (cached model, VAD + batched pipeline, int8 CPU / float16 CUDA, default model by device and language: `small` for English on CPU, else `turbo`) + transcript merge · `services/editor.py` Claude EDL generation (Anthropic API or Bedrock) · `services/renderer.py` FFmpeg rendering (video, and MP3/WAV for audio-only), face-centred crops · `services/takes.py` chunk append, finalise to WAV, join takes, transcript offsets
+  - `api/projects.py` CRUD + PATCH · `api/media.py` upload, word cuts/mutes, transcript edits, waveform · `api/jobs.py` transcribe/analyse/render/preview jobs + WebSocket progress · `api/takes.py` recording studio takes, per-take transcription worker, crash recovery · `api/publish.py` DarkRelay episode details, cover art, bundle export job
+  - `services/transcription.py` faster-whisper (cached model, VAD + batched pipeline, int8 CPU / float16 CUDA, default model by device and language: `small` for English on CPU, else `turbo`) + transcript merge · `services/editor.py` Claude EDL generation (Anthropic API or Bedrock) · `services/renderer.py` FFmpeg rendering (video, and MP3/WAV for audio-only), face-centred crops · `services/takes.py` chunk append, finalise to WAV, join takes, transcript offsets · `services/publish.py` DarkRelay bundles (edited-time transcripts and chapters, `episode.json`)
 - `frontend/src/` — React + TypeScript + Vite
   - `App.tsx` routes between views by `project.source` and `project.status` (no router library)
-  - `views/` Welcome (New Project: Upload or Record), Setup (upload), Studio (recording), Processing, Editor · `components/` TranscriptEditor, VideoPreview, `Timeline/` (timeline, `timeMap.ts` source ↔ edited time), `Editor/` (sidebar panels: EDL, render, manual analysis, advanced tools; Analyse confirm dialog), `Studio/` (mic engine, AudioWorklet, chunk uploader, waveform lanes, meters, takes strip)
+  - `views/` Welcome (New Project: Upload or Record), Setup (upload), Studio (recording), Processing, Editor · `components/` TranscriptEditor, VideoPreview, `Timeline/` (timeline, `timeMap.ts` source ↔ edited time), `Editor/` (sidebar panels: EDL, render, publish to DarkRelay, manual analysis, advanced tools; Analyse confirm and episode details dialogs), `Studio/` (mic engine, AudioWorklet, chunk uploader, waveform lanes, meters, takes strip)
   - `transcriptionOptions.ts` Whisper model and language lists shared by Setup and Studio
   - `api/client.ts` typed API client + `subscribeToProgress` WebSocket · `api/types.ts` shared types
   - `desktop.ts` typed `window.darkroom` bridge (undefined in a plain browser)
@@ -72,6 +72,8 @@ Requires Python 3.11+ (pyproject), Node 18+, full FFmpeg. AI provider config liv
 - Live waveforms come from an `AudioWorklet` (`components/Studio/peak-worklet.js`, one peak per 10 ms). It must load as a bundled file: the production CSP blocks blob/data script URLs, which is why `vite.config.ts` never inlines `.js` assets.
 - Uploads still pass through `api/media.py::_normalize_recording`, which transcodes duration-less streamed WebM/Ogg (e.g. browser recordings) to FLAC.
 
+**Publishing to DarkRelay** (`docs/publishing-darkrelay.md`, Phase 1 done: bundle export). The bundle format belongs to DarkRelay (`packages/core/src/bundle.ts` in chaotictoejam/darkrelay); keep `services/publish.py` in step with it. Bundles go to `output/darkrelay/` plus `output/darkrelay.zip`. Transcripts and chapters are mapped into edited time with the same kept pieces the renders use (`_apply_word_cuts`); chapters are stored in source time. `publish.guid` is set on the first export and never changed. Export writes local files only; anything that uploads must be an explicit, labelled step.
+
 ## Conventions
 
 - **Frontend:** inline `style={{}}` objects using the CSS variables in `index.css` (`--bg`, `--bg-card`, `--bg-elevated`, `--border`, `--text`, `--text-muted`, `--accent`, `--radius`). No CSS framework. TS is strict with `noUnusedLocals`/`noUnusedParameters`.
@@ -91,6 +93,7 @@ Roadmap items have a plan in `docs/` with Goals, design, a phased **TODO** check
 ## Testing
 
 - Backend: pytest in `backend/tests/` (uses `tmp_path`; skips if ffmpeg is missing). Point `DARKROOM_PROJECTS_DIR` at a temp dir for anything that touches storage, or monkeypatch `PROJECTS_DIR` in each module that imported it (see `tests/test_takes.py`, which also stubs `transcribe_file` so no Whisper model is needed).
+- DarkRelay bundles: `tests/test_bundle_criteria.py` checks exports against `tests/bundle_criteria.py` (DarkRelay's rules, mirrored). Keep the checker in step with DarkRelay; `DARKRELAY_DIR=/path/to/darkrelay` (with `npm install` done) also runs bundles through DarkRelay's own code.
 - Frontend: no unit tests yet; `make lint` and `npm run build` must pass.
 - End to end: Playwright can drive the app in Chrome (or the desktop app via `_electron`). Launch with `--use-fake-device-for-media-stream --use-fake-ui-for-media-stream` to record without real mics (two fake inputs, a full-scale beep each second, so meters show clipping). PATCH the project's `transcribe_model` to `tiny` to keep transcription fast.
 - First real transcription downloads the selected Whisper model (hundreds of MB to GBs).
