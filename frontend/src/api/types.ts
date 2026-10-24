@@ -149,7 +149,62 @@ export interface Project {
   progress: Progress
   transcribe_model?: string
   transcribe_language?: string | null
+  publish: PublishDetails
 }
+
+// ── DarkRelay publishing ──────────────────────────────────────────────────────
+
+/** A chapter marker. `start` is in source time, so it follows later edits. */
+export interface PublishChapter {
+  start: number
+  title: string
+}
+
+export type EpisodeType = 'full' | 'trailer' | 'bonus'
+
+/** The last bundle written to output/darkrelay/. */
+export interface PublishBundle {
+  created_at: string
+  /** Absolute path of the bundle folder, for `darkrelay publish <dir>` */
+  dir: string
+  files: string[]
+  /** The bundle as a zip */
+  url: string
+  /** Folder name inside the zip */
+  folder: string
+  /** Seconds, of the exported audio */
+  duration: number
+  warnings: string[]
+}
+
+/** Episode details for a DarkRelay bundle (episode.json and the files beside it). */
+export interface PublishDetails {
+  /** The show's DarkRelay slug */
+  show: string
+  /** Set on the first bundle and never changed, so re-exports update the same episode */
+  guid: string | null
+  title: string
+  /** HTML, or plain text that becomes paragraphs */
+  notes: string
+  /** ISO 8601 with an offset; null: released when published */
+  pub_date: string | null
+  episode_type: EpisodeType
+  season: number | null
+  episode: number | null
+  explicit: boolean | null
+  keywords: string[]
+  chapters: PublishChapter[]
+  /** Video projects: include the full edit as video.mp4 */
+  include_video: boolean
+  yt_title: string
+  yt_description: string
+  /** Uploaded cover art inside the project folder, or null */
+  cover: string | null
+  bundle: PublishBundle | null
+}
+
+/** The fields the user edits; the rest are set by the backend. */
+export type PublishDetailsInput = Omit<PublishDetails, 'guid' | 'cover' | 'bundle'>
 
 export interface ProjectSummary {
   id: string

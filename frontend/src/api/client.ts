@@ -3,7 +3,9 @@
  * All requests go to the same origin — Vite proxies /api/* in dev,
  * FastAPI serves everything from the same port in production.
  */
-import type { AiStatus, EDL, Participant, Project, ProjectSource, ProjectSummary, RenderShortParams, Take } from './types'
+import type {
+  AiStatus, EDL, Participant, Project, ProjectSource, ProjectSummary, PublishDetailsInput, RenderShortParams, Take,
+} from './types'
 
 class ApiError extends Error {
   constructor(
@@ -168,6 +170,29 @@ export const api = {
 
   generatePreview: (id: string) =>
     request<{ message: string }>(`/api/projects/${id}/preview`, { method: 'POST' }),
+
+  // ── DarkRelay publishing ────────────────────────────────────────────────────
+
+  savePublishDetails: (id: string, details: PublishDetailsInput) =>
+    request<Project>(`/api/projects/${id}/publish`, { method: 'PUT', body: JSON.stringify(details) }),
+
+  uploadCover: async (id: string, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    // No JSON Content-Type: the browser sets the multipart boundary
+    const res = await fetch(`/api/projects/${id}/publish/cover`, { method: 'POST', body: form })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ detail: res.statusText }))
+      throw new ApiError(res.status, body.detail ?? `HTTP ${res.status}`)
+    }
+    return (await res.json()) as Project
+  },
+
+  deleteCover: (id: string) =>
+    request<Project>(`/api/projects/${id}/publish/cover`, { method: 'DELETE' }),
+
+  exportBundle: (id: string) =>
+    request<{ message: string }>(`/api/projects/${id}/publish/bundle`, { method: 'POST' }),
 
   getWaveform: (id: string, speaker: string, buckets = 400) =>
     request<{ waveform: number[] }>(
