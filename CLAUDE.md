@@ -93,6 +93,7 @@ Roadmap items have a plan in `docs/` with Goals, design, a phased **TODO** check
 ## Testing
 
 - Backend: pytest in `backend/tests/` (uses `tmp_path`; skips if ffmpeg is missing). Point `DARKROOM_PROJECTS_DIR` at a temp dir for anything that touches storage, or monkeypatch `PROJECTS_DIR` in each module that imported it (see `tests/test_takes.py`, which also stubs `transcribe_file` so no Whisper model is needed).
+- DarkRelay bundles: `tests/test_bundle_criteria.py` checks exports against `tests/bundle_criteria.py` (DarkRelay's rules, mirrored). Keep the checker in step with DarkRelay; `DARKRELAY_DIR=/path/to/darkrelay` (with `npm install` done) also runs bundles through DarkRelay's own code.
 - Frontend: no unit tests yet; `make lint` and `npm run build` must pass.
 - End to end: Playwright can drive the app in Chrome (or the desktop app via `_electron`). Launch with `--use-fake-device-for-media-stream --use-fake-ui-for-media-stream` to record without real mics (two fake inputs, a full-scale beep each second, so meters show clipping). PATCH the project's `transcribe_model` to `tiny` to keep transcription fast.
 - First real transcription downloads the selected Whisper model (hundreds of MB to GBs).

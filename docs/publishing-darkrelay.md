@@ -35,8 +35,8 @@ DarkRelay's format is defined in `packages/core/src/bundle.ts` in the darkrelay 
 The exported audio is the kept EDL segments with word cuts removed (`_apply_word_cuts` in `renderer.py`, the same pieces every full-length render uses). A source time maps into the export by adding up the kept pieces before it.
 
 - A word is kept if its midpoint is inside a kept piece and outside every word mute. A word straddling a cut keeps the part that is heard.
-- Cues group words by speaker and break on a speaker change, a pause over 1 s, 6 s of speech, or 84 characters.
-- Chapters are stored in **source time**, so they follow later edits. A chapter inside a cut moves to where the edit resumes; two that land on the same moment keep the later title. The form shows and accepts edited time, converting with `timeMap.ts`.
+- Cues group words by speaker and break on a speaker change, a pause over 1 s, 6 s of speech, or 84 characters. Every cue lasts at least 0.1 s and ends inside the audio.
+- Chapters are stored in **source time**, so they follow later edits. A chapter inside a cut moves to where the edit resumes, one after the end of the edit is dropped, and two that land on the same moment keep the later title. The form shows and accepts edited time, converting with `timeMap.ts`.
 
 ### Episode details
 
@@ -64,6 +64,7 @@ The backend checks DarkRelay's rules before exporting (slug format, required tit
 - [x] Sidebar panel and details form; chapters in edited time, at the playhead or one per take
 - [x] Tests: time mapping, cues, chapters, notes, validation, the export job end to end
 - [x] Checked against DarkRelay's own `planBundle`: no ignored files, `episode.json` and `chapters.json` validate
+- [x] Bundle criteria tests (`backend/tests/test_bundle_criteria.py`): a checker mirroring DarkRelay's rules (`tests/bundle_criteria.py`) is shown to catch each kind of broken bundle, then real exports (podcast, video, awkward transcripts, chapters in cuts, nothing left to transcribe) must pass it. With `DARKRELAY_DIR` set, bundles also go through DarkRelay's own code (`tests/darkrelay_check.mts`)
 
 ### Phase 2: Publish from Darkroom
 
@@ -87,6 +88,9 @@ The backend checks DarkRelay's rules before exporting (slug format, required tit
 | Chapter times: source or edited? | **Stored in source time, shown in edited time.** Chapters then follow later edits instead of drifting |
 | Muted words in the transcript? | **Left out.** They are silent in the audio, and mutes are usually for words that shouldn't be published |
 | Which transcript formats? | **All three.** VTT for YouTube captions and Apple, SRT for apps that prefer it, JSON for speaker names in Podcasting 2.0 apps. Each becomes a `<podcast:transcript>` |
+| How are bundles tested? | **Against written-down criteria, not just "the export ran".** `tests/bundle_criteria.py` mirrors DarkRelay's schema (file roles, `episode.json`, YouTube limits, chapters) and what apps need from the files (real MP3/MP4/PNG/JPEG, well-formed VTT/SRT/JSON, every cue and chapter inside the audio, the formats agreeing). The cross-check with DarkRelay's own code runs when `DARKRELAY_DIR` points at a checkout, since Darkroom's tests don't need Node. When DarkRelay's rules change, update the checker |
+| Release times | **Rewritten as `YYYY-MM-DDTHH:MM:SS±HH:MM`.** Python accepts ISO forms (a space instead of `T`, `20261101T1000Z`) that DarkRelay's schema rejects |
+| Cover art type | **Decided by the file's content, not the browser's label**, so `cover.png` is always a PNG |
 | Audio format | **The MP3 export (192 kbps).** DarkRelay rejects WAV and FLAC for feeds |
 
 ## Open questions
