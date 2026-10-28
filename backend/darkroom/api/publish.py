@@ -112,9 +112,11 @@ def start_bundle(project_id: str):
         _update_progress(project_id, status="rendering",
                          progress={"step": "publishing", "percent": percent, "message": message})
 
+    # Before returning, so a client never sees the previous export's "ready" for this one
+    _step("Preparing DarkRelay bundle…", 5)
+
     def _run():
         try:
-            _step("Preparing DarkRelay bundle…", 5)
             bundle = build_bundle(get_project(project_id), PROJECTS_DIR, _step)
             with editing_project(project_id) as p:
                 p["publish"]["bundle"] = bundle
