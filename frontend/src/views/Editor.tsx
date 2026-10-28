@@ -21,6 +21,7 @@ import EdlPanel from '../components/Editor/EdlPanel'
 import AdvancedTools from '../components/Editor/AdvancedTools'
 import RenderPanel from '../components/Editor/RenderPanel'
 import SpeakersPanel from '../components/Editor/SpeakersPanel'
+import ProjectName from '../components/Editor/ProjectName'
 import ManualAnalysis from '../components/Editor/ManualAnalysis'
 import AnalyzeConfirm from '../components/Editor/AnalyzeConfirm'
 import Timeline from '../components/Timeline/Timeline'
@@ -36,6 +37,9 @@ interface Props {
   onChange: (project: Project) => void
   onBack: () => void
 }
+
+/** Cut and split changes kept for undo. */
+const CUT_HISTORY_LIMIT = 100
 
 type SidePanel = 'edl' | 'shorts' | 'speakers' | 'render' | 'manual' | 'advanced'
 type PreviewLayout = 'multi' | 'solo'
@@ -55,6 +59,9 @@ export default function Editor({ project, onChange, onBack }: Props) {
   const [duration, setDuration] = useState(0)
   const [cleanView, setCleanView] = useState(false)
   const videoRef = useRef<VideoPreviewHandle>(null)
+  // For async callbacks that finish after the project may have changed
+  const latestProject = useRef(project)
+  latestProject.current = project
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // ── Proxy preview state ──────────────────────────────────────────────────────
@@ -199,20 +206,92 @@ export default function Editor({ project, onChange, onBack }: Props) {
   const wordMutes: WordMute[] = project.word_mutes ?? []
   const hasEdl = !!project.edl
 
-  const handleCutsChange = useCallback(
-    (newCuts: WordCut[]) => {
-      onChange({ ...project, word_cuts: newCuts })
+  const timelineSplits: number[] = project.timeline_splits ?? []
+  const splitsSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Undo/redo history of cuts and timeline splits, shared by the transcript and timeline
+  type CutsSnapshot = { cuts: WordCut[]; splits: number[] }
+  const cutsHistory = useRef<{ undo: CutsSnapshot[]; redo: CutsSnapshot[] }>({ undo: [], redo: [] })
+  const [, setHistoryVersion] = useState(0)
+
+  /** Apply and save cuts and splits without touching the history; only what changed is saved. */
+  const applyCuts = useCallback(
+    ({ cuts, splits }: CutsSnapshot) => {
+      onChange({ ...project, word_cuts: cuts, timeline_splits: splits })
+      if (splits !== timelineSplits) {
+        if (splitsSaveTimer.current) clearTimeout(splitsSaveTimer.current)
+        splitsSaveTimer.current = setTimeout(() => {
+          api.patchProject(project.id, { timeline_splits: splits })
+        }, 600)
+      }
+      if (cuts === wordCuts) return
       if (saveTimer.current) clearTimeout(saveTimer.current)
       saveTimer.current = setTimeout(() => {
-        api.saveWordCuts(project.id, newCuts)
+        api.saveWordCuts(project.id, cuts)
       }, 600)
       // Debounce proxy re-render — wait for the user to stop cutting
       if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current)
       setProxyGenerating(true)
       previewDebounceRef.current = setTimeout(triggerPreview, 3000)
     },
-    [project, onChange], // eslint-disable-line react-hooks/exhaustive-deps
+    [project, onChange, wordCuts, timelineSplits], // eslint-disable-line react-hooks/exhaustive-deps
   )
+
+  /** Record the current cuts and splits for undo, then apply the new ones. */
+  const commitEdit = useCallback(
+    (next: CutsSnapshot) => {
+      const history = cutsHistory.current
+      history.undo = [...history.undo, { cuts: wordCuts, splits: timelineSplits }].slice(-CUT_HISTORY_LIMIT)
+      history.redo = []
+      setHistoryVersion((v) => v + 1)
+      applyCuts(next)
+    },
+    [applyCuts, wordCuts, timelineSplits],
+  )
+
+  const handleCutsChange = useCallback(
+    (newCuts: WordCut[]) => commitEdit({ cuts: newCuts, splits: timelineSplits }),
+    [commitEdit, timelineSplits],
+  )
+
+  const handleSplitsChange = useCallback(
+    (newSplits: number[]) => commitEdit({ cuts: wordCuts, splits: newSplits }),
+    [commitEdit, wordCuts],
+  )
+
+  /** Step cuts and splits back (or forward) through the history. */
+  const stepCutsHistory = useCallback(
+    (direction: 'undo' | 'redo') => {
+      const history = cutsHistory.current
+      const from = direction === 'undo' ? history.undo : history.redo
+      const target = from[from.length - 1]
+      if (!target) return
+      from.pop()
+      ;(direction === 'undo' ? history.redo : history.undo).push({ cuts: wordCuts, splits: timelineSplits })
+      setHistoryVersion((v) => v + 1)
+      applyCuts(target)
+    },
+    [applyCuts, wordCuts, timelineSplits],
+  )
+
+  // Ctrl/Cmd+Z undoes a cut or split change; Ctrl/Cmd+Shift+Z or Ctrl+Y redoes it
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey)) return
+      const target = e.target as HTMLElement
+      if (['INPUT', 'TEXTAREA'].includes(target.tagName) || target.isContentEditable) return
+      const key = e.key.toLowerCase()
+      if (key === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        stepCutsHistory('undo')
+      } else if ((key === 'z' && e.shiftKey) || key === 'y') {
+        e.preventDefault()
+        stepCutsHistory('redo')
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [stepCutsHistory])
 
   const edlSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -270,7 +349,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
         >
           ←
         </button>
-        <span style={{ fontWeight: 600 }}>{project.name}</span>
+        <ProjectName project={project} onRenamed={(name) => onChange({ ...latestProject.current, name })} />
         <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>· {project.status}</span>
 
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -437,6 +516,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
                     cleanView={cleanView}
                     onSeek={seekTo}
                     onCutsChange={handleCutsChange}
+                    onUndoCuts={cutsHistory.current.undo.length > 0 ? () => stepCutsHistory('undo') : undefined}
                     onMutesChange={handleMutesChange}
                     onTogglePlay={togglePlayPause}
                     onSetEdlKept={setSegmentsKept}
@@ -571,6 +651,8 @@ export default function Editor({ project, onChange, onBack }: Props) {
             speakerFile={primarySpeaker?.file}
             onSeek={seekTo}
             onCutsChange={handleCutsChange}
+            splits={timelineSplits}
+            onSplitsChange={handleSplitsChange}
           />
         </div>
       </div>

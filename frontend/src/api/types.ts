@@ -145,6 +145,7 @@ export interface Project {
   edl: EDL | null
   word_cuts: WordCut[]   // manual word-level cuts, separate from AI EDL cuts
   word_mutes: WordMute[] // audio-only mutes — video kept, sound silenced
+  timeline_splits: number[] // source times where timeline chunks are split
   renders: Record<string, Render>
   progress: Progress
   transcribe_model?: string

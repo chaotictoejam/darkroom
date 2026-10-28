@@ -18,6 +18,17 @@ export function mergeAndSortCuts(cuts: WordCut[]): WordCut[] {
   return merged
 }
 
+/** Remove [start, end] from the cuts, splitting any cut that spans it. */
+export function subtractRange(cuts: WordCut[], start: number, end: number): WordCut[] {
+  const out: WordCut[] = []
+  for (const c of cuts) {
+    if (c.end <= start || c.start >= end) { out.push(c); continue }
+    if (c.start < start) out.push({ start: c.start, end: start })
+    if (c.end > end) out.push({ start: end, end: c.end })
+  }
+  return out
+}
+
 // ── Time-mapping utilities ─────────────────────────────────────────────────────
 // The proxy video is the rendered output (all cuts applied). These functions
 // convert between source-file time and output-timeline time so that seeking

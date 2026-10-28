@@ -26,6 +26,7 @@ _DEFAULTS = {
     "source": "upload",
     "word_cuts": [],
     "word_mutes": [],
+    "timeline_splits": [],
     "renders": {},
     "progress": {"step": "", "percent": 0, "message": ""},
 }
@@ -110,6 +111,7 @@ def new_project(name: str, source: str = "upload") -> dict:
         "project_type": "video",
         "word_cuts": [],
         "word_mutes": [],
+        "timeline_splits": [],
         "renders": {},
         "progress": {"step": "", "percent": 0, "message": ""},
     }

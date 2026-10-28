@@ -23,6 +23,8 @@ class PatchProjectBody(BaseModel):
     transcribe_model: Optional[str] = None
     # Present-but-null means auto-detect, so use a sentinel for "not sent".
     transcribe_language: Optional[str] = ""
+    # Times (source seconds) where the user split timeline chunks
+    timeline_splits: Optional[list[float]] = None
 
 
 @router.get("/projects")
@@ -60,6 +62,8 @@ def patch_project(project_id: str, body: PatchProjectBody):
                 proj["transcribe_model"] = body.transcribe_model
             if body.transcribe_language != "":
                 proj["transcribe_language"] = body.transcribe_language or None
+            if body.timeline_splits is not None:
+                proj["timeline_splits"] = sorted({round(t, 3) for t in body.timeline_splits if t >= 0})
     except LookupError:
         raise HTTPException(404, "Project not found")
     return proj
