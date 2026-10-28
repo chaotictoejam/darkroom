@@ -10,6 +10,7 @@
  *   │ [Render] ├──────────────────────┴──────────────────┤
  *   │ [Manual] │ Timeline / Tracker                      │
  *   └──────────┴─────────────────────────────────────────┘
+ * The sidebar, preview and timeline can be resized by dragging their edges (ResizeHandle).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, subscribeToProgress } from '../api/client'
@@ -26,6 +27,7 @@ import ProjectName from '../components/Editor/ProjectName'
 import ManualAnalysis from '../components/Editor/ManualAnalysis'
 import AnalyzeConfirm from '../components/Editor/AnalyzeConfirm'
 import Timeline from '../components/Timeline/Timeline'
+import ResizeHandle, { useStoredSize } from '../components/ResizeHandle'
 import {
   buildKeptRanges,
   outputToSourceTime,
@@ -41,6 +43,15 @@ interface Props {
 
 /** Cut and split changes kept for undo. */
 const CUT_HISTORY_LIMIT = 100
+
+// Resizable panels (px)
+const SIDEBAR_W = 260
+const SIDEBAR_MIN = 200
+const TIMELINE_H = 196
+const TIMELINE_MIN = 120
+const PREVIEW_W = 380
+const PREVIEW_MIN = 240
+const TRANSCRIPT_MIN = 300
 
 type SidePanel = 'edl' | 'shorts' | 'speakers' | 'render' | 'publish' | 'manual' | 'advanced'
 type PreviewLayout = 'multi' | 'solo'
@@ -59,6 +70,9 @@ export default function Editor({ project, onChange, onBack }: Props) {
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [cleanView, setCleanView] = useState(false)
+  const [sidebarWidth, setSidebarWidth] = useStoredSize('darkroom.sidebarWidth', SIDEBAR_W)
+  const [timelineHeight, setTimelineHeight] = useStoredSize('darkroom.timelineHeight', TIMELINE_H)
+  const [previewWidth, setPreviewWidth] = useStoredSize('darkroom.previewWidth', PREVIEW_W)
   const videoRef = useRef<VideoPreviewHandle>(null)
   // For async callbacks that finish after the project may have changed
   const latestProject = useRef(project)
@@ -335,6 +349,14 @@ export default function Editor({ project, onChange, onBack }: Props) {
     [project, onChange],
   )
 
+  // Leave room for the transcript and preview, however large the panels were saved
+  const sidebarMax = Math.max(SIDEBAR_MIN, Math.round(window.innerWidth * 0.4))
+  const timelineMax = Math.max(TIMELINE_MIN, Math.round(window.innerHeight * 0.6))
+  const previewMax = Math.max(PREVIEW_MIN, Math.round(Math.min(
+    window.innerWidth * 0.6,
+    window.innerWidth - Math.min(sidebarWidth, sidebarMax) - TRANSCRIPT_MIN,
+  )))
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
       {/* ── Header ─────────────────────────────────────────────────────────── */}
@@ -399,7 +421,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
 
         {/* ── Left Sidebar ─────────────────────────────────────────────────── */}
         <aside style={{
-          width: 260, flexShrink: 0,
+          width: Math.min(sidebarWidth, sidebarMax), flexShrink: 0,
           background: 'var(--bg-elevated)',
           borderRight: '1px solid var(--border)',
           display: 'flex', flexDirection: 'column',
@@ -484,6 +506,15 @@ export default function Editor({ project, onChange, onBack }: Props) {
             />
           </SidebarSection>
         </aside>
+        <ResizeHandle
+          axis="x"
+          size={Math.min(sidebarWidth, sidebarMax)}
+          min={SIDEBAR_MIN}
+          max={sidebarMax}
+          defaultSize={SIDEBAR_W}
+          onResize={setSidebarWidth}
+          label="Resize sidebar"
+        />
 
         {/* ── Main content ─────────────────────────────────────────────────── */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
@@ -543,8 +574,18 @@ export default function Editor({ project, onChange, onBack }: Props) {
             </div>
 
             {/* Preview */}
+            <ResizeHandle
+              axis="x"
+              invert
+              size={Math.min(previewWidth, previewMax)}
+              min={PREVIEW_MIN}
+              max={previewMax}
+              defaultSize={PREVIEW_W}
+              onResize={setPreviewWidth}
+              label="Resize preview"
+            />
             <div style={{
-              width: 380, flexShrink: 0,
+              width: Math.min(previewWidth, previewMax), flexShrink: 0,
               borderLeft: '1px solid var(--border)',
               display: 'flex', flexDirection: 'column',
               background: 'var(--bg-elevated)',
@@ -653,7 +694,18 @@ export default function Editor({ project, onChange, onBack }: Props) {
           </div>
 
           {/* ── Timeline / Tracker ──────────────────────────────────────────── */}
+          <ResizeHandle
+            axis="y"
+            invert
+            size={Math.min(timelineHeight, timelineMax)}
+            min={TIMELINE_MIN}
+            max={timelineMax}
+            defaultSize={TIMELINE_H}
+            onResize={setTimelineHeight}
+            label="Resize timeline"
+          />
           <Timeline
+            height={Math.min(timelineHeight, timelineMax)}
             duration={duration}
             currentTime={currentTime}
             outputDuration={outputDuration}

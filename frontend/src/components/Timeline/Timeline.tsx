@@ -53,6 +53,7 @@ function cutLength(cuts: WordCut[], start: number, end: number): number {
 }
 
 export default function Timeline({
+  height,
   duration,
   currentTime,
   outputDuration,
@@ -67,6 +68,8 @@ export default function Timeline({
   splits,
   onSplitsChange,
 }: {
+  /** Panel height in px, including the controls row. */
+  height: number
   duration: number
   currentTime: number
   outputDuration: number
@@ -492,7 +495,7 @@ export default function Timeline({
 
   return (
     <div style={{
-      height: 196, flexShrink: 0,
+      height, flexShrink: 0,
       background: 'var(--bg-elevated)',
       borderTop: '1px solid var(--border)',
       padding: '8px 16px',
