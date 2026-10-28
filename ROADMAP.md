@@ -42,6 +42,14 @@ A transcription benchmark (solo, 2-mic and 4-mic recordings with real crosstalk)
 - Benchmark in `backend/bench/` (results in `bench/results/`); GPU runs via `infra/bench/run-gpu-benchmark.sh`
 - Transcription settings in `backend/darkroom/services/transcription.py`; results and decisions in [docs/fast-transcription.md](docs/fast-transcription.md)
 
+### Publishing to DarkRelay, Phase 1: bundle export
+
+The editor's **Publish to DarkRelay** panel exports an episode bundle for [DarkRelay](https://github.com/chaotictoejam/darkrelay), self-hosted podcast hosting in the user's own AWS account: the MP3, VTT/SRT/JSON transcripts and chapters re-timed to the edit, cover art, the full-edit video for video projects, and `episode.json`. The bundle is written locally; the DarkRelay CLI publishes it. Re-exporting keeps the episode's GUID, so DarkRelay updates the same episode.
+
+- Bundle building in `backend/darkroom/services/publish.py`; routes in `api/publish.py`
+- Panel and details form in `frontend/src/components/Editor/PublishPanel.tsx` and `PublishDialog.tsx`
+- Plan, decisions and later phases (publishing straight from Darkroom): [docs/publishing-darkrelay.md](docs/publishing-darkrelay.md)
+
 ---
 
 ## Next

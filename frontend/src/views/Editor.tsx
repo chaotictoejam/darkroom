@@ -20,6 +20,7 @@ import SidebarSection from '../components/Editor/SidebarSection'
 import EdlPanel from '../components/Editor/EdlPanel'
 import AdvancedTools from '../components/Editor/AdvancedTools'
 import RenderPanel from '../components/Editor/RenderPanel'
+import PublishPanel from '../components/Editor/PublishPanel'
 import SpeakersPanel from '../components/Editor/SpeakersPanel'
 import ProjectName from '../components/Editor/ProjectName'
 import ManualAnalysis from '../components/Editor/ManualAnalysis'
@@ -41,7 +42,7 @@ interface Props {
 /** Cut and split changes kept for undo. */
 const CUT_HISTORY_LIMIT = 100
 
-type SidePanel = 'edl' | 'shorts' | 'speakers' | 'render' | 'manual' | 'advanced'
+type SidePanel = 'edl' | 'shorts' | 'speakers' | 'render' | 'publish' | 'manual' | 'advanced'
 type PreviewLayout = 'multi' | 'solo'
 
 export default function Editor({ project, onChange, onBack }: Props) {
@@ -452,6 +453,19 @@ export default function Editor({ project, onChange, onBack }: Props) {
             onToggle={() => togglePanel('render')}
           >
             <RenderPanel project={project} onChange={onChange} />
+          </SidebarSection>
+
+          <SidebarSection
+            label="Publish to DarkRelay"
+            open={openPanels.has('publish')}
+            onToggle={() => togglePanel('publish')}
+          >
+            <PublishPanel
+              project={project}
+              keptRanges={keptRangesRef.current}
+              currentTime={currentTime}
+              onChange={onChange}
+            />
           </SidebarSection>
 
           {/* Spacer pushes advanced section to bottom */}
