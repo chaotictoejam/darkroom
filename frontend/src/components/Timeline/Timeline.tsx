@@ -12,12 +12,12 @@ import { api } from '../../api/client'
 import type { EDLSegment, TranscriptSegment, WordCut } from '../../api/types'
 import { formatTimecode } from '../../formatTime'
 import { mergeAndSortCuts, subtractRange } from './timeMap'
+import { labelZoomTarget, maxZoom as maxZoomFor, readableZoom as readableZoomFor, zoomPercent as zoomPercentFor } from './zoom'
 
 const PAUSE_MIN = 0.3        // seconds — shorter gaps stay inside a phrase chip
 const PAUSE_LABEL_MIN = 0.8  // seconds — longer pauses show their length, shorter show ···
 const PAUSE_TAIL = 0.08      // seconds — kept just before the next word when shortening a pause
 const PAUSE_SNAP = 0.05      // seconds — pause drag step
-const MIN_VISIBLE = 3        // seconds — most zoomed-in view
 const WAVEFORM_RATE = 40     // waveform values per second of audio
 const BAR_PX = 2             // px per waveform bar
 const CHIP_MIN_PX = 6        // narrower chips are hidden
@@ -104,7 +104,7 @@ export default function Timeline({
   useEffect(() => { viewStartRef.current = viewStart }, [viewStart])
   useEffect(() => { durationRef.current = duration }, [duration])
 
-  const maxZoom = Math.max(1, duration / MIN_VISIBLE)
+  const maxZoom = maxZoomFor(duration)
 
   // Fetch waveform once the file and duration are known
   useEffect(() => {
@@ -136,6 +136,18 @@ export default function Timeline({
   // ── Zoom / pan ───────────────────────────────────────────────────────────────
   const visibleDuration = duration > 0 ? duration / zoom : 0
   const pxPerSec = visibleDuration > 0 ? trackWidth / visibleDuration : 0
+  // `zoom` is a multiple of the fit-to-width view; the readable scale is what's shown as 100%
+  const readableZoom = readableZoomFor(duration, trackWidth)
+  const zoomPercent = zoomPercentFor(zoom, duration, trackWidth)
+  const labelTarget = labelZoomTarget(zoom, readableZoom)
+
+  // Open at the readable scale once the recording length and track width are known
+  const zoomInitialised = useRef(false)
+  useEffect(() => {
+    if (zoomInitialised.current || duration === 0 || trackWidth === 0) return
+    zoomInitialised.current = true
+    setZoom(readableZoom)
+  }, [duration, trackWidth, readableZoom])
 
   // Clamp viewStart when zoom or source duration changes
   useEffect(() => {
@@ -170,7 +182,7 @@ export default function Timeline({
       const visD = dur / z
       const mouseTime = vs + mouseRatio * visD
       const factor = e.deltaY < 0 ? 1.25 : 1 / 1.25
-      const newZoom = Math.max(1, Math.min(Math.max(1, dur / MIN_VISIBLE), z * factor))
+      const newZoom = Math.max(1, Math.min(maxZoomFor(dur), z * factor))
       if (newZoom === z) return
       const newVisD = dur / newZoom
       setZoom(newZoom)
@@ -546,11 +558,11 @@ export default function Timeline({
             style={{ background: 'none', border: 'none', color: 'var(--text)', fontSize: 16, lineHeight: 1, padding: '0 4px', cursor: zoom <= 1 ? 'default' : 'pointer', opacity: zoom <= 1 ? 0.35 : 1 }}
           >−</button>
           <span
-            style={{ fontSize: 12, color: 'var(--text)', minWidth: 44, textAlign: 'center', cursor: zoom > 1 ? 'pointer' : 'default' }}
-            title={zoom > 1 ? 'Click to fit the whole recording' : undefined}
-            onClick={zoom > 1 ? () => applyZoom(1) : undefined}
+            style={{ fontSize: 12, color: 'var(--text)', minWidth: 44, textAlign: 'center', cursor: labelTarget !== null ? 'pointer' : 'default' }}
+            title={labelTarget === null ? undefined : labelTarget === 1 ? 'Click to fit the whole recording' : 'Click to zoom to 100%'}
+            onClick={labelTarget !== null ? () => applyZoom(labelTarget) : undefined}
           >
-            {Math.round(zoom * 100)}%
+            {zoomPercent}%
           </span>
           <button
             onPointerDown={(e) => e.stopPropagation()}
