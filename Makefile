@@ -9,7 +9,7 @@
 #   make desktop         — build, then run the desktop app (starts its own backend)
 #   make desktop-dev     — backend + Vite + Electron with hot reload
 
-.PHONY: install dev backend frontend build lint desktop-install desktop desktop-dev desktop-electron
+.PHONY: install dev backend frontend build lint test desktop-install desktop desktop-dev desktop-electron
 
 # Use the project .venv if it exists, otherwise fall back to whatever python is on PATH
 VENV_PYTHON := $(if $(wildcard .venv/Scripts/python.exe),.venv/Scripts/python.exe,\
@@ -66,3 +66,6 @@ desktop-electron:
 lint:
 	cd frontend && npx tsc --noEmit
 	@echo "TypeScript check passed"
+
+test:
+	cd frontend && npm test
