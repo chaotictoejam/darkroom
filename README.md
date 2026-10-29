@@ -55,7 +55,7 @@ Darkroom's goal is that **nothing leaves your control**. Recording, transcriptio
 ## Requirements
 
 - Python 3.11+
-- Node.js 18+
+- Node.js 20.19+ or 22.12+
 - FFmpeg (full build, required for rendering)
 - An Anthropic API key  
   **or**  
