@@ -18,6 +18,7 @@ const PAUSE_LABEL_MIN = 0.8  // seconds — longer pauses show their length, sho
 const PAUSE_TAIL = 0.08      // seconds — kept just before the next word when shortening a pause
 const PAUSE_SNAP = 0.05      // seconds — pause drag step
 const MIN_VISIBLE = 3        // seconds — most zoomed-in view
+const READABLE_PX_PER_SEC = 45 // px per second at 100% zoom — phrase chips are readable
 const WAVEFORM_RATE = 40     // waveform values per second of audio
 const BAR_PX = 2             // px per waveform bar
 const CHIP_MIN_PX = 6        // narrower chips are hidden
@@ -136,6 +137,19 @@ export default function Timeline({
   // ── Zoom / pan ───────────────────────────────────────────────────────────────
   const visibleDuration = duration > 0 ? duration / zoom : 0
   const pxPerSec = visibleDuration > 0 ? trackWidth / visibleDuration : 0
+  // `zoom` is a multiple of the fit-to-width view; the readable scale is what's shown as 100%
+  const readableZoom = trackWidth > 0 && duration > 0
+    ? Math.max(1, Math.min(maxZoom, (READABLE_PX_PER_SEC * duration) / trackWidth))
+    : 1
+  const zoomPercent = Math.max(1, Math.round((pxPerSec / READABLE_PX_PER_SEC) * 100))
+
+  // Open at the readable scale once the recording length and track width are known
+  const zoomInitialised = useRef(false)
+  useEffect(() => {
+    if (zoomInitialised.current || duration === 0 || trackWidth === 0) return
+    zoomInitialised.current = true
+    setZoom(readableZoom)
+  }, [duration, trackWidth, readableZoom])
 
   // Clamp viewStart when zoom or source duration changes
   useEffect(() => {
@@ -546,11 +560,11 @@ export default function Timeline({
             style={{ background: 'none', border: 'none', color: 'var(--text)', fontSize: 16, lineHeight: 1, padding: '0 4px', cursor: zoom <= 1 ? 'default' : 'pointer', opacity: zoom <= 1 ? 0.35 : 1 }}
           >−</button>
           <span
-            style={{ fontSize: 12, color: 'var(--text)', minWidth: 44, textAlign: 'center', cursor: zoom > 1 ? 'pointer' : 'default' }}
-            title={zoom > 1 ? 'Click to fit the whole recording' : undefined}
-            onClick={zoom > 1 ? () => applyZoom(1) : undefined}
+            style={{ fontSize: 12, color: 'var(--text)', minWidth: 44, textAlign: 'center', cursor: readableZoom > 1 ? 'pointer' : 'default' }}
+            title={readableZoom > 1 ? (zoom > 1 ? 'Click to fit the whole recording' : 'Click to zoom to 100%') : undefined}
+            onClick={readableZoom > 1 ? () => applyZoom(zoom > 1 ? 1 : readableZoom) : undefined}
           >
-            {Math.round(zoom * 100)}%
+            {zoomPercent}%
           </span>
           <button
             onPointerDown={(e) => e.stopPropagation()}
