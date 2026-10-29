@@ -19,6 +19,7 @@ make install           # pip install -e "backend/[dev]" into .venv + npm install
 make dev               # backend :8000 (reload) + Vite :5173 — open http://localhost:5173
 make build             # frontend → frontend/dist (FastAPI serves it at :8000)
 make lint              # TypeScript check (tsc --noEmit)
+make test              # frontend unit tests (Vitest; npm run test:watch to watch)
 make desktop-install   # Electron into desktop/node_modules
 make desktop           # build, then Electron starts its own backend on a free port
 make desktop-dev       # backend + Vite + Electron with hot reload
@@ -94,8 +95,9 @@ Roadmap items have a plan in `docs/` with Goals, design, a phased **TODO** check
 
 - Backend: pytest in `backend/tests/` (uses `tmp_path`; skips if ffmpeg is missing). Point `DARKROOM_PROJECTS_DIR` at a temp dir for anything that touches storage, or monkeypatch `PROJECTS_DIR` in each module that imported it (see `tests/test_takes.py`, which also stubs `transcribe_file` so no Whisper model is needed).
 - DarkRelay bundles: `tests/test_bundle_criteria.py` checks exports against `tests/bundle_criteria.py` (DarkRelay's rules, mirrored). Keep the checker in step with DarkRelay; `DARKRELAY_DIR=/path/to/darkrelay` (with `npm install` done) also runs bundles through DarkRelay's own code.
-- Frontend: no unit tests yet; `make lint` and `npm run build` must pass.
+- Frontend: Vitest + React Testing Library in jsdom (`make test`). Tests sit next to the code as `*.test.ts(x)`; `src/test/setup.ts` cleans up between tests and stubs pointer capture. Test pure logic directly and components through their roles and events. `make lint`, `make test` and `npm run build` must pass.
 - End to end: Playwright can drive the app in Chrome (or the desktop app via `_electron`). Launch with `--use-fake-device-for-media-stream --use-fake-ui-for-media-stream` to record without real mics (two fake inputs, a full-scale beep each second, so meters show clipping). PATCH the project's `transcribe_model` to `tiny` to keep transcription fast.
+- CI: `.github/workflows/tests.yml` runs the frontend checks (tsc, Vitest, build; Node 22) and backend pytest (Python 3.11 with FFmpeg and the `bedrock` extra) on every PR and push to `main`. It has no secrets, so tests must stub AI providers and never download a Whisper model. Actions are pinned to commit SHAs.
 - First real transcription downloads the selected Whisper model (hundreds of MB to GBs).
 
 ## Known gotchas

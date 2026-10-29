@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -29,5 +30,10 @@ export default defineConfig({
     // Never inline scripts (e.g. the AudioWorklet) as data: URLs; the desktop
     // app's CSP only allows scripts from 'self'.
     assetsInlineLimit: (filePath) => (filePath.endsWith('.js') ? false : undefined),
+  },
+  test: {
+    environment: 'jsdom',
+    include: ['src/**/*.test.{ts,tsx}'],
+    setupFiles: ['src/test/setup.ts'],
   },
 })

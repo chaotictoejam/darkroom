@@ -1,0 +1,64 @@
+# Runs the frontend and backend checks on every pull request and on pushes to main.
+# Nothing here needs secrets: AI providers are stubbed in the tests and no Whisper
+# model is downloaded.
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A new push to a PR cancels its older, still-running checks
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  frontend:
+    name: Frontend (types, unit tests, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: npm run build
+
+  backend:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11" # the minimum in pyproject
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      # The renderer, recording and bundle tests skip without ffmpeg. Same install
+      # as docker/Dockerfile.backend; its recommends also bring the libGL opencv needs.
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version | head -1
+      # [bedrock] brings in boto3 so the (stubbed) Bedrock tests run instead of skipping
+      - run: pip install -e "backend/[dev,bedrock]"
+      - run: python -m pytest -q tests
+        working-directory: backend
