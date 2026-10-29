@@ -11,46 +11,24 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../api/client'
 import type { EDLSegment, TranscriptSegment, WordCut } from '../../api/types'
 import { formatTimecode } from '../../formatTime'
+import { buildChunks, chunkAt, pauseCuts, splitTarget, type Chunk, type Pause } from './chunks'
+import { formatTick, rulerTicks } from './ruler'
 import { mergeAndSortCuts, subtractRange } from './timeMap'
+import { barHeights as barHeightsFor, visibleBars } from './waveform'
 import { labelZoomTarget, maxZoom as maxZoomFor, readableZoom as readableZoomFor, zoomPercent as zoomPercentFor } from './zoom'
 
-const PAUSE_MIN = 0.3        // seconds — shorter gaps stay inside a phrase chip
 const PAUSE_LABEL_MIN = 0.8  // seconds — longer pauses show their length, shorter show ···
-const PAUSE_TAIL = 0.08      // seconds — kept just before the next word when shortening a pause
 const PAUSE_SNAP = 0.05      // seconds — pause drag step
 const WAVEFORM_RATE = 40     // waveform values per second of audio
-const BAR_PX = 2             // px per waveform bar
 const CHIP_MIN_PX = 6        // narrower chips are hidden
-const SPLIT_EDGE = 0.02      // seconds — splits closer than this to a chunk edge are ignored
-const NOISE_HEADROOM_DB = 4  // the waveform floor sits this far above the background noise
 const DRAG_PX_THRESHOLD = 4  // pixels — less than this is a click, not a drag
 const SCROLLBAR_H = 7        // px — height of the scrollbar strip
 const RULER_H = 18           // px
 const LANE_TOP = RULER_H + 3 // px — top of the word lane
 const LANE_H = 22            // px
 const WAVE_TOP = LANE_TOP + LANE_H + 4
-const TICK_STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1200, 1800, 3600]
 
 type DragMode = 'none' | 'selecting' | 'chunks' | 'left-handle' | 'right-handle' | 'scrollbar' | 'pause'
-
-type Phrase = { start: number; end: number; text: string; cut: boolean }
-/** A silence between words; `kept` is how much of it survives the cuts. */
-type Pause = { start: number; end: number; kept: number; locked: boolean }
-/** A chip in the word lane — a phrase or a pause. */
-type Chunk = { start: number; end: number }
-
-/** Ruler label: m:ss, with tenths when ticks are under a second apart. */
-function formatTick(t: number, step: number): string {
-  const m = Math.floor(t / 60)
-  const s = t - m * 60
-  const ss = step < 1 ? s.toFixed(1).padStart(4, '0') : String(Math.round(s)).padStart(2, '0')
-  return `${m}:${ss}`
-}
-
-/** Seconds of [start, end] covered by the (merged, non-overlapping) cuts. */
-function cutLength(cuts: WordCut[], start: number, end: number): number {
-  return cuts.reduce((sum, c) => sum + Math.max(0, Math.min(end, c.end) - Math.max(start, c.start)), 0)
-}
 
 export default function Timeline({
   height,
@@ -113,15 +91,7 @@ export default function Timeline({
     api.getWaveform(projectId, speakerFile, buckets).then(({ waveform }) => setWaveform(waveform)).catch(() => {})
   }, [projectId, speakerFile, duration])
 
-  // Bar heights on a dB scale whose floor sits just above the background noise
-  // (the quietest tenth of the file), so silence draws flat and speech fills the lane
-  const barHeights = useMemo(() => {
-    if (waveform.length === 0) return []
-    const sorted = [...waveform].sort((a, b) => a - b)
-    const noise = Math.max(1e-4, sorted[Math.floor(sorted.length * 0.1)])
-    const floorDb = Math.min(-20, Math.max(-60, 20 * Math.log10(noise) + NOISE_HEADROOM_DB))
-    return waveform.map((amp) => Math.max(0, Math.min(1, 1 - (20 * Math.log10(Math.max(amp, 1e-6))) / floorDb)))
-  }, [waveform])
+  const barHeights = useMemo(() => barHeightsFor(waveform), [waveform])
 
   // Track width in pixels, for ruler spacing and hiding chips too small to read
   useEffect(() => {
@@ -213,65 +183,15 @@ export default function Timeline({
     e > viewStart && s < viewStart + visibleDuration
 
   // ── Phrases and pauses ───────────────────────────────────────────────────────
-  // Words closer than PAUSE_MIN form one phrase chip; longer gaps (including
-  // leading and trailing silence) become pause chips. User splits then break
-  // any chip in two at the split time.
-  const { phrases, pauses } = useMemo(() => {
-    const words = segments.flatMap((s) => s.words).sort((a, b) => a.start - b.start)
-    const edlCuts = edlSegments.filter((s) => !s.keep)
-    const isCut = (start: number, end: number) => {
-      const mid = (start + end) / 2
-      return wordCuts.some((c) => c.start <= mid && c.end >= mid)
-        || edlCuts.some((s) => s.start <= mid && s.end > mid)
-    }
-    /** [start, end] broken at the splits strictly inside it. */
-    const pieces = (start: number, end: number): Array<[number, number]> => {
-      const points = [start, ...splits.filter((t) => t > start + SPLIT_EDGE && t < end - SPLIT_EDGE), end]
-      return points.slice(1).map((t, i) => [points[i], t])
-    }
-    const phrases: Phrase[] = []
-    const pauses: Pause[] = []
-    const addPhrase = (start: number, end: number, ws: typeof words) => {
-      for (const [ps, pe] of pieces(start, end)) {
-        const inside = ws.filter((w) => (w.start + w.end) / 2 >= ps && (w.start + w.end) / 2 < pe)
-        phrases.push({
-          start: ps, end: pe,
-          text: inside.map((w) => w.word.trim()).join(' '),
-          cut: inside.length > 0 ? inside.every((w) => isCut(w.start, w.end)) : isCut(ps, pe),
-        })
-      }
-    }
-    const addPause = (start: number, end: number) => {
-      for (const [ps, pe] of pieces(start, end)) {
-        // Locked: cut by the EDL, or inside a manual cut that runs past both ends
-        const locked = edlCuts.some((s) => s.start < pe - 0.05 && s.end > ps + 0.05)
-          || wordCuts.some((c) => c.start < ps - 0.01 && c.end > pe + 0.01)
-        pauses.push({ start: ps, end: pe, kept: Math.max(0, pe - ps - cutLength(wordCuts, ps, pe)), locked })
-      }
-    }
-    let current: { start: number; end: number; words: typeof words } | null = null
-    let lastEnd = 0
-    for (const w of words) {
-      if (w.start - lastEnd >= PAUSE_MIN) {
-        if (current) addPhrase(current.start, current.end, current.words)
-        current = null
-        addPause(lastEnd, w.start)
-      }
-      if (!current) current = { start: w.start, end: w.end, words: [] }
-      current.words.push(w)
-      current.end = Math.max(current.end, w.end)
-      lastEnd = Math.max(lastEnd, w.end)
-    }
-    if (current) addPhrase(current.start, current.end, current.words)
-    if (words.length > 0 && duration - lastEnd >= PAUSE_MIN) addPause(lastEnd, duration)
-    return { phrases, pauses }
-  }, [segments, wordCuts, edlSegments, duration, splits])
+  const { phrases, pauses } = useMemo(
+    () => buildChunks(segments, wordCuts, edlSegments, splits, duration),
+    [segments, wordCuts, edlSegments, duration, splits],
+  )
 
   /** Split the chunk under the playhead at the playhead. */
   function splitAtPlayhead() {
     const t = Math.round(currentTime * 1000) / 1000
-    const chunk = chunks.find((c) => t > c.start + SPLIT_EDGE && t < c.end - SPLIT_EDGE)
-    if (!chunk || splits.some((s) => Math.abs(s - t) < SPLIT_EDGE)) return
+    if (!splitTarget(chunks, splits, t)) return
     onSplitsChange([...splits, t].sort((a, b) => a - b))
   }
 
@@ -280,38 +200,10 @@ export default function Timeline({
     [phrases, pauses],
   )
 
-  /** The chunk under time t, or the nearest one. */
-  function chunkAt(t: number): Chunk | null {
-    let best: Chunk | null = null
-    let bestDist = Infinity
-    for (const c of chunks) {
-      const dist = t < c.start ? c.start - t : t > c.end ? t - c.end : 0
-      if (dist < bestDist) { best = c; bestDist = dist }
-      if (dist === 0) break
-    }
-    return best
-  }
-
   const isSelected = (c: Chunk) =>
     !!selection && c.start >= selection.start - 0.001 && c.end <= selection.end + 0.001
 
-  /** Keep `kept` seconds of a pause: cut its middle, leaving a short tail before the next word. */
-  function setPauseLength(pause: Pause, kept: number) {
-    let cuts = subtractRange(wordCuts, pause.start, pause.end)
-    if (pause.end - pause.start - kept > 0.02) {
-      const tail = Math.min(PAUSE_TAIL, kept / 2)
-      cuts = [...cuts, { start: pause.start + kept - tail, end: pause.end - tail }]
-    }
-    onCutsChange(mergeAndSortCuts(cuts))
-  }
-
-  // Ruler ticks — the smallest step that leaves room for a label
-  const tickStep = TICK_STEPS.find((s) => s * pxPerSec >= 70) ?? TICK_STEPS[TICK_STEPS.length - 1]
-  const ticks: number[] = []
-  if (pxPerSec > 0) {
-    const last = Math.floor((viewStart + visibleDuration) / tickStep)
-    for (let k = Math.ceil(viewStart / tickStep); k <= last; k++) ticks.push(k * tickStep)
-  }
+  const { step: tickStep, ticks } = rulerTicks(viewStart, visibleDuration, pxPerSec)
 
   // Delete/Escape keyboard handling when there's an active selection
   useEffect(() => {
@@ -411,7 +303,7 @@ export default function Timeline({
     }
     const t = pxToTime(e.clientX)
     if (dragMode.current === 'chunks') {
-      const c = chunkAt(t)
+      const c = chunkAt(chunks, t)
       if (c) setSelection({ start: Math.min(dragAnchorTime.current, c.start), end: Math.max(chunkAnchorEnd.current, c.end) })
     } else if (dragMode.current === 'pause' && pauseDrag) {
       const { pause } = pauseDrag
@@ -431,7 +323,7 @@ export default function Timeline({
     const wasDrag = Math.abs(e.clientX - dragStartX.current) >= DRAG_PX_THRESHOLD
     if (dragMode.current === 'pause') {
       if (pauseDrag && Math.abs(pauseDrag.kept - pauseDrag.pause.kept) > 0.01) {
-        setPauseLength(pauseDrag.pause, pauseDrag.kept)
+        onCutsChange(pauseCuts(wordCuts, pauseDrag.pause, pauseDrag.kept))
       }
       setPauseDrag(null)
     } else if (dragMode.current === 'chunks' && !wasDrag) {
@@ -624,12 +516,7 @@ export default function Timeline({
 
               {/* Waveform — the visible portion, reduced to one bar per BAR_PX (max of each run) */}
               {waveform.length > 0 && (() => {
-                const startIdx = Math.floor((viewStart / duration) * waveform.length)
-                const endIdx = Math.ceil(((viewStart + visibleDuration) / duration) * waveform.length)
-                const visible = barHeights.slice(startIdx, endIdx)
-                const per = Math.max(1, Math.floor(visible.length / Math.max(1, trackWidth / BAR_PX)))
-                const slice: number[] = []
-                for (let i = 0; i < visible.length; i += per) slice.push(Math.max(...visible.slice(i, i + per)))
+                const { startIdx, per, bars: slice } = visibleBars(barHeights, duration, viewStart, visibleDuration, trackWidth)
                 // Place the slice by its buckets' own times so bars line up with the words
                 const bucketDur = duration / waveform.length
                 return (
