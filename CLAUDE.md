@@ -27,7 +27,7 @@ cd backend && ../.venv/bin/python -m pytest -q tests   # backend tests (need ffm
 cd backend && ../.venv/bin/python bench/transcription.py --help   # transcription benchmark (pip install -e ".[bench]")
 ```
 
-Requires Python 3.11+ (pyproject), Node 18+, full FFmpeg. AI provider config lives in `.env` (see `.env.example`).
+Requires Python 3.11+ (pyproject), Node 20.19+ or 22.12+ (Vite 8), full FFmpeg. AI provider config lives in `.env` (see `.env.example`).
 
 ## Layout
 
