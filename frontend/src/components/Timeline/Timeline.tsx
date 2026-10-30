@@ -15,7 +15,7 @@ import { buildChunks, chunkAt, pauseCuts, splitTarget, type Chunk, type Pause } 
 import { formatTick, rulerTicks } from './ruler'
 import { mergeAndSortCuts, subtractRange } from './timeMap'
 import { barHeights as barHeightsFor, visibleBars } from './waveform'
-import { labelZoomTarget, maxZoom as maxZoomFor, readableZoom as readableZoomFor, zoomPercent as zoomPercentFor } from './zoom'
+import { useTimelineView } from './useTimelineView'
 
 const PAUSE_LABEL_MIN = 0.8  // seconds — longer pauses show their length, shorter show ···
 const PAUSE_SNAP = 0.05      // seconds — pause drag step
@@ -66,23 +66,16 @@ export default function Timeline({
   const [waveform, setWaveform] = useState<number[]>([])
   const [selection, setSelection] = useState<{ start: number; end: number } | null>(null)
   const [pauseDrag, setPauseDrag] = useState<{ pause: Pause; kept: number } | null>(null)
-  const [zoom, setZoom] = useState(1)
-  const [viewStart, setViewStart] = useState(0)
-  const [trackWidth, setTrackWidth] = useState(0)
   const trackRef = useRef<HTMLDivElement>(null)
   const dragMode = useRef<DragMode>('none')
   const dragAnchorTime = useRef(0)
   const dragStartX = useRef(0)
   const chunkAnchorEnd = useRef(0) // end of the chunk a chunk drag started on
-  // Refs so the non-passive wheel handler always reads fresh values
-  const zoomRef = useRef(1)
-  const viewStartRef = useRef(0)
-  const durationRef = useRef(duration)
-  useEffect(() => { zoomRef.current = zoom }, [zoom])
-  useEffect(() => { viewStartRef.current = viewStart }, [viewStart])
-  useEffect(() => { durationRef.current = duration }, [duration])
-
-  const maxZoom = maxZoomFor(duration)
+  const {
+    zoom, viewStart, trackWidth, visibleDuration, pxPerSec,
+    maxZoom, zoomPercent, labelTarget,
+    applyZoom, panTo, toLeft, toWidth, inView, pxToTime,
+  } = useTimelineView(trackRef, duration, currentTime)
 
   // Fetch waveform once the file and duration are known
   useEffect(() => {
@@ -92,95 +85,6 @@ export default function Timeline({
   }, [projectId, speakerFile, duration])
 
   const barHeights = useMemo(() => barHeightsFor(waveform), [waveform])
-
-  // Track width in pixels, for ruler spacing and hiding chips too small to read
-  useEffect(() => {
-    const el = trackRef.current
-    if (!el) return
-    const observer = new ResizeObserver(() => setTrackWidth(el.clientWidth))
-    observer.observe(el)
-    setTrackWidth(el.clientWidth)
-    return () => observer.disconnect()
-  }, [])
-
-  // ── Zoom / pan ───────────────────────────────────────────────────────────────
-  const visibleDuration = duration > 0 ? duration / zoom : 0
-  const pxPerSec = visibleDuration > 0 ? trackWidth / visibleDuration : 0
-  // `zoom` is a multiple of the fit-to-width view; the readable scale is what's shown as 100%
-  const readableZoom = readableZoomFor(duration, trackWidth)
-  const zoomPercent = zoomPercentFor(zoom, duration, trackWidth)
-  const labelTarget = labelZoomTarget(zoom, readableZoom)
-
-  // Open at the readable scale once the recording length and track width are known
-  const zoomInitialised = useRef(false)
-  useEffect(() => {
-    if (zoomInitialised.current || duration === 0 || trackWidth === 0) return
-    zoomInitialised.current = true
-    setZoom(readableZoom)
-  }, [duration, trackWidth, readableZoom])
-
-  // Clamp viewStart when zoom or source duration changes
-  useEffect(() => {
-    if (duration === 0) return
-    setViewStart((vs) => Math.min(vs, Math.max(0, duration - duration / zoom)))
-  }, [zoom, duration])
-
-  // Auto-scroll to follow the playhead when zoomed in
-  useEffect(() => {
-    const z = zoomRef.current
-    const dur = durationRef.current
-    if (z <= 1 || dur === 0) return
-    const visD = dur / z
-    const vs = viewStartRef.current
-    if (currentTime < vs || currentTime > vs + visD) {
-      setViewStart(Math.max(0, Math.min(dur - visD, currentTime - visD * 0.1)))
-    }
-  }, [currentTime])
-
-  // Non-passive wheel listener — zooms centered on mouse cursor
-  useEffect(() => {
-    const el = trackRef.current
-    if (!el) return
-    const handler = (e: WheelEvent) => {
-      e.preventDefault()
-      const dur = durationRef.current
-      if (dur === 0) return
-      const z = zoomRef.current
-      const vs = viewStartRef.current
-      const rect = el.getBoundingClientRect()
-      const mouseRatio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
-      const visD = dur / z
-      const mouseTime = vs + mouseRatio * visD
-      const factor = e.deltaY < 0 ? 1.25 : 1 / 1.25
-      const newZoom = Math.max(1, Math.min(maxZoomFor(dur), z * factor))
-      if (newZoom === z) return
-      const newVisD = dur / newZoom
-      setZoom(newZoom)
-      setViewStart(Math.max(0, Math.min(dur - newVisD, mouseTime - mouseRatio * newVisD)))
-    }
-    el.addEventListener('wheel', handler, { passive: false })
-    return () => el.removeEventListener('wheel', handler)
-  }, [])
-
-  function applyZoom(newZoom: number) {
-    if (duration === 0) return
-    newZoom = Math.max(1, Math.min(maxZoom, newZoom))
-    const newVisD = duration / newZoom
-    setZoom(newZoom)
-    if (newZoom <= 1) {
-      setViewStart(0)
-    } else {
-      setViewStart(Math.max(0, Math.min(duration - newVisD, currentTime - newVisD / 2)))
-    }
-  }
-
-  // Position helpers — all times are in source seconds, mapped to visible window
-  const toLeft = (time: number) =>
-    visibleDuration > 0 ? `${((time - viewStart) / visibleDuration) * 100}%` : '0%'
-  const toWidth = (dt: number) =>
-    visibleDuration > 0 ? `${(dt / visibleDuration) * 100}%` : '0%'
-  const inView = (s: number, e: number) =>
-    e > viewStart && s < viewStart + visibleDuration
 
   // ── Phrases and pauses ───────────────────────────────────────────────────────
   const { phrases, pauses } = useMemo(
@@ -234,14 +138,6 @@ export default function Timeline({
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [currentTime, chunks, splits]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Maps screen x → source time, accounting for zoom/pan
-  function pxToTime(clientX: number): number {
-    if (!trackRef.current || duration === 0) return 0
-    const rect = trackRef.current.getBoundingClientRect()
-    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
-    return Math.max(0, Math.min(duration, viewStart + ratio * visibleDuration))
-  }
-
   function commitCut() {
     if (!selection || selection.end - selection.start < 0.033) {
       setSelection(null)
@@ -270,10 +166,7 @@ export default function Timeline({
       if (e.clientY > rect.bottom - SCROLLBAR_H - 2) {
         // Click on scrollbar — jump view to clicked position then start drag
         const ratio = (e.clientX - rect.left) / rect.width
-        const clickTime = ratio * duration
-        const maxVs = duration - visibleDuration
-        const newVs = Math.max(0, Math.min(maxVs, clickTime - visibleDuration / 2))
-        setViewStart(newVs)
+        const newVs = panTo(ratio * duration - visibleDuration / 2)
         dragMode.current = 'scrollbar'
         dragStartX.current = e.clientX
         dragAnchorTime.current = newVs
@@ -296,9 +189,7 @@ export default function Timeline({
       if (!trackRef.current) return
       const rect = trackRef.current.getBoundingClientRect()
       const dx = e.clientX - dragStartX.current
-      const dtPerPx = duration / rect.width
-      const maxVs = duration - visibleDuration
-      setViewStart(Math.max(0, Math.min(maxVs, dragAnchorTime.current + dx * dtPerPx)))
+      panTo(dragAnchorTime.current + dx * (duration / rect.width))
       return
     }
     const t = pxToTime(e.clientX)
