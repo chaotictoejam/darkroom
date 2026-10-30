@@ -14,7 +14,9 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
-from ..services.editor import ai_refusal, ai_status, build_prompt, generate_edl, generate_skip_edl, validate_edl
+from ..services.editor import (
+    ai_refusal, ai_status, build_prompt, generate_edl, generate_skip_edl, recording_duration, validate_edl,
+)
 from ..services.renderer import (
     _detect_face_center_ratio,
     check_ffmpeg,
@@ -283,7 +285,7 @@ def import_edl(project_id: str, body: ImportEdlBody):
     if not proj:
         raise HTTPException(404, "Project not found")
     mt = proj.get("merged_transcript") or []
-    total_duration = mt[-1]["end"] if mt else None
+    total_duration = recording_duration(mt, proj["speakers"]) if mt else None
     try:
         validate_edl(body.edl, total_duration=total_duration)
     except ValueError as exc:

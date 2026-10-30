@@ -7,8 +7,10 @@ import os
 import re
 import threading
 import time
+from pathlib import Path
 from typing import Callable
 
+from .takes import probe_duration
 from .transcription import format_for_claude
 
 
@@ -55,10 +57,21 @@ _STRICT_SUFFIX = (
 _MAX_TOKENS = 64000
 
 
+def recording_duration(merged_transcript: list[dict], speakers: list[dict]) -> float:
+    """
+    Length of the longest track, so the EDL covers the audio after the last
+    word (its decay, the closing room tone) instead of ending on the word's
+    timestamp. Falls back to the transcript's end when no track can be probed.
+    """
+    transcript_end = merged_transcript[-1]["end"] if merged_transcript else 0.0
+    tracks = [probe_duration(Path(s["file_path"])) for s in speakers if s.get("file_path")]
+    return max([transcript_end, *tracks])
+
+
 def build_prompt(merged_transcript: list[dict], speakers: list[dict]) -> str:
     """Return the full user-facing prompt string (for copy-paste into Claude Code)."""
     transcript_text = format_for_claude(merged_transcript)
-    duration = merged_transcript[-1]["end"] if merged_transcript else 0.0
+    duration = recording_duration(merged_transcript, speakers)
     speaker_desc = ", ".join(f"{s['id']} ({s['name']})" for s in speakers)
     cameras = ", ".join(s["id"] for s in speakers)
     return _PROMPT_TMPL.format(
@@ -503,7 +516,7 @@ def generate_edl(
     provider = os.getenv("AI_PROVIDER", "anthropic").lower()
 
     transcript_text = format_for_claude(merged_transcript)
-    duration = merged_transcript[-1]["end"] if merged_transcript else 0.0
+    duration = recording_duration(merged_transcript, speakers)
     speaker_desc = ", ".join(f"{s['id']} ({s['name']})" for s in speakers)
     cameras = ", ".join(s["id"] for s in speakers)
 
@@ -613,6 +626,9 @@ def validate_edl(edl: dict, total_duration: float | None = None) -> None:
             )
         if tail_gap > _SNAP_TOLERANCE:
             out.append(_gap_segment(out[-1]["end"], total_duration, out[-1]))
+        elif total_duration > out[-1]["start"]:
+            # Snap like the gaps between segments, so the last word isn't clipped
+            out[-1]["end"] = total_duration
     edl["segments"] = out
 
 

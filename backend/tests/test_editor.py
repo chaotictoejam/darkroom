@@ -400,3 +400,24 @@ def test_failed_lookup_is_cached_briefly(monkeypatch):
         with pytest.raises(OSError):
             editor._cached(("test",), _fetch)
     assert len(calls) == 1
+
+
+def test_validate_edl_snaps_last_segment_to_the_end_of_the_recording():
+    # Claude ended on the last word's timestamp; the recording runs on past it
+    edl = {
+        "segments": [
+            {"id": "a", "start": 0.0, "end": 29.8, "keep": True, "camera": "A", "layout": "single"},
+        ],
+        "clips": [],
+    }
+    editor.validate_edl(edl, total_duration=31.2)
+    assert edl["segments"][-1]["end"] == 31.2
+
+
+def test_recording_duration_uses_the_longest_track(tmp_path, monkeypatch):
+    lengths = {"a.wav": 31.2, "b.wav": 32.5}
+    monkeypatch.setattr(editor, "probe_duration", lambda path: lengths[path.name])
+    speakers = [{"id": "A", "name": "A", "file_path": str(tmp_path / "a.wav")},
+                {"id": "B", "name": "B", "file_path": str(tmp_path / "b.wav")}]
+    assert editor.recording_duration(_TRANSCRIPT, speakers) == 32.5
+    assert editor.recording_duration(_TRANSCRIPT, _SPEAKERS) == 30.0
