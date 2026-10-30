@@ -33,3 +33,35 @@ export function labelZoomTarget(zoom: number, readable: number): number | null {
   if (readable <= 1) return null
   return zoom > 1 ? 1 : readable
 }
+
+/** The left edge of the view, kept so the view stays inside the recording. */
+export function clampViewStart(viewStart: number, duration: number, zoom: number): number {
+  return Math.max(0, Math.min(duration - duration / zoom, viewStart))
+}
+
+/**
+ * Zoom by `factor` about the point `ratio` (0–1) across the track, keeping
+ * the time under it fixed. The zoom is clamped to [fit, max].
+ */
+export function zoomAbout(
+  zoom: number,
+  viewStart: number,
+  duration: number,
+  ratio: number,
+  factor: number,
+): { zoom: number; viewStart: number } {
+  const next = Math.max(1, Math.min(maxZoom(duration), zoom * factor))
+  const time = viewStart + (ratio * duration) / zoom
+  return { zoom: next, viewStart: clampViewStart(time - (ratio * duration) / next, duration, next) }
+}
+
+/**
+ * The view's left edge after the playhead moves to t: unchanged while t is in
+ * view or the whole recording fits, otherwise t sits a tenth of the way in.
+ */
+export function followPlayhead(t: number, viewStart: number, duration: number, zoom: number): number {
+  if (zoom <= 1 || duration === 0) return viewStart
+  const visible = duration / zoom
+  if (t >= viewStart && t <= viewStart + visible) return viewStart
+  return clampViewStart(t - visible * 0.1, duration, zoom)
+}
