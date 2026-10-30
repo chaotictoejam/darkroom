@@ -148,3 +148,4 @@ Not scheduled yet. Add to this list freely.
 - **Pause and resume** within a take, keeping tracks aligned (takes in the recording studio may cover most of this).
 - **Input gain and monitoring:** per-track gain, clip warnings, and optional headphone monitoring.
 - **Auto-update** for the desktop app.
+- **Waveform detail setting:** the timeline waveform is built from audio resampled to 2 kHz (`aresample=2000` in `api/media.py`), which drops sibilants ("s", "sh", "f"), so a word ending in "s" looks like it runs into silence when it doesn't. Let users pick the waveform sample rate (e.g. 2 kHz default, 8 kHz detailed): about 4× the memory while building it (~57 MB per hour of audio at 8 kHz) for a waveform that matches what you hear.
