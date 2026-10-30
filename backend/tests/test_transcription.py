@@ -3,6 +3,7 @@ import shutil
 import subprocess
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
@@ -168,6 +169,68 @@ def test_chunks_split_into_sentences_at_punctuation_and_pauses():
     parts = tr._split_sentences(words)
     assert ["".join(x["word"] for x in p).strip() for p in parts] == [
         "Hello there.", "How are you", "doing today?", "Good"]
+
+
+def _speech(spans, duration, rate=16000):
+    """Quiet noise with a loud tone over each (start, end) span, as float32 audio."""
+    rng = np.random.default_rng(0)
+    audio = rng.normal(0, 0.001, int(duration * rate)).astype(np.float32)
+    t = np.arange(len(audio)) / rate
+    for start, end in spans:
+        on = (t >= start) & (t < end)
+        audio[on] += 0.3 * np.sin(2 * np.pi * 200 * t[on]).astype(np.float32)
+    return audio
+
+
+def _words_seg(*words):
+    ws = [{"word": f" {w}", "start": s, "end": e} for w, s, e in words]
+    return {"text": " ".join(w for w, _, _ in words), "start": ws[0]["start"], "end": ws[-1]["end"], "words": ws}
+
+
+def test_word_edges_move_onto_the_silence():
+    # Whisper ends "tell," 0.2 s before the sound stops and starts "I" just after it begins
+    audio = _speech([(1.0, 2.2), (2.5, 3.5)], 5.0)
+    segs = [_words_seg(("tell,", 1.0, 2.0)), _words_seg(("I", 2.55, 3.5))]
+    tr.refine_word_edges(segs, audio, 16000)
+    assert segs[0]["words"][0]["end"] == pytest.approx(2.2, abs=0.02)
+    assert segs[1]["words"][0]["start"] == pytest.approx(2.5, abs=0.02)
+    # Segment times follow their words
+    assert segs[0]["end"] == segs[0]["words"][0]["end"]
+    assert segs[1]["start"] == segs[1]["words"][0]["start"]
+
+
+def test_word_edge_moves_are_capped():
+    audio = _speech([(1.0, 3.0), (3.5, 4.0)], 5.0)
+    segs = [_words_seg(("long", 1.0, 2.0), ("next", 3.9, 4.0))]
+    tr.refine_word_edges(segs, audio, 16000)
+    words = segs[0]["words"]
+    assert words[0]["end"] == pytest.approx(2.0 + tr._EDGE_MAX_TAIL_S)
+    assert words[1]["start"] == pytest.approx(3.9 - tr._EDGE_MAX_HEAD_S)
+
+
+def test_silence_inside_a_word_is_trimmed():
+    # Whisper starts "because" 0.8 s before the sound and ends "remembers." 0.3 s after it
+    # A click right where "because" starts doesn't count as its sound
+    audio = _speech([(1.0, 1.5), (1.71, 1.72), (2.5, 3.0), (4.0, 4.5)], 5.0)
+    segs = [_words_seg(("it", 1.0, 1.5), ("because", 1.7, 3.0)), _words_seg(("remembers.", 4.0, 4.8))]
+    tr.refine_word_edges(segs, audio, 16000)
+    assert segs[0]["words"][1]["start"] == pytest.approx(2.5 - tr._EDGE_TRIM_PAD_S, abs=0.02)
+    assert segs[1]["words"][0]["end"] == pytest.approx(4.5 + tr._EDGE_TRIM_PAD_S, abs=0.02)
+
+
+def test_short_quiet_start_is_kept():
+    # Under _EDGE_MIN_TRIM_S of quiet: could be a soft "h" or "s", so the start stays
+    audio = _speech([(1.0, 1.5), (2.1, 3.0)], 5.0)
+    segs = [_words_seg(("it", 1.0, 1.5), ("honestly", 2.0, 3.0))]
+    tr.refine_word_edges(segs, audio, 16000)
+    assert segs[0]["words"][1]["start"] == 2.0
+
+
+def test_gap_without_silence_is_left_alone():
+    audio = _speech([(1.0, 3.0)], 5.0)
+    segs = [_words_seg(("one", 1.0, 2.0), ("two", 2.4, 3.0))]
+    tr.refine_word_edges(segs, audio, 16000)
+    assert [(w["start"], w["end"]) for w in segs[0]["words"]] == [(1.0, 2.0), (2.4, 3.0)]
 
 
 def test_short_replies_are_kept_but_loops_are_dropped():

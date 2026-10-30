@@ -286,7 +286,92 @@ def transcribe_file(
                 "words": part or [],
             })
 
-    return _filter_hallucinations(segments)
+    return refine_word_edges(_filter_hallucinations(segments), audio_np, _SAMPLE_RATE)
+
+
+# Whisper's word edges miss the audio both ways: it ends words early (median
+# 0.09 s, often 0.2 s on a word before a comma or full stop), so a gap can be
+# the tail of a word, and it often starts the first word after a pause early
+# (up to 0.8 s), so a word can begin with silence. Edges are moved onto the
+# real silence.
+_EDGE_FRAME_S = 0.01      # energy frame
+_EDGE_SILENCE_DB = 12.0   # silence is within this of the noise floor
+_EDGE_MAX_TAIL_S = 0.3    # most a word's end is pushed later
+_EDGE_MAX_HEAD_S = 0.15   # most a word's start is pulled earlier
+_EDGE_MIN_TRIM_S = 0.15   # silence inside a word shorter than this may be a soft consonant: kept
+_EDGE_TRIM_PAD_S = 0.03   # left between a trimmed edge and the sound
+_EDGE_MIN_SOUND_S = 0.05  # shorter bursts (clicks) don't stop a trim
+
+
+def _frame_db(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+    """RMS level in dB of each _EDGE_FRAME_S frame."""
+    size = max(1, int(sample_rate * _EDGE_FRAME_S))
+    n = len(audio) // size
+    frames = audio[: n * size].astype(np.float64).reshape(n, size)
+    return 20 * np.log10(np.sqrt((frames ** 2).mean(axis=1)) + 1e-9)
+
+
+def _sustained(mask: np.ndarray, min_frames: int) -> np.ndarray:
+    """``mask`` with runs of True shorter than ``min_frames`` cleared."""
+    edges = np.flatnonzero(np.diff(np.concatenate(([0], mask.astype(np.int8), [0]))))
+    out = np.zeros_like(mask)
+    for start, end in zip(edges[::2], edges[1::2]):
+        if end - start >= min_frames:
+            out[start:end] = True
+    return out
+
+
+def refine_word_edges(segments: list[dict], audio: np.ndarray, sample_rate: int) -> list[dict]:
+    """Move word edges onto the silence in the audio, in place.
+
+    First, silence of _EDGE_MIN_TRIM_S or more at the start or end of a word
+    is trimmed off it (clicks shorter than _EDGE_MIN_SOUND_S count as silence).
+    Then, in each gap between words, the earlier word's end moves to where the
+    sound first drops to the noise floor (the quietest tenth of the track, plus
+    _EDGE_SILENCE_DB), and the next word's start back to where it last rises.
+    Moves are capped, and a gap with no silence in it is left alone. Segment
+    start/end follow their words. ``segments`` must be from one track.
+    """
+    words = sorted((w for seg in segments for w in seg.get("words", [])), key=lambda w: w["start"])
+    if not words or len(audio) == 0:
+        return segments
+    db = _frame_db(audio, sample_rate)
+    if len(db) == 0:
+        return segments
+    quiet = db < np.percentile(db, 10) + _EDGE_SILENCE_DB
+    duration = len(db) * _EDGE_FRAME_S
+    min_trim = int(round(_EDGE_MIN_TRIM_S / _EDGE_FRAME_S))
+    sound = _sustained(~quiet, int(round(_EDGE_MIN_SOUND_S / _EDGE_FRAME_S)))
+
+    for w in words:
+        f0 = int(round(w["start"] / _EDGE_FRAME_S))
+        loud = np.flatnonzero(sound[f0:int(round(w["end"] / _EDGE_FRAME_S))])
+        if len(loud) == 0:
+            continue
+        if loud[0] >= min_trim:
+            w["start"] = round((f0 + loud[0]) * _EDGE_FRAME_S - _EDGE_TRIM_PAD_S, 3)
+        last = f0 + loud[-1] + 1  # frame after the last sound
+        if round(w["end"] / _EDGE_FRAME_S) - last >= min_trim:
+            w["end"] = round(last * _EDGE_FRAME_S + _EDGE_TRIM_PAD_S, 3)
+
+    for i, a in enumerate(words):
+        b = words[i + 1] if i + 1 < len(words) else None
+        gap_end = b["start"] if b else duration
+        g0 = int(round(a["end"] / _EDGE_FRAME_S))
+        g1 = int(round(gap_end / _EDGE_FRAME_S))
+        silent = np.flatnonzero(quiet[g0:g1])
+        if len(silent) == 0:
+            continue
+        a["end"] = round(min(a["end"] + min(silent[0] * _EDGE_FRAME_S, _EDGE_MAX_TAIL_S), gap_end), 3)
+        if b:
+            head = (g1 - g0 - 1 - silent[-1]) * _EDGE_FRAME_S
+            b["start"] = round(max(b["start"] - min(head, _EDGE_MAX_HEAD_S), a["end"]), 3)
+
+    for seg in segments:
+        if seg.get("words"):
+            seg["start"] = seg["words"][0]["start"]
+            seg["end"] = seg["words"][-1]["end"]
+    return segments
 
 
 # A pause this long between words also ends a segment
