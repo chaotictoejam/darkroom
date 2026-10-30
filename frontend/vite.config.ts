@@ -37,7 +37,8 @@ export default defineConfig({
     setupFiles: ['src/test/setup.ts'],
     // `npm run test:coverage` (and CI) fails below these. The global floor sits
     // just under today's numbers so coverage can only go up; raise it as tests
-    // land. Pure timeline logic stays fully covered.
+    // land. Everything in components/Timeline except Timeline.tsx itself (pure
+    // logic, the view hook and the pieces pulled out of it) stays fully covered.
     coverage: {
       provider: 'v8',
       include: ['src/**/*.{ts,tsx}'],
@@ -48,7 +49,7 @@ export default defineConfig({
         branches: 7,
         functions: 7,
         lines: 8,
-        'src/components/Timeline/*.ts': { statements: 100, branches: 100, functions: 100, lines: 100 },
+        'src/components/Timeline/!(Timeline).{ts,tsx}': { statements: 100, branches: 100, functions: 100, lines: 100 },
       },
     },
   },

@@ -12,21 +12,19 @@ import { api } from '../../api/client'
 import type { EDLSegment, TranscriptSegment, WordCut } from '../../api/types'
 import { formatTimecode } from '../../formatTime'
 import { buildChunks, chunkAt, pauseCuts, splitTarget, type Chunk, type Pause } from './chunks'
+import { chipBase, LANE_TOP, RULER_H, SCROLLBAR_H, selectedChip, unselectedChip, WAVE_TOP } from './layout'
+import PauseChip from './PauseChip'
 import { formatTick, rulerTicks } from './ruler'
+import SelectionToolbar from './SelectionToolbar'
 import { mergeAndSortCuts, subtractRange } from './timeMap'
-import { barHeights as barHeightsFor, visibleBars } from './waveform'
 import { useTimelineView } from './useTimelineView'
+import Waveform from './Waveform'
+import ZoomControls from './ZoomControls'
 
-const PAUSE_LABEL_MIN = 0.8  // seconds — longer pauses show their length, shorter show ···
 const PAUSE_SNAP = 0.05      // seconds — pause drag step
 const WAVEFORM_RATE = 40     // waveform values per second of audio
 const CHIP_MIN_PX = 6        // narrower chips are hidden
 const DRAG_PX_THRESHOLD = 4  // pixels — less than this is a click, not a drag
-const SCROLLBAR_H = 7        // px — height of the scrollbar strip
-const RULER_H = 18           // px
-const LANE_TOP = RULER_H + 3 // px — top of the word lane
-const LANE_H = 22            // px
-const WAVE_TOP = LANE_TOP + LANE_H + 4
 
 type DragMode = 'none' | 'selecting' | 'chunks' | 'left-handle' | 'right-handle' | 'scrollbar' | 'pause'
 
@@ -83,8 +81,6 @@ export default function Timeline({
     const buckets = Math.min(200_000, Math.max(400, Math.ceil(duration * WAVEFORM_RATE)))
     api.getWaveform(projectId, speakerFile, buckets).then(({ waveform }) => setWaveform(waveform)).catch(() => {})
   }, [projectId, speakerFile, duration])
-
-  const barHeights = useMemo(() => barHeightsFor(waveform), [waveform])
 
   // ── Phrases and pauses ───────────────────────────────────────────────────────
   const { phrases, pauses } = useMemo(
@@ -275,18 +271,8 @@ export default function Timeline({
   const scrollLeft = duration > 0 ? (viewStart / duration) * 100 : 0
   const scrollWidth = (1 / zoom) * 100
 
-  const selectedChip: React.CSSProperties = {
-    background: 'rgba(59,130,246,0.3)', border: '1px solid rgba(59,130,246,0.9)',
-  }
   // Whether the selection includes anything already cut, so it can be restored
   const selectionHasCuts = !!selection && wordCuts.some((c) => c.start < selection.end && c.end > selection.start)
-
-  const chipBase: React.CSSProperties = {
-    position: 'absolute', top: LANE_TOP, height: LANE_H,
-    borderRadius: 4, fontSize: 11, lineHeight: `${LANE_H}px`,
-    overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
-    boxSizing: 'border-box', pointerEvents: 'none',
-  }
 
   return (
     <div style={{
@@ -331,30 +317,7 @@ export default function Timeline({
           Split
         </button>
 
-        {/* Zoom controls */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <button
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => applyZoom(zoom / 1.5)}
-            disabled={zoom <= 1}
-            title="Zoom out"
-            style={{ background: 'none', border: 'none', color: 'var(--text)', fontSize: 16, lineHeight: 1, padding: '0 4px', cursor: zoom <= 1 ? 'default' : 'pointer', opacity: zoom <= 1 ? 0.35 : 1 }}
-          >−</button>
-          <span
-            style={{ fontSize: 12, color: 'var(--text)', minWidth: 44, textAlign: 'center', cursor: labelTarget !== null ? 'pointer' : 'default' }}
-            title={labelTarget === null ? undefined : labelTarget === 1 ? 'Click to fit the whole recording' : 'Click to zoom to 100%'}
-            onClick={labelTarget !== null ? () => applyZoom(labelTarget) : undefined}
-          >
-            {zoomPercent}%
-          </span>
-          <button
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => applyZoom(zoom * 1.5)}
-            disabled={zoom >= maxZoom}
-            title="Zoom in"
-            style={{ background: 'none', border: 'none', color: 'var(--text)', fontSize: 16, lineHeight: 1, padding: '0 4px', cursor: zoom >= maxZoom ? 'default' : 'pointer', opacity: zoom >= maxZoom ? 0.35 : 1 }}
-          >+</button>
-        </div>
+        <ZoomControls zoom={zoom} maxZoom={maxZoom} zoomPercent={zoomPercent} labelTarget={labelTarget} onZoom={applyZoom} />
       </div>
 
       {/* Track */}
@@ -405,24 +368,11 @@ export default function Timeline({
                 />
               ))}
 
-              {/* Waveform — the visible portion, reduced to one bar per BAR_PX (max of each run) */}
-              {waveform.length > 0 && (() => {
-                const { startIdx, per, bars: slice } = visibleBars(barHeights, duration, viewStart, visibleDuration, trackWidth)
-                // Place the slice by its buckets' own times so bars line up with the words
-                const bucketDur = duration / waveform.length
-                return (
-                  <svg
-                    style={{ position: 'absolute', top: WAVE_TOP, left: toLeft(startIdx * bucketDur), width: toWidth(slice.length * per * bucketDur), height: `calc(100% - ${WAVE_TOP}px)`, pointerEvents: 'none', fill: 'var(--text)', fillOpacity: 0.6 }}
-                    viewBox={`0 0 ${slice.length} 100`}
-                    preserveAspectRatio="none"
-                  >
-                    {slice.map((amp, i) => {
-                      const h = Math.max(0.6, amp * 94)
-                      return <rect key={i} x={i} y={(100 - h) / 2} width={0.75} height={h} />
-                    })}
-                  </svg>
-                )
-              })()}
+              <Waveform
+                waveform={waveform} duration={duration} viewStart={viewStart}
+                visibleDuration={visibleDuration} trackWidth={trackWidth}
+                toLeft={toLeft} toWidth={toWidth}
+              />
 
               {/* Phrase chips */}
               {phrases.filter((p) => inView(p.start, p.end) && (p.end - p.start) * pxPerSec >= CHIP_MIN_PX).map((p) => (
@@ -435,7 +385,7 @@ export default function Timeline({
                     left: toLeft(p.start), width: toWidth(p.end - p.start),
                     padding: (p.end - p.start) * pxPerSec >= 20 ? '0 6px' : 0,
                     pointerEvents: 'auto', cursor: 'pointer',
-                    ...(isSelected(p) ? selectedChip : { background: 'var(--bg-card)', border: '1px solid var(--border)' }),
+                    ...(isSelected(p) ? selectedChip : unselectedChip),
                     color: p.cut ? 'var(--text-muted)' : 'var(--text)',
                     textDecoration: p.cut ? 'line-through' : 'none',
                     opacity: p.cut ? 0.5 : 1,
@@ -447,50 +397,20 @@ export default function Timeline({
 
               {/* Pause chips — the solid part is what's kept, the outline is the recorded length */}
               {pauses.filter((p) => inView(p.start, p.end) && (p.end - p.start) * pxPerSec >= CHIP_MIN_PX).map((p) => {
-                const dragging = pauseDrag && pauseDrag.pause.start === p.start
-                const kept = dragging ? pauseDrag.kept : p.kept
-                const full = p.end - p.start
-                const keptPx = kept * pxPerSec
-                const label = full >= PAUSE_LABEL_MIN || dragging ? `${kept.toFixed(1)}s` : '···'
+                const dragging = !!pauseDrag && pauseDrag.pause.start === p.start
                 return (
-                  <div key={`p${p.start}`}>
-                    <div style={{
-                      ...chipBase,
-                      left: toLeft(p.start), width: toWidth(full),
-                      border: '1px dashed var(--border)',
-                      opacity: kept < full - 0.01 || p.locked ? 1 : 0,
-                    }} />
-                    {!p.locked && (
-                      <>
-                        <div
-                          onPointerDown={(e) => onChunkPointerDown(e, p)}
-                          style={{
-                            ...chipBase,
-                            left: toLeft(p.start), width: toWidth(kept),
-                            ...(dragging || isSelected(p) ? selectedChip : { background: 'var(--bg-card)', border: '1px solid var(--border)' }),
-                            pointerEvents: 'auto', cursor: 'pointer',
-                            color: 'var(--text-muted)', textAlign: 'center',
-                            display: kept > 0 ? 'block' : 'none',
-                          }}
-                        >
-                          {keptPx >= 22 ? label : ''}
-                        </div>
-                        <div
-                          data-handle="pause"
-                          onPointerDown={(e) => onPauseHandlePointerDown(e, p)}
-                          title={`${kept.toFixed(2)}s pause (recorded ${full.toFixed(2)}s) — drag to shorten or lengthen`}
-                          style={{
-                            position: 'absolute', top: LANE_TOP, height: LANE_H,
-                            left: toLeft(p.start + kept), width: 8, transform: 'translateX(-50%)',
-                            cursor: 'ew-resize', zIndex: 3,
-                            display: 'flex', justifyContent: 'center',
-                          }}
-                        >
-                          <div style={{ width: 2, margin: '4px 0', borderRadius: 1, background: dragging ? 'rgba(59,130,246,0.9)' : 'var(--text-muted)', opacity: dragging ? 1 : 0.6 }} />
-                        </div>
-                      </>
-                    )}
-                  </div>
+                  <PauseChip
+                    key={`p${p.start}`}
+                    pause={p}
+                    kept={dragging ? pauseDrag.kept : p.kept}
+                    dragging={dragging}
+                    selected={isSelected(p)}
+                    pxPerSec={pxPerSec}
+                    toLeft={toLeft}
+                    toWidth={toWidth}
+                    onPointerDown={(e) => onChunkPointerDown(e, p)}
+                    onHandlePointerDown={(e) => onPauseHandlePointerDown(e, p)}
+                  />
                 )
               })}
 
@@ -580,33 +500,14 @@ export default function Timeline({
 
         {/* Selection toolbar — floats above the track */}
         {selPct && selPct.width > 0.3 && selection && (
-          <div
-            style={{
-              position: 'absolute',
-              bottom: 'calc(100% + 6px)',
-              left: `${Math.max(5, Math.min(95, selPct.left + selPct.width / 2))}%`,
-              transform: 'translateX(-50%)',
-              zIndex: 100,
-              display: 'flex', alignItems: 'center', gap: 1,
-              background: '#1c1c1c', border: '1px solid #3a3a3a',
-              borderRadius: 7, padding: '3px 4px',
-              boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
-              fontSize: 12, whiteSpace: 'nowrap',
-            }}
-          >
-            <button onPointerDown={(e) => e.stopPropagation()} onClick={commitCut} style={{ background: 'none', border: 'none', color: '#e05555', padding: '3px 10px', borderRadius: 5, fontSize: 12, fontWeight: 600, cursor: 'pointer' }} onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#2e2e2e' }} onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'none' }}>
-              ✂ Cut {(selection.end - selection.start).toFixed(2)}s
-            </button>
-            {selectionHasCuts && (
-              <button onPointerDown={(e) => e.stopPropagation()} onClick={restoreSelection} style={{ background: 'none', border: 'none', color: '#5cbf7a', padding: '3px 10px', borderRadius: 5, fontSize: 12, fontWeight: 600, cursor: 'pointer' }} onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#2e2e2e' }} onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'none' }}>
-                ↺ Restore
-              </button>
-            )}
-            <div style={{ width: 1, background: '#3a3a3a', alignSelf: 'stretch', margin: '3px 2px' }} />
-            <button onPointerDown={(e) => e.stopPropagation()} onClick={() => setSelection(null)} style={{ background: 'none', border: 'none', color: '#888', padding: '3px 8px', borderRadius: 5, fontSize: 11, cursor: 'pointer' }} onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#2e2e2e' }} onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'none' }}>
-              ✕
-            </button>
-          </div>
+          <SelectionToolbar
+            center={selPct.left + selPct.width / 2}
+            length={selection.end - selection.start}
+            canRestore={selectionHasCuts}
+            onCut={commitCut}
+            onRestore={restoreSelection}
+            onClose={() => setSelection(null)}
+          />
         )}
       </div>
     </div>
