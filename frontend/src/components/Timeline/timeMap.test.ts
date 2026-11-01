@@ -80,6 +80,11 @@ describe('buildKeptRanges', () => {
       .toEqual([{ start: 0, end: 8 }, { start: 14, end: 20 }])
   })
 
+  it('leaves kept ranges before and after a cut untouched', () => {
+    expect(buildKeptRanges([seg(0, 10, true), seg(20, 30, true), seg(40, 50, true)], [{ start: 22, end: 24 }], 50))
+      .toEqual([{ start: 0, end: 10 }, { start: 20, end: 22 }, { start: 24, end: 30 }, { start: 40, end: 50 }])
+  })
+
   it('handles cuts at the very start and end', () => {
     expect(buildKeptRanges([], [{ start: 0, end: 2 }, { start: 18, end: 20 }], 20))
       .toEqual([{ start: 2, end: 18 }])

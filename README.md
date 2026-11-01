@@ -1,5 +1,7 @@
 # Darkroom
 
+[![Tests](https://github.com/chaotictoejam/darkroom/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/chaotictoejam/darkroom/actions/workflows/tests.yml)
+
 > *Your footage, developed locally.*
 
 A local-first video and podcast editor. Upload your pre-aligned camera or audio files (or record a podcast in the built-in studio), get an AI-generated edit decision list from Claude, review and tweak cuts in the browser, then render final exports via FFmpeg. Your media and transcripts stay on your machine. The one exception is the optional AI **Analyse** step, which sends transcript text to the AI provider you configure: see [What leaves your machine](#what-leaves-your-machine) before choosing one.
