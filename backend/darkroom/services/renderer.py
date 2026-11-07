@@ -192,7 +192,7 @@ def render_project(project: dict, targets: list[str], projects_dir: Path,
     output_dir = project_dir / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    edl = project["edl"]
+    edl = project.get("edl")
 
     # Build speakers dict, respecting user-specified camera order for split layouts
     all_speakers = {s["id"]: s for s in project["speakers"]}
@@ -205,7 +205,19 @@ def render_project(project: dict, targets: list[str], projects_dir: Path,
     # so the render matches the preview.
     word_cuts = project.get("word_cuts") or []
     word_mutes = project.get("word_mutes") or []
-    kept = _apply_word_cuts([s for s in edl["segments"] if s.get("keep", True)], word_cuts)
+
+    # No EDL (manual-only editing) — treat the whole file as one kept segment.
+    if edl and edl.get("segments"):
+        edl_segments = edl["segments"]
+    else:
+        first = list(speakers_dict.values())[0]
+        info = get_video_info(first["file_path"])
+        first_cam = list(speakers_dict.keys())[0]
+        edl_segments = [{"start": 0.0, "end": info["duration"],
+                         "camera": first_cam, "keep": True}]
+        edl = {"segments": edl_segments, "clips": []}
+
+    kept = _apply_word_cuts([s for s in edl_segments if s.get("keep", True)], word_cuts)
 
     results = {}
 
@@ -229,7 +241,7 @@ def render_project(project: dict, targets: list[str], projects_dir: Path,
 
             elif target in _AUDIO_CODECS:
                 filename = f"fullEdit.{target}"
-                _render_audio(edl["segments"], speakers_dict, word_cuts, word_mutes,
+                _render_audio(edl_segments, speakers_dict, word_cuts, word_mutes,
                               str(output_dir / filename), target)
                 results[target] = {
                     "status": "done",
