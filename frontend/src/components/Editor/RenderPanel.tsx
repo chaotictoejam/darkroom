@@ -51,25 +51,25 @@ export default function RenderPanel({ project, onChange }: { project: Project; o
   const buttonStyle = {
     background: 'var(--accent)', color: '#fff', border: 'none',
     borderRadius: 6, padding: '8px 16px', fontWeight: 600, fontSize: 13,
-    cursor: project.edl && !rendering ? 'pointer' : 'default',
-    opacity: project.edl ? 1 : 0.5,
+    cursor: !rendering ? 'pointer' : 'default',
+    opacity: 1,
   }
 
   return (
     <div style={{ padding: 14 }}>
       {!project.edl && (
         <p style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 12, marginTop: 0 }}>
-          Run AI analysis first to generate an EDL.
+          No AI edit — exporting the full recording with any manual cuts applied.
         </p>
       )}
       {isAudio ? (
         <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={() => handleRender('mp3')} disabled={!project.edl || rendering} style={buttonStyle}>
+          <button onClick={() => handleRender('mp3')} disabled={rendering} style={buttonStyle}>
             {rendering ? 'Rendering…' : 'Export MP3'}
           </button>
           <button
             onClick={() => handleRender('wav')}
-            disabled={!project.edl || rendering}
+            disabled={rendering}
             title="Lossless master"
             style={{ ...buttonStyle, background: 'none', border: '1px solid var(--accent)', color: 'var(--accent)' }}
           >
@@ -77,7 +77,7 @@ export default function RenderPanel({ project, onChange }: { project: Project; o
           </button>
         </div>
       ) : (
-        <button onClick={() => handleRender('fullEdit')} disabled={!project.edl || rendering} style={buttonStyle}>
+        <button onClick={() => handleRender('fullEdit')} disabled={rendering} style={buttonStyle}>
           {rendering ? 'Rendering…' : 'Render Full Edit'}
         </button>
       )}
