@@ -553,6 +553,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
           >
             <AdvancedTools
               project={project}
+              duration={duration}
               onChange={onChange}
               onOpenManualAnalysis={() => setOpenPanels((prev) => new Set([...prev, 'manual']))}
             />
