@@ -133,6 +133,8 @@ export interface Project {
   name: string
   status: ProjectStatus
   project_type: 'video' | 'podcast'
+  /** Whether the media has a video track; null on projects from before the flag. */
+  has_video: boolean | null
   source: ProjectSource
   participants?: Participant[]
   /** Recorded projects only, in timeline order. */

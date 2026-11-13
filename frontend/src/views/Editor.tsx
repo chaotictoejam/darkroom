@@ -87,6 +87,14 @@ export default function Editor({ project, onChange, onBack }: Props) {
   const previewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const keptRangesRef = useRef<TimeRange[]>([])
   const [outputDuration, setOutputDuration] = useState(0)
+  /** Kept ranges the loaded proxy was rendered from — behind keptRangesRef while a render runs. */
+  const proxyRangesRef = useRef<TimeRange[]>([])
+  /** The proxy URL the player is on, readable from the WebSocket handler. */
+  const proxyUrlRef = useRef<string | null>(null)
+  /** Where playback picks up once a freshly rendered proxy has loaded. */
+  const resumeRef = useRef<{ sourceTime: number; playing: boolean } | null>(null)
+  /** Proxy URL we already rebuilt after a load error, so one failure can't loop. */
+  const recoveredUrlRef = useRef<string | null>(null)
 
   // Recompute kept ranges and output duration whenever cuts/EDL/source duration change
   useEffect(() => {
@@ -160,35 +168,77 @@ export default function Editor({ project, onChange, onBack }: Props) {
     onChange({ ...project, status: 'analyzing' })
   }
 
-  /** Kick off a proxy render and update state when it completes. */
+  // One preview subscription for as long as the editor is open. Re-subscribing
+  // per render lost the preview_ready of the render already in flight, leaving
+  // the editor on a proxy that no longer matches the cuts.
+  useEffect(() => {
+    if (project.project_type === 'podcast') return
+    let stopped = false
+    let retry: ReturnType<typeof setTimeout> | null = null
+
+    function connect() {
+      previewUnsubRef.current = subscribeToProgress(
+        project.id,
+        (evt) => {
+          if (evt.type === 'preview_generating') {
+            setProxyGenerating(true)
+          } else if (evt.type === 'preview_error') {
+            setProxyGenerating(false)
+          } else if (evt.type === 'preview_ready' && evt.url) {
+            setProxyGenerating(false)
+            // Same file: nothing to swap, and no load event to resume on
+            if (evt.url === proxyUrlRef.current) return
+            // Carry the playhead and play state over to the new render
+            const proxy = proxyRef.current
+            resumeRef.current = proxy && proxy.currentTime > 0
+              ? {
+                  sourceTime: outputToSourceTime(proxy.currentTime, proxyRangesRef.current),
+                  playing: !proxy.paused,
+                }
+              : null
+            proxyRangesRef.current = keptRangesRef.current
+            recoveredUrlRef.current = null
+            proxyUrlRef.current = evt.url
+            setProxyUrl(evt.url)
+          }
+        },
+        // The backend closes the socket when any job finishes; keep listening.
+        () => {
+          if (!stopped) retry = setTimeout(connect, 1000)
+        },
+      )
+    }
+    connect()
+
+    return () => {
+      stopped = true
+      if (retry) clearTimeout(retry)
+      previewUnsubRef.current?.()
+      previewUnsubRef.current = null
+    }
+  }, [project.id, project.project_type])
+
+  // Audio-only mode has no proxy: drop it so the audio player drives playback
+  useEffect(() => {
+    if (project.project_type === 'podcast') {
+      proxyUrlRef.current = null
+      setProxyUrl(null)
+      setProxyGenerating(false)
+    }
+  }, [project.project_type])
+
+  /** Ask the backend for a proxy render of the current edit. */
   function triggerPreview() {
     if (project.project_type === 'podcast') return
-    previewUnsubRef.current?.()
     setProxyGenerating(true)
-
-    const unsub = subscribeToProgress(project.id, (evt) => {
-      if (evt.type === 'preview_ready' && evt.url) {
-        // Cache-bust so the browser reloads the newly-rendered file
-        setProxyUrl(evt.url + '?t=' + Date.now())
-        setProxyGenerating(false)
-        unsub()
-      } else if (evt.type === 'preview_error') {
-        setProxyGenerating(false)
-        unsub()
-      }
-    })
-    previewUnsubRef.current = unsub
-
-    api.generatePreview(project.id).catch(() => {
-      setProxyGenerating(false)
-      unsub()
-    })
+    api.generatePreview(project.id).catch(() => setProxyGenerating(false))
   }
 
   /** Unified seek: uses proxy when available, falls back to raw VideoPreview. */
   function seekTo(sourceTime: number) {
     if (proxyRef.current) {
-      proxyRef.current.currentTime = sourceToOutputTime(sourceTime, keptRangesRef.current)
+      // The proxy may be a render behind, so map through the ranges it was built from
+      proxyRef.current.currentTime = sourceToOutputTime(sourceTime, proxyRangesRef.current)
     } else {
       videoRef.current?.seekTo(sourceTime)
     }
@@ -246,8 +296,10 @@ export default function Editor({ project, onChange, onBack }: Props) {
       }, 600)
       // Debounce proxy re-render — wait for the user to stop cutting
       if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current)
-      setProxyGenerating(true)
-      previewDebounceRef.current = setTimeout(triggerPreview, 3000)
+      if (project.project_type !== 'podcast') {
+        setProxyGenerating(true)
+        previewDebounceRef.current = setTimeout(triggerPreview, 3000)
+      }
     },
     [project, onChange, wordCuts, timelineSplits], // eslint-disable-line react-hooks/exhaustive-deps
   )
@@ -638,11 +690,29 @@ export default function Editor({ project, onChange, onBack }: Props) {
                           controls
                           onTimeUpdate={() => {
                             const proxy = proxyRef.current
-                            if (!proxy) return
-                            const srcTime = outputToSourceTime(proxy.currentTime, keptRangesRef.current)
+                            if (!proxy || resumeRef.current) return
+                            const srcTime = outputToSourceTime(proxy.currentTime, proxyRangesRef.current)
                             setCurrentTime(srcTime)
                             const shouldMute = wordMutes.some((m) => srcTime >= m.start && srcTime < m.end)
                             if (proxy.muted !== shouldMute) proxy.muted = shouldMute
+                          }}
+                          onLoadedMetadata={() => {
+                            const proxy = proxyRef.current
+                            const resume = resumeRef.current
+                            resumeRef.current = null
+                            if (!proxy || !resume) return
+                            proxy.currentTime = sourceToOutputTime(resume.sourceTime, proxyRangesRef.current)
+                            if (resume.playing) void proxy.play()
+                          }}
+                          onError={() => {
+                            // The file went away or never finished — fall back to the
+                            // source player and ask for a fresh render, once.
+                            if (recoveredUrlRef.current === proxyUrl) return
+                            recoveredUrlRef.current = proxyUrl
+                            resumeRef.current = null
+                            proxyUrlRef.current = null
+                            setProxyUrl(null)
+                            triggerPreview()
                           }}
                           style={{ width: '100%', display: 'block', maxHeight: '40vh' }}
                         />
