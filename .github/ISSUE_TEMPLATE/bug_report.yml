@@ -1,0 +1,68 @@
+name: Bug report
+description: Something in Darkroom is broken or behaves differently than the docs say.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Please don't attach your recordings or transcripts.** If a bug only happens with one file, describe it (format, length, number of tracks) or share a short clip you're happy to make public.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Install / setup
+        - Upload
+        - Recording studio
+        - Transcription
+        - Analyse (AI edit)
+        - Editor / timeline
+        - Rendering / export
+        - Shorts
+        - Publishing to DarkRelay
+        - Desktop app
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: run
+    attributes:
+      label: How you run it
+      options:
+        - Browser (make dev)
+        - Browser (make build)
+        - Desktop app
+        - Docker
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Python and Node versions, FFmpeg version, CPU or GPU, Whisper model, and AI provider (none, Bedrock or Anthropic API).
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Commit
+      description: Output of `git rev-parse --short HEAD`.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Backend terminal output or browser console errors.
+      render: text

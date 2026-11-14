@@ -1,6 +1,6 @@
 # Darkroom
 
-[![Tests](https://github.com/chaotictoejam/darkroom/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/chaotictoejam/darkroom/actions/workflows/tests.yml)
+[![Tests](https://github.com/chaotictoejam/darkroom/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/chaotictoejam/darkroom/actions/workflows/tests.yml) [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 > *Your footage, developed locally.*
 
@@ -531,3 +531,13 @@ The Lambda adds effectively zero overhead on top of the Bedrock model cost.
 **Recording: a mic is missing from the list**: plug it in before clicking **Enable microphones**; the list refreshes on hot-plug, but some USB interfaces only show up after the OS has finished setting them up.
 
 **macOS port 5000 conflict**: not applicable; Darkroom uses ports 8000 and 5173.
+
+---
+
+## Contributing
+
+Bug reports, ideas and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first, and report security issues privately as described in [SECURITY.md](SECURITY.md).
+
+## License
+
+[Apache License 2.0](LICENSE). Copyright 2026 Joanne Skiles.
