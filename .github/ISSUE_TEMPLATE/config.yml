@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/chaotictoejam/darkroom/security/advisories/new
+    about: Report security issues privately, not as a public issue.
+  - name: Publishing and hosting (DarkRelay)
+    url: https://github.com/chaotictoejam/darkrelay/issues
+    about: Problems with feeds, hosting, analytics or YouTube uploads belong in DarkRelay.
