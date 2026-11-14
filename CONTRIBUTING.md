@@ -54,6 +54,16 @@ cd backend && ../.venv/bin/python -m pytest -q tests
 - Tick the TODO boxes in the relevant `docs/` plan, and move finished items to **Done** in `ROADMAP.md`.
 - Never commit anything from `projects/`. It's user data.
 
+## Using AI tools
+
+AI coding tools are welcome here (Darkroom is partly built with them), but their use must be disclosed.
+
+- **Say so in the pull request.** If an AI tool wrote or substantially shaped any of the code, tests, docs or the PR description, say which tool and what it did in the **AI use** section of the pull request template. A `Co-Authored-By` trailer in the commits is fine too.
+- **You own what you submit.** Read, run and understand every line before you open the pull request, and be ready to explain it in review. "The AI wrote it" isn't an answer to a review question.
+- **Issues and comments count too.** Disclose AI-written bug reports, feature requests and review comments the same way.
+
+**Pull requests and issues with undisclosed AI use will be closed without review.** If it's discovered after merge, the change may be reverted. Disclosing doesn't count against you: an honest "Claude Code wrote the tests, I wrote the fix" is exactly what we want to see.
+
 ## Reporting security issues
 
 Please don't open a public issue. See [SECURITY.md](SECURITY.md).
