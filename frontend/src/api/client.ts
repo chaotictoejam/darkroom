@@ -47,7 +47,13 @@ export const api = {
   /** transcribe_language: null means auto-detect. */
   patchProject: (
     id: string,
-    patch: { name?: string; transcribe_model?: string; transcribe_language?: string | null; timeline_splits?: number[] },
+    patch: {
+      name?: string
+      project_type?: 'video' | 'podcast'
+      transcribe_model?: string
+      transcribe_language?: string | null
+      timeline_splits?: number[]
+    },
   ) => request<Project>(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
 
   // ── Recording studio takes ──────────────────────────────────────────────────

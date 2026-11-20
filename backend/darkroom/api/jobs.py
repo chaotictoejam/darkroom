@@ -453,10 +453,21 @@ def start_render_short(project_id: str, body: RenderShortBody):
 
 # ── Preview proxy render ──────────────────────────────────────────────────────
 
+# One proxy render per project at a time. Further requests while one runs set
+# `pending`, and the worker renders once more when it finishes, so the editor
+# always ends up with a preview of the latest cuts instead of a 409 and a
+# preview that silently stays behind.
+_preview_jobs: dict[str, dict[str, bool]] = {}
+_preview_mutex = threading.Lock()
+# How long a queued preview waits for an export to finish before giving up
+_PREVIEW_WAIT_SECONDS = 900
+
+
 @router.post("/projects/{project_id}/preview")
 def start_preview(project_id: str):
     """
-    Kick off an async ultrafast proxy render (960p, crf42).
+    Kick off an async ultrafast proxy render (960p, crf42), or queue one if a
+    render for this project is already running.
     Does NOT change project status — this is a side operation.
     Pushes {"type": "preview_ready"/"preview_error"} over WebSocket when done.
     """
@@ -468,22 +479,44 @@ def start_preview(project_id: str):
     if proj.get("project_type") == "podcast":
         raise HTTPException(400, "Preview proxy not supported for podcast projects")
 
-    lock = _get_render_lock(project_id)
-    if not lock.acquire(blocking=False):
-        raise HTTPException(409, "A render is already in progress for this project")
+    with _preview_mutex:
+        job = _preview_jobs.setdefault(project_id, {"running": False, "pending": False})
+        job["pending"] = True
+        if job["running"]:
+            return {"message": "Preview render queued"}
+        job["running"] = True
 
     def _run():
         try:
-            _push(project_id, {"type": "preview_generating",
-                                "progress": {"step": "preview", "percent": 5,
-                                             "message": "Building preview…"}})
-            result = render_preview(proj, PROJECTS_DIR)
-            _push(project_id, {"type": "preview_ready", "url": result["url"]})
-        except Exception as exc:
-            _push(project_id, {"type": "preview_error",
-                                "message": str(exc)})
+            while True:
+                with _preview_mutex:
+                    job = _preview_jobs[project_id]
+                    if not job["pending"]:
+                        job["running"] = False
+                        return
+                    job["pending"] = False
+                try:
+                    _push(project_id, {"type": "preview_generating",
+                                        "progress": {"step": "preview", "percent": 5,
+                                                     "message": "Building preview…"}})
+                    # Reload: cuts may have changed since the request came in.
+                    current = get_project(project_id)
+                    if not current:
+                        return
+                    lock = _get_render_lock(project_id)
+                    # Wait out an export rather than giving up, but don't hang forever
+                    if not lock.acquire(timeout=_PREVIEW_WAIT_SECONDS):
+                        raise TimeoutError("A render has been running for too long")
+                    try:
+                        result = render_preview(current, PROJECTS_DIR)
+                    finally:
+                        lock.release()
+                    _push(project_id, {"type": "preview_ready", "url": result["url"]})
+                except Exception as exc:
+                    _push(project_id, {"type": "preview_error", "message": str(exc)})
         finally:
-            lock.release()
+            with _preview_mutex:
+                _preview_jobs[project_id]["running"] = False
 
     threading.Thread(target=_run, daemon=True).start()
     return {"message": "Preview render started"}
