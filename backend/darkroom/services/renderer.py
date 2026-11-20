@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -1216,12 +1217,38 @@ def _apply_word_cuts(segments: list[dict], word_cuts: list[dict]) -> list[dict]:
     return [s for s in refined if s["end"] - s["start"] >= _MIN]
 
 
+# Each proxy render gets its own file so a new one never overwrites the bytes
+# the editor is still playing; only the newest few are kept on disk.
+_PREVIEW_PREFIX = "preview_"
+_PREVIEW_KEEP = 2
+
+
+def _preview_files(output_dir: Path) -> list[Path]:
+    """Existing proxy previews, oldest first (names sort by their timestamp)."""
+    return sorted(output_dir.glob(f"{_PREVIEW_PREFIX}*.mp4"))
+
+
+def _prune_previews(output_dir: Path, keep: int = _PREVIEW_KEEP) -> None:
+    """Delete all but the newest `keep` proxy previews, plus any legacy file."""
+    stale = _preview_files(output_dir)[:-keep] if keep else _preview_files(output_dir)
+    stale.append(output_dir / "preview.mp4")  # pre-versioning name, now unused
+    for path in stale:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
 def render_preview(project: dict, projects_dir) -> dict:
     """
     Render a fast low-quality proxy preview that exactly mirrors the final render:
     - Applies EDL keep/cut decisions
     - Applies word-level cuts and mutes
     - 960px wide, CRF 42, ultrafast preset (typically 5–20 s for a 10 min clip)
+
+    The file is named `preview_<ms>.mp4` and written via a temp file, so the
+    preview the editor is playing is never rewritten underneath it (which stalls
+    playback); older previews are pruned once the new one is in place.
 
     Returns a render result dict with status/url/filename.
     Raises on FFmpeg failure.
@@ -1262,7 +1289,9 @@ def render_preview(project: dict, projects_dir) -> dict:
     filter_complex = filter_complex.replace("[outv]", "[outv_raw]", 1)
     filter_complex += ";[outv_raw]scale=960:-2[outv]"
 
-    out = str(output_dir / "preview.mp4")
+    final = output_dir / f"{_PREVIEW_PREFIX}{time.time_ns() // 1_000_000}.mp4"
+    tmp = output_dir / f"{final.stem}.part.mp4"
+    out = str(tmp)
     cmd = ["ffmpeg", "-y"]
     cmd.extend(input_args)
     cmd.extend([
@@ -1277,12 +1306,17 @@ def render_preview(project: dict, projects_dir) -> dict:
         "-movflags", "+faststart",
         out,
     ])
-    _run_ffmpeg(cmd)
+    try:
+        _run_ffmpeg(cmd)
+        os.replace(tmp, final)  # atomic: the URL only ever serves a complete file
+    finally:
+        tmp.unlink(missing_ok=True)
+    _prune_previews(output_dir)
 
     return {
         "status": "ready",
-        "url": f"/projects/{project_id}/files/output/preview.mp4",
-        "filename": "preview.mp4",
+        "url": f"/projects/{project_id}/files/output/{final.name}",
+        "filename": final.name,
     }
 
 

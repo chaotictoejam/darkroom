@@ -106,6 +106,7 @@ async def upload_files(
     # Worked out from the files so the user isn't asked whether it's video or audio.
     has_video = await asyncio.to_thread(lambda: any(_has_video_stream(Path(s["file_path"])) for s in speakers))
     proj["project_type"] = "video" if has_video else "podcast"
+    proj["has_video"] = has_video
     if name and name.strip():
         proj["name"] = name.strip()
     proj["transcribe_language"] = language or None

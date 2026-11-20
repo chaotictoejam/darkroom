@@ -9,9 +9,13 @@ export default function RenderPanel({ project, onChange }: { project: Project; o
   const [starting, setStarting] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [renderedAt, setRenderedAt] = useState(0)
+  const [switching, setSwitching] = useState(false)
   const unsubRef = useRef<(() => void) | null>(null)
   const isAudio = project.project_type === 'podcast'
   const rendering = starting || project.status === 'rendering'
+  // Only media with a video track can be edited as video. has_video is null on
+  // projects from before the flag, where the detected type is the best answer.
+  const hasVideo = project.has_video ?? !isAudio
 
   useEffect(() => () => unsubRef.current?.(), [])
 
@@ -48,6 +52,20 @@ export default function RenderPanel({ project, onChange }: { project: Project; o
     }
   }
 
+  /** Switch between video and audio-only editing and export. */
+  async function setAudioOnly(audioOnly: boolean) {
+    if (audioOnly === isAudio) return
+    setSwitching(true)
+    setMessage(null)
+    try {
+      onChange(await api.patchProject(project.id, { project_type: audioOnly ? 'podcast' : 'video' }))
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSwitching(false)
+    }
+  }
+
   const buttonStyle = {
     background: 'var(--accent)', color: '#fff', border: 'none',
     borderRadius: 6, padding: '8px 16px', fontWeight: 600, fontSize: 13,
@@ -57,6 +75,36 @@ export default function RenderPanel({ project, onChange }: { project: Project; o
 
   return (
     <div style={{ padding: 14 }}>
+      {hasVideo && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ display: 'flex', gap: 4 }} role="group" aria-label="Output format">
+            {([false, true] as const).map((audioOnly) => (
+              <button
+                key={String(audioOnly)}
+                onClick={() => setAudioOnly(audioOnly)}
+                disabled={switching || rendering}
+                aria-pressed={isAudio === audioOnly}
+                style={{
+                  flex: 1,
+                  background: isAudio === audioOnly ? 'var(--accent)' : 'var(--bg-card)',
+                  color: isAudio === audioOnly ? '#fff' : 'var(--text-muted)',
+                  border: `1px solid ${isAudio === audioOnly ? 'var(--accent)' : 'var(--border)'}`,
+                  borderRadius: 6, padding: '5px 8px', fontSize: 12,
+                  fontWeight: isAudio === audioOnly ? 600 : 400,
+                  cursor: switching || rendering ? 'default' : 'pointer',
+                }}
+              >
+                {audioOnly ? 'Audio only' : 'Video'}
+              </button>
+            ))}
+          </div>
+          <p style={{ color: 'var(--text-muted)', fontSize: 12, margin: '6px 0 0' }}>
+            {isAudio
+              ? 'Edited and exported as audio only. Switch back to Video any time — nothing is deleted.'
+              : 'Audio only turns this into a podcast edit: audio player, MP3/WAV export, no video.'}
+          </p>
+        </div>
+      )}
       {!project.edl && (
         <p style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 12, marginTop: 0 }}>
           No AI edit — exporting the full recording with any manual cuts applied.

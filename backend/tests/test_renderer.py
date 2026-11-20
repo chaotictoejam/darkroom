@@ -58,3 +58,38 @@ def test_cleanup_gate_tracks_noise_floor():
     assert "agate=threshold=0.01000:" in renderer._cleanup_filter(20, -70)
     # A noisy recording never gets a threshold above -30 dBFS, so speech is left alone
     assert "agate=threshold=0.03162:" in renderer._cleanup_filter(22, -60)
+
+
+def test_preview_renders_to_a_fresh_file_and_prunes_old_ones(tmp_path):
+    """Overwriting the preview the editor is playing stalls playback, so each
+    render gets its own name and only the newest two are kept."""
+    proj = _project(tmp_path, [{"id": "s1", "start": 0, "end": 4, "keep": True, "camera": "A"}])
+    output = tmp_path / proj["id"] / "output"
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "preview.mp4").write_bytes(b"truncated render from an older version")
+
+    names = []
+    for _ in range(3):
+        result = renderer.render_preview(proj, tmp_path)
+        names.append(result["filename"])
+        assert (output / result["filename"]).exists()
+        assert probe_duration(output / result["filename"]) == pytest.approx(3.0, abs=0.15)
+
+    assert len(set(names)) == 3, names
+    assert not (output / "preview.mp4").exists()
+    assert not list(output.glob("*.part.mp4"))
+    assert sorted(p.name for p in output.glob("preview_*.mp4")) == sorted(names[-2:])
+
+
+def test_failed_preview_leaves_no_partial_file(tmp_path, monkeypatch):
+    proj = _project(tmp_path, [{"id": "s1", "start": 0, "end": 4, "keep": True, "camera": "A"}])
+    good = renderer.render_preview(proj, tmp_path)
+    monkeypatch.setattr(renderer, "_run_ffmpeg", lambda cmd: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    with pytest.raises(RuntimeError):
+        renderer.render_preview(proj, tmp_path)
+
+    output = tmp_path / proj["id"] / "output"
+    assert not list(output.glob("*.part.mp4"))
+    # The preview the editor is playing is still there and still complete
+    assert probe_duration(output / good["filename"]) == pytest.approx(3.0, abs=0.15)

@@ -4,15 +4,18 @@
 import { useState } from 'react'
 import { api } from '../../api/client'
 import type { Project } from '../../api/types'
-import { formatTimestamp } from '../../formatTime'
 import { MANUAL_NOTE } from './ManualAnalysis'
+import { editedTranscriptText } from './transcriptExport'
 
 export default function AdvancedTools({
   project,
+  duration,
   onChange,
   onOpenManualAnalysis,
 }: {
   project: Project
+  /** Source duration from the player — the fallback end of the edit when there is no EDL. */
+  duration: number
   onChange: (p: Project) => void
   onOpenManualAnalysis: () => void
 }) {
@@ -20,10 +23,8 @@ export default function AdvancedTools({
   const [resetting, setResetting] = useState(false)
 
   function exportTranscript() {
-    const lines = project.merged_transcript.map(
-      (seg) => `[${formatTimestamp(seg.start)} - ${formatTimestamp(seg.end)}] ${seg.speaker_name}\n${seg.text}`,
-    )
-    download(`${project.name}-transcript.txt`, lines.join('\n\n'), 'text/plain')
+    // The transcript of the edit, timed to the export — not the raw recording.
+    download(`${project.name}-transcript.txt`, editedTranscriptText(project, duration), 'text/plain')
   }
 
   function exportEdl() {
@@ -53,6 +54,9 @@ export default function AdvancedTools({
     <>
       <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
         <AdvBtn label="Export Transcript" onClick={exportTranscript} />
+        <div style={{ color: 'var(--text-muted)', fontSize: 11, lineHeight: 1.4, margin: '-2px 0 2px' }}>
+          Edited transcript: cut and muted words removed, times matching the export.
+        </div>
         <AdvBtn label="Export EDL" onClick={exportEdl} disabled={!project.edl} />
         <div style={{ height: 1, background: 'rgba(180,50,50,0.2)', margin: '4px 0' }} />
         <AdvBtn label="Redo Manual Analysis" onClick={() => setConfirming(true)} warning />

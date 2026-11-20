@@ -135,6 +135,8 @@ export interface Project {
   /** Group the project is filed under; "" when ungrouped. */
   group: string
   project_type: 'video' | 'podcast'
+  /** Whether the media has a video track; null on projects from before the flag. */
+  has_video: boolean | null
   source: ProjectSource
   participants?: Participant[]
   /** Recorded projects only, in timeline order. */

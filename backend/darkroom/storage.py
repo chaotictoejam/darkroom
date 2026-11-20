@@ -25,6 +25,8 @@ _DEFAULTS = {
     "project_type": "video",
     # Folder-like label the user organises projects by ("" = ungrouped)
     "group": "",
+    # Whether the media has a video track; None on projects from before the flag
+    "has_video": None,
     "source": "upload",
     "word_cuts": [],
     "word_mutes": [],
@@ -139,6 +141,7 @@ def new_project(name: str, source: str = "upload", group: str = "") -> dict:
         "merged_transcript": [],
         "edl": None,
         "project_type": "video",
+        "has_video": None,
         "word_cuts": [],
         "word_mutes": [],
         "timeline_splits": [],

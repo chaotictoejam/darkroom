@@ -22,6 +22,8 @@ class CreateProjectBody(BaseModel):
 
 class PatchProjectBody(BaseModel):
     name: Optional[str] = None
+    # Switches an uploaded video project to audio-only editing and export, or back
+    project_type: Optional[Literal["video", "podcast"]] = None
     transcribe_model: Optional[str] = None
     # Present-but-null means auto-detect, so use a sentinel for "not sent".
     transcribe_language: Optional[str] = ""
@@ -29,6 +31,17 @@ class PatchProjectBody(BaseModel):
     timeline_splits: Optional[list[float]] = None
     # Group the project is filed under; "" removes it from its group
     group: Optional[str] = None
+
+
+def _set_project_type(proj: dict, project_type: str) -> None:
+    """Switch between video and audio-only editing, refusing video with no video track."""
+    if proj.get("has_video") is None:
+        # Projects from before the flag: the type detected at upload says whether
+        # the media has a video track.
+        proj["has_video"] = proj["project_type"] == "video"
+    if project_type == "video" and not proj["has_video"]:
+        raise HTTPException(400, "This project's media has no video track")
+    proj["project_type"] = project_type
 
 
 @router.get("/projects")
@@ -62,6 +75,8 @@ def patch_project(project_id: str, body: PatchProjectBody):
         with editing_project(project_id) as proj:
             if body.name is not None and body.name.strip():
                 proj["name"] = body.name.strip()
+            if body.project_type is not None:
+                _set_project_type(proj, body.project_type)
             if body.transcribe_model is not None:
                 proj["transcribe_model"] = body.transcribe_model
             if body.transcribe_language != "":

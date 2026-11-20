@@ -1,0 +1,35 @@
+name: Feature request
+description: Suggest something Darkroom should do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to make, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you'd like
+    validations:
+      required: true
+  - type: dropdown
+    id: data
+    attributes:
+      label: Does it need anything to leave the machine?
+      description: Darkroom is local by default. Anything that leaves the machine has to be opt-in.
+      options:
+        - No, it all runs locally
+        - Yes, in my own cloud account
+        - Yes, a third-party service
+        - Not sure
+    validations:
+      required: true
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contributing
+      options:
+        - label: I'd like to build this myself.
