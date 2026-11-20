@@ -1,6 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api/client'
 import type { Project, ProjectSummary } from '../api/types'
+import ConfirmDialog from '../components/Projects/ConfirmDialog'
+import GroupBar from '../components/Projects/GroupBar'
+import MoveToGroupDialog from '../components/Projects/MoveToGroupDialog'
+import ProjectCard from '../components/Projects/ProjectCard'
+import RenameGroupDialog from '../components/Projects/RenameGroupDialog'
+import {
+  ALL_PROJECTS, filterLabel, filterProjects, groupOf, groupsOf, resolveFilter, ungroupedCount, type GroupFilter,
+} from '../projectGroups'
 
 interface Props {
   onNewProject: (project: Project) => void
@@ -15,7 +23,14 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
   // New project modal: closed, or which step is showing
   const [newStep, setNewStep] = useState<'closed' | 'source' | 'record-kind'>('closed')
   const [newName, setNewName] = useState('')
+  const [newGroup, setNewGroup] = useState('')
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  // Which group the grid shows
+  const [filter, setFilter] = useState<GroupFilter>(ALL_PROJECTS)
+  // Project id whose group is being changed
+  const [moving, setMoving] = useState<string | null>(null)
+  const [renamingGroup, setRenamingGroup] = useState<string | null>(null)
+  const [emptyingGroup, setEmptyingGroup] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -35,8 +50,17 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
     return () => { cancelled = true }
   }, [])
 
+  const groups = useMemo(() => groupsOf(projects), [projects])
+  const ungrouped = useMemo(() => ungroupedCount(projects), [projects])
+  // A group whose last project was deleted or moved away falls back to All
+  const shown = useMemo(() => resolveFilter(projects, filter), [projects, filter])
+  const visible = useMemo(() => filterProjects(projects, shown), [projects, shown])
+  const movingProject = projects.find((p) => p.id === moving)
+
   function openNew() {
     setNewName('')
+    // A group is open: file the new project there by default
+    setNewGroup(shown.kind === 'group' ? shown.name : '')
     setNewStep('source')
   }
 
@@ -45,7 +69,7 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
     try {
       // Upload works out video vs audio from the files; Record (audio only for now) is a podcast.
       const type = source === 'record' ? 'podcast' : 'video'
-      const proj = await api.createProject(newName.trim() || 'Untitled Project', type, source)
+      const proj = await api.createProject(newName.trim() || 'Untitled Project', type, source, newGroup.trim())
       setNewStep('closed')
       onNewProject(proj)
     } finally {
@@ -58,11 +82,6 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
     onOpenProject(proj)
   }
 
-  async function handleDelete(e: React.MouseEvent, id: string) {
-    e.stopPropagation()
-    setConfirmDelete(id)
-  }
-
   async function confirmAndDelete() {
     if (!confirmDelete) return
     await api.deleteProject(confirmDelete)
@@ -70,8 +89,37 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
     setConfirmDelete(null)
   }
 
+  async function moveToGroup(group: string) {
+    if (!moving) return
+    const id = moving
+    setMoving(null)
+    await api.patchProject(id, { group })
+    setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, group } : p)))
+  }
+
+  async function renameGroup(next: string) {
+    const old = renamingGroup
+    if (!old) return
+    setRenamingGroup(null)
+    await api.renameGroup(old, next)
+    setProjects(await api.listProjects())
+    setFilter(next ? { kind: 'group', name: next } : ALL_PROJECTS)
+  }
+
+  async function emptyGroup() {
+    const name = emptyingGroup
+    if (!name) return
+    setEmptyingGroup(null)
+    await api.ungroupGroup(name)
+    setProjects(await api.listProjects())
+    setFilter(ALL_PROJECTS)
+  }
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', gap: 32 }}>
+    <div style={{
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
+      minHeight: '100vh', gap: 28, padding: '56px 24px 64px',
+    }}>
       <div style={{ textAlign: 'center' }}>
         <h1 style={{ fontSize: 48, fontWeight: 700, letterSpacing: -1 }}>
           Dark<span style={{ color: 'var(--accent)' }}>room</span>
@@ -91,7 +139,7 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
         {creating ? 'Creating…' : '+ New Project'}
       </button>
 
-      <div style={{ width: '100%', maxWidth: 480 }}>
+      <div style={{ width: '100%', maxWidth: 1040, display: 'flex', flexDirection: 'column', gap: 16 }}>
         {loading && <p style={{ color: 'var(--text-muted)', textAlign: 'center' }}>Loading projects…</p>}
         {backendDown && (
           <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--accent)', borderRadius: 8, padding: '12px 16px', fontSize: 13 }}>
@@ -106,34 +154,48 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
         {!loading && !backendDown && projects.length === 0 && (
           <p style={{ color: 'var(--text-muted)', textAlign: 'center' }}>No projects yet.</p>
         )}
-        {projects.map((p) => (
-          <div
-            key={p.id}
-            onClick={() => handleOpen(p.id)}
-            style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              background: 'var(--bg-card)', borderRadius: 'var(--radius)',
-              padding: '12px 16px', marginBottom: 8, cursor: 'pointer',
-              border: '1px solid var(--border)',
-            }}
-          >
-            <div>
-              <div style={{ fontWeight: 500 }}>{p.name}</div>
-              <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>
-                {p.status} · {new Date(p.created_at).toLocaleDateString()}
-              </div>
+
+        {projects.length > 0 && (
+          <>
+            {groups.length > 0 && (
+              <GroupBar
+                groups={groups}
+                total={projects.length}
+                ungrouped={ungrouped}
+                filter={shown}
+                onSelect={setFilter}
+                onRename={setRenamingGroup}
+                onUngroup={setEmptyingGroup}
+              />
+            )}
+
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
+              <h2 style={{ fontSize: 14, fontWeight: 600 }}>{filterLabel(shown)}</h2>
+              <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+                {visible.length} project{visible.length === 1 ? '' : 's'}
+              </span>
             </div>
-            <button
-              onClick={(e) => handleDelete(e, p.id)}
-              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 16, cursor: 'pointer' }}
-            >
-              ✕
-            </button>
-          </div>
-        ))}
+
+            <div style={{
+              display: 'grid', gap: 12,
+              gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+            }}>
+              {visible.map((p) => (
+                <ProjectCard
+                  key={p.id}
+                  project={p}
+                  showGroup={shown.kind === 'all'}
+                  onOpen={() => { void handleOpen(p.id) }}
+                  onMove={() => setMoving(p.id)}
+                  onDelete={() => setConfirmDelete(p.id)}
+                />
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
-      {/* ── New project modal: name, then Upload or Record ─────────────────── */}
+      {/* ── New project modal: name, group, then Upload or Record ──────────── */}
       {newStep !== 'closed' && (
         <div
           onClick={() => setNewStep('closed')}
@@ -169,6 +231,21 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
                     style={{ width: '100%' }}
                   />
                 </label>
+                <label>
+                  <span style={{ color: 'var(--text-muted)', fontSize: 12, display: 'block', marginBottom: 4 }}>
+                    Group <span style={{ opacity: 0.7 }}>(optional)</span>
+                  </span>
+                  <input
+                    value={newGroup}
+                    placeholder="e.g. chaoticcommits"
+                    list="darkroom-groups"
+                    onChange={(e) => setNewGroup(e.target.value)}
+                    style={{ width: '100%' }}
+                  />
+                  <datalist id="darkroom-groups">
+                    {groups.map((g) => <option key={g.name} value={g.name} />)}
+                  </datalist>
+                </label>
                 <div style={{ display: 'flex', gap: 12 }}>
                   <ChoiceCard icon="⬆" title="Upload" desc="Files that are already synced" disabled={creating} onClick={() => { void handleNew('upload') }} />
                   <ChoiceCard icon="●" title="Record" desc="Record each participant's microphone" disabled={creating} onClick={() => setNewStep('record-kind')} />
@@ -194,59 +271,43 @@ export default function Welcome({ onNewProject, onOpenProject }: Props) {
         </div>
       )}
 
-      {/* ── Delete confirmation modal ─────────────────────────────────────── */}
+      {movingProject && (
+        <MoveToGroupDialog
+          projectName={movingProject.name}
+          current={groupOf(movingProject)}
+          groups={groups}
+          onMove={(group) => { void moveToGroup(group) }}
+          onCancel={() => setMoving(null)}
+        />
+      )}
+
+      {renamingGroup && (
+        <RenameGroupDialog
+          name={renamingGroup}
+          onRename={(next) => { void renameGroup(next) }}
+          onCancel={() => setRenamingGroup(null)}
+        />
+      )}
+
+      {emptyingGroup && (
+        <ConfirmDialog
+          title="Empty group?"
+          body={`Projects in “${emptyingGroup}” will be ungrouped. Nothing is deleted.`}
+          confirmLabel="Empty group"
+          onConfirm={() => { void emptyGroup() }}
+          onCancel={() => setEmptyingGroup(null)}
+        />
+      )}
+
       {confirmDelete && (
-        <div
-          onClick={() => setConfirmDelete(null)}
-          style={{
-            position: 'fixed', inset: 0,
-            background: 'rgba(0,0,0,0.6)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            zIndex: 100,
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              background: 'var(--bg-card)',
-              border: '1px solid var(--border)',
-              borderRadius: 10,
-              padding: '28px 32px',
-              width: 340,
-              display: 'flex', flexDirection: 'column', gap: 20,
-            }}
-          >
-            <div>
-              <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 6 }}>Delete project?</div>
-              <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
-                "{projects.find((p) => p.id === confirmDelete)?.name}" will be permanently deleted.
-                This cannot be undone.
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-              <button
-                onClick={() => setConfirmDelete(null)}
-                style={{
-                  background: 'none', border: '1px solid var(--border)',
-                  color: 'var(--text)', borderRadius: 6, padding: '7px 18px',
-                  fontSize: 13, cursor: 'pointer',
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmAndDelete}
-                style={{
-                  background: '#c0392b', border: 'none',
-                  color: '#fff', borderRadius: 6, padding: '7px 18px',
-                  fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                }}
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          title="Delete project?"
+          body={`"${projects.find((p) => p.id === confirmDelete)?.name}" will be permanently deleted. This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => { void confirmAndDelete() }}
+          onCancel={() => setConfirmDelete(null)}
+        />
       )}
     </div>
   )
