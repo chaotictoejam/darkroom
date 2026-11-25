@@ -4,6 +4,7 @@ Project persistence — thin filesystem wrapper.
 All project data lives under PROJECTS_DIR/<project_id>/project.json.
 Writes are atomic (write-to-tmp, then rename) to prevent corruption on crash.
 """
+import copy
 import json
 import os
 import threading
@@ -31,6 +32,9 @@ _DEFAULTS = {
     "word_cuts": [],
     "word_mutes": [],
     "timeline_splits": [],
+    # Music and sound effect tracks, and the cues placed on them
+    "sound_tracks": [{"id": "music", "name": "Music", "gain_db": 0.0, "muted": False}],
+    "sound_cues": [],
     "renders": {},
     "progress": {"step": "", "percent": 0, "message": ""},
 }
@@ -68,7 +72,8 @@ def get_project(project_id: str) -> dict | None:
     changed = False
     for key, default in _DEFAULTS.items():
         if key not in proj:
-            proj[key] = default
+            # Copy: a backfilled list or dict must belong to this project alone
+            proj[key] = copy.deepcopy(default)
             changed = True
     publish = proj.setdefault("publish", {})
     for key, default in default_publish().items():
@@ -145,6 +150,8 @@ def new_project(name: str, source: str = "upload", group: str = "") -> dict:
         "word_cuts": [],
         "word_mutes": [],
         "timeline_splits": [],
+        "sound_tracks": copy.deepcopy(_DEFAULTS["sound_tracks"]),
+        "sound_cues": [],
         "renders": {},
         "publish": default_publish(),
         "progress": {"step": "", "percent": 0, "message": ""},

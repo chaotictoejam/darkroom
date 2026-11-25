@@ -564,8 +564,11 @@ def start_preview(project_id: str):
         raise HTTPException(404, "Project not found")
     if not check_ffmpeg():
         raise HTTPException(503, "FFmpeg not found on this system")
-    if proj.get("project_type") == "podcast":
-        raise HTTPException(400, "Preview proxy not supported for podcast projects")
+    # An audio-only project needs no proxy: the editor plays the source file and
+    # applies cuts as it goes. Music is the exception — it only exists in the
+    # mix, so once there are cues the proxy is the only way to hear the balance.
+    if proj.get("project_type") == "podcast" and not proj.get("sound_cues"):
+        raise HTTPException(400, "Preview proxy not needed for audio-only projects without music")
 
     with _preview_mutex:
         job = _preview_jobs.setdefault(project_id, {"running": False, "pending": False})

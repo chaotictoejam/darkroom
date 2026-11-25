@@ -284,6 +284,14 @@ def get_waveform(
     if not file_path.exists():
         raise HTTPException(404, "File not found")
 
+    return {"waveform": waveform_values(file_path, buckets)}
+
+
+def waveform_values(file_path: Path, buckets: int) -> list[float]:
+    """
+    Normalised RMS amplitude per bucket for an audio or video file — the shape
+    the timeline and the music lane draw.
+    """
     # Resample to 2 kHz mono 16-bit: keeps most speech energy and is ~14 MB for 60 min
     cmd = [
         "ffmpeg", "-i", str(file_path),
@@ -302,11 +310,11 @@ def get_waveform(
         raise HTTPException(500, "ffmpeg not found")
 
     if not result.stdout:
-        return {"waveform": [0.0] * buckets}
+        return [0.0] * buckets
 
     samples = np.frombuffer(result.stdout, dtype=np.int16).astype(np.float32)
     if len(samples) == 0:
-        return {"waveform": [0.0] * buckets}
+        return [0.0] * buckets
 
     # Buckets split the whole file (sizes differ by at most one sample), so the
     # waveform spans the full duration; whole-sample buckets would drop the tail
@@ -317,6 +325,4 @@ def get_waveform(
     rms = np.sqrt(sums / np.diff(edges)).astype(np.float32)
 
     max_val = float(rms.max())
-    normalized = (rms / max_val if max_val > 0 else rms).round(3).tolist()
-
-    return {"waveform": normalized}
+    return (rms / max_val if max_val > 0 else rms).round(3).tolist()

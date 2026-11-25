@@ -35,6 +35,14 @@ New Project asks **Upload** (already-synced files; video or audio-only is detect
 - Studio in `frontend/src/views/Studio.tsx` and `frontend/src/components/Studio/`
 - Takes API and transcription worker in `backend/darkroom/api/takes.py`; file handling in `services/takes.py`
 
+### Music and sound: a global library, beds and ducking
+
+A **Music & sound** panel in the editor, with a library that lives outside projects (`~/.darkroom/library`) so an intro or a loop is imported once and used in every episode. Place a track as an intro, an outro, a bed under the voices, or a one-shot effect; set its level **in decibels under the voice**, and it stays that balance whatever the source file's own level was. Beds duck out of the way automatically: Darkroom reads the transcript, so the music dips a quarter-second *before* a word starts, by exactly the amount asked for, and never pumps on a breath. Cues sit on a music lane on the timeline, anchored to the recording, so cutting speech moves them with it. Audio-only episodes get a rendered mix preview as soon as they have music, so what you hear is what exports.
+
+- Library in `backend/darkroom/services/library.py`, cues and the mix in `services/music.py`, routes in `api/music.py`
+- Editor panel in `frontend/src/components/Editor/MusicPanel.tsx`; lane and cue logic in `components/Timeline/MusicLane.tsx` and `musicCues.ts`
+- Design, decisions and what's still to do: [docs/recording-studio.md](docs/recording-studio.md) (Phase 6)
+
 ### Fast local transcription, Phases 0–1: benchmark and quick wins
 
 A transcription benchmark (solo, 2-mic and 4-mic recordings with real crosstalk) measured speed and word error rate on CPU and an NVIDIA T4, then guided a round of quick wins: VAD skips silence, the model stays loaded between tracks and is preloaded when a project opens or the studio is armed, int8 on CPU and float16 on CUDA, batched decoding, threads set to physical cores, and a default model by device and language (`small` for English on CPU, `turbo` otherwise). A 1-hour, 2-person podcast on CPU went from about 61 minutes to 7 with `small`, under 2 minutes on a T4, with half the error rate. The Apple Silicon baseline is still to do (with the Phase 5 Mac engine).
@@ -74,9 +82,9 @@ Phase 1 of **[docs/timeline-editing.md](docs/timeline-editing.md)**; the rest is
 
 ### 3. Recording studio and new project flow (Phases 2–7)
 
-**Why:** the studio records microphones only. Video podcasts and screen recordings need cameras, screens and recording more from the editor, and most shows need intro music and sound effects.
+**Why:** the studio records microphones only. Video podcasts and screen recordings need cameras, screens and recording more from the editor. (Music and sound effects, Phase 6, are **done** — see above.)
 
-**Involves:** New Project asks **Upload** (already-synced files) or **Record**. Record supports audio only or video + audio, with microphones, cameras and multiple screens. Recording happens in a studio view with live scrolling waveforms (and camera/screen previews for video). Each take is written to disk as it records, transcribed as soon as it stops, and you can keep recording more takes, including later from the editor. Music and sound effects (intros/outros, ducked beds, stingers) are placed on their own tracks in the editor and mixed in at render; a studio soundboard comes later. **Studio sound** cleans up voices locally: AI noise removal, de-essing, EQ and level matching between speakers.
+**Involves:** New Project asks **Upload** (already-synced files) or **Record**. Record supports audio only or video + audio, with microphones, cameras and multiple screens. Recording happens in a studio view with live scrolling waveforms (and camera/screen previews for video). Each take is written to disk as it records, transcribed as soon as it stops, and you can keep recording more takes, including later from the editor. A studio soundboard for firing sounds live comes later. **Studio sound** cleans up voices locally: AI noise removal, de-essing, EQ and level matching between speakers.
 
 Full plan, mockups and TODO list: **[docs/recording-studio.md](docs/recording-studio.md)**
 

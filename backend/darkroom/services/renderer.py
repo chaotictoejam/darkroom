@@ -10,6 +10,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from . import music as music_service
+
 
 # ---------------------------------------------------------------------------
 # FFmpeg availability
@@ -220,6 +222,10 @@ def render_project(project: dict, targets: list[str], projects_dir: Path,
 
     kept = _apply_word_cuts([s for s in edl_segments if s.get("keep", True)], word_cuts)
 
+    # Music and sound cues, resolved against the edit they are mixed into. Shorts
+    # and clips are left out, like word cuts are.
+    plan = music_service.plan_music(project, [(s["start"], s["end"]) for s in kept])
+
     results = {}
 
     for target in targets:
@@ -231,9 +237,9 @@ def render_project(project: dict, targets: list[str], projects_dir: Path,
                         speakers_dict, kept, word_mutes
                     )
                     _encode_normalized(["ffmpeg", "-y", *input_args, "-filter_complex", filter_complex],
-                                       _VIDEO_CODEC, _AAC, out)
+                                       _VIDEO_CODEC, _AAC, out, music=plan)
                 else:
-                    _render_fulledit(kept, speakers_dict, out, word_mutes)
+                    _render_fulledit(kept, speakers_dict, out, word_mutes, music=plan)
                 results["fullEdit"] = {
                     "status": "done",
                     "url": f"/projects/{project['id']}/files/output/fullEdit.mp4",
@@ -243,7 +249,7 @@ def render_project(project: dict, targets: list[str], projects_dir: Path,
             elif target in _AUDIO_CODECS:
                 filename = f"fullEdit.{target}"
                 _render_audio(edl_segments, speakers_dict, word_cuts, word_mutes,
-                              str(output_dir / filename), target)
+                              str(output_dir / filename), target, music=plan)
                 results[target] = {
                     "status": "done",
                     "url": f"/projects/{project['id']}/files/output/{filename}",
@@ -252,7 +258,7 @@ def render_project(project: dict, targets: list[str], projects_dir: Path,
 
             elif target == "vertical":
                 out = str(output_dir / "vertical.mp4")
-                _render_vertical(kept, speakers_dict, out, word_mutes)
+                _render_vertical(kept, speakers_dict, out, word_mutes, music=plan)
                 results["vertical"] = {
                     "status": "done",
                     "url": f"/projects/{project['id']}/files/output/vertical.mp4",
@@ -633,7 +639,7 @@ def _cleanup_filter(gain: float, noise_floor: float) -> str:
 
 
 def _encode_normalized(head: list[str], video_codec: list[str], audio_codec: list[str],
-                       output_path: str) -> None:
+                       output_path: str, music: "music_service.MusicPlan | None" = None) -> None:
     """
     Run `head` (ffmpeg, its inputs and a -filter_complex producing [outa], and
     [outv] when `video_codec` is given) and write `output_path` with the audio
@@ -644,6 +650,11 @@ def _encode_normalized(head: list[str], video_codec: list[str], audio_codec: lis
     every pause, so background hiss ends up far louder than in the editor.
     Instead the mix goes to a lossless temp file, is measured, and is then
     gained linearly while the already-encoded video is copied through.
+
+    Music and sound cues are mixed into that second pass, once the speech is at
+    _TARGET_LUFS: cue levels are relative to the voice, so they need a speech
+    level that is known rather than measured along with the music. The limiter
+    stays last, so a loud stinger still can't push the mix over the ceiling.
     """
     with tempfile.TemporaryDirectory(dir=Path(output_path).parent) as tmp:
         # Float Wave64: no clipping of a hot mix, no 4 GB WAV limit
@@ -662,21 +673,37 @@ def _encode_normalized(head: list[str], video_codec: list[str], audio_codec: lis
             gain = _TARGET_LUFS - loudness
             filters += [f"volume={gain:.2f}dB", _cleanup_filter(gain, noise_floor)]
         limit = 10 ** (_PEAK_CEILING_DB / 20)
-        audio_filter = ",".join([*filters, f"alimiter=limit={limit:.4f}:level=0"])
+        limiter = f"alimiter=limit={limit:.4f}:level=0"
 
         cmd = ["ffmpeg", "-y"]
-        if video:
-            cmd += ["-i", video, "-i", mix, "-map", "0:v", "-map", "1:a", "-c:v", "copy"]
+        inputs = ["-i", video, "-i", mix] if video else ["-i", mix]
+        speech_index = 1 if video else 0
+
+        if music:
+            speech = ",".join([*filters, music_service.STEREO])
+            parts = [f"[{speech_index}:a]{speech}[speech]"]
+            extra_inputs, music_parts, mixed = music_service.build_music_filter(
+                music, "[speech]", speech_index + 1, _TARGET_LUFS, Path(tmp))
+            parts += music_parts
+            parts.append(f"{mixed}{limiter}[outa]")
+            cmd += [*inputs, *extra_inputs, "-filter_complex", ";".join(parts)]
+            if video:
+                cmd += ["-map", "0:v", "-c:v", "copy"]
+            cmd += ["-map", "[outa]"]
         else:
-            cmd += ["-i", mix]
-        cmd += ["-af", audio_filter, "-ar", "48000", *audio_codec]
+            cmd += inputs
+            if video:
+                cmd += ["-map", "0:v", "-map", "1:a", "-c:v", "copy"]
+            cmd += ["-af", ",".join([*filters, limiter])]
+        cmd += ["-ar", "48000", *audio_codec]
         if video:
             cmd += ["-movflags", "+faststart"]
         _run_ffmpeg([*cmd, output_path])
 
 
 def _render_fulledit(segments: list[dict], speakers_dict: dict, output_path: str,
-                     word_mutes: list[dict] | None = None) -> None:
+                     word_mutes: list[dict] | None = None,
+                     music: "music_service.MusicPlan | None" = None) -> None:
     kept = [s for s in segments if s.get("keep", True)]
     if not kept:
         raise ValueError("No kept segments to render")
@@ -685,11 +712,12 @@ def _render_fulledit(segments: list[dict], speakers_dict: dict, output_path: str
                                                          word_mutes=word_mutes)
 
     _encode_normalized(["ffmpeg", "-y", *input_args, "-filter_complex", filter_complex],
-                       _VIDEO_CODEC, _AAC, output_path)
+                       _VIDEO_CODEC, _AAC, output_path, music=music)
 
 
 def _render_vertical(segments: list[dict], speakers_dict: dict, output_path: str,
-                     word_mutes: list[dict] | None = None) -> None:
+                     word_mutes: list[dict] | None = None,
+                     music: "music_service.MusicPlan | None" = None) -> None:
     kept = [s for s in segments if s.get("keep", True)]
     if not kept:
         raise ValueError("No kept segments to render")
@@ -698,7 +726,7 @@ def _render_vertical(segments: list[dict], speakers_dict: dict, output_path: str
                                                          word_mutes=word_mutes)
 
     _encode_normalized(["ffmpeg", "-y", *input_args, "-filter_complex", filter_complex],
-                       _VIDEO_CODEC, _AAC, output_path)
+                       _VIDEO_CODEC, _AAC, output_path, music=music)
 
 
 _AUDIO_CODECS = {
@@ -719,16 +747,12 @@ def _mute_filter(word_mutes: list[dict] | None, start: float, end: float) -> str
     return f",volume=0:enable='{'+'.join(ranges)}'" if ranges else ""
 
 
-def _render_audio(segments: list[dict], speakers_dict: dict, word_cuts: list[dict],
-                  word_mutes: list[dict], output_path: str, fmt: str) -> None:
+def _build_audio_concat(kept: list[dict], speakers_dict: dict,
+                        word_mutes: list[dict] | None) -> tuple[list[str], str]:
     """
-    Audio-only export for podcast projects: every speaker's track is mixed for
-    each kept segment, with word cuts removed and word mutes silenced, so the
-    file matches what the editor plays back.
+    (input_args, filter_complex) for an audio-only concat of `kept`, producing
+    [outa]: every speaker's track mixed for each segment, word mutes silenced.
     """
-    kept = _apply_word_cuts([s for s in segments if s["keep"]], word_cuts)
-    if not kept:
-        raise ValueError("No kept segments to render")
     cams = list(speakers_dict.keys())
     if not cams:
         raise ValueError("No audio tracks in project")
@@ -749,8 +773,23 @@ def _render_audio(segments: list[dict], speakers_dict: dict, word_cuts: list[dic
         filter_parts.append(f"{labels}{mix}[a{i}]")
 
     concat = "".join(f"[a{i}]" for i in range(len(kept))) + f"concat=n={len(kept)}:v=0:a=1[outa]"
-    _encode_normalized(["ffmpeg", "-y", *input_args, "-filter_complex", ";".join([*filter_parts, concat])],
-                       [], _AUDIO_CODECS[fmt], output_path)
+    return input_args, ";".join([*filter_parts, concat])
+
+
+def _render_audio(segments: list[dict], speakers_dict: dict, word_cuts: list[dict],
+                  word_mutes: list[dict], output_path: str, fmt: str,
+                  music: "music_service.MusicPlan | None" = None) -> None:
+    """
+    Audio-only export for podcast projects: every speaker's track is mixed for
+    each kept segment, with word cuts removed and word mutes silenced, so the
+    file matches what the editor plays back.
+    """
+    kept = _apply_word_cuts([s for s in segments if s["keep"]], word_cuts)
+    if not kept:
+        raise ValueError("No kept segments to render")
+    input_args, filter_complex = _build_audio_concat(kept, speakers_dict, word_mutes)
+    _encode_normalized(["ffmpeg", "-y", *input_args, "-filter_complex", filter_complex],
+                       [], _AUDIO_CODECS[fmt], output_path, music=music)
 
 
 # ---------------------------------------------------------------------------
@@ -1221,11 +1260,18 @@ def _apply_word_cuts(segments: list[dict], word_cuts: list[dict]) -> list[dict]:
 # the editor is still playing; only the newest few are kept on disk.
 _PREVIEW_PREFIX = "preview_"
 _PREVIEW_KEEP = 2
+# Video projects preview as video; an audio-only project only gets a proxy when
+# it has music to hear, and then it is just the mix.
+_PREVIEW_SUFFIXES = (".mp4", ".m4a")
 
 
 def _preview_files(output_dir: Path) -> list[Path]:
-    """Existing proxy previews, oldest first (names sort by their timestamp)."""
-    return sorted(output_dir.glob(f"{_PREVIEW_PREFIX}*.mp4"))
+    """Finished proxy previews, oldest first (names sort by their timestamp)."""
+    return sorted(
+        (p for suffix in _PREVIEW_SUFFIXES for p in output_dir.glob(f"{_PREVIEW_PREFIX}*{suffix}")
+         if ".part" not in p.name and ".speech" not in p.name),
+        key=lambda p: p.name,
+    )
 
 
 def _prune_previews(output_dir: Path, keep: int = _PREVIEW_KEEP) -> None:
@@ -1239,12 +1285,68 @@ def _prune_previews(output_dir: Path, keep: int = _PREVIEW_KEEP) -> None:
             pass
 
 
+def _measure_integrated(audio_path: str, limit_seconds: int = 600) -> float | None:
+    """
+    Integrated loudness of a file in LUFS, or None if it is silent or unreadable.
+
+    Only the first `limit_seconds` are measured: this runs on every proxy render
+    just to place music relative to the voice, and ten minutes already settles
+    the number to a fraction of a dB.
+    """
+    result = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-nostats", "-t", str(limit_seconds), "-i", audio_path,
+         "-af", "loudnorm=print_format=json", "-f", "null", "-"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0 or "{" not in result.stderr:
+        return None
+    try:
+        stats, _ = json.JSONDecoder().raw_decode(result.stderr, result.stderr.rindex("{"))
+        loudness = float(stats["input_i"])
+    except (ValueError, KeyError):
+        return None
+    return None if loudness <= -70 else loudness
+
+
+def _mix_preview_music(speech_path: Path, out_path: Path,
+                       plan: "music_service.MusicPlan", audio_only: bool) -> None:
+    """
+    Add the music cues to a finished speech-only proxy, copying its video.
+
+    The proxy skips loudness normalisation, so the speech sits wherever the
+    recording does; its level is measured here instead, and cue gains are taken
+    relative to it. That keeps the balance the editor plays the same as the
+    balance the export will have, where the speech is normalised to a target.
+    """
+    speech_lufs = _measure_integrated(str(speech_path))
+    if speech_lufs is None:
+        speech_lufs = _TARGET_LUFS
+    limit = 10 ** (_PEAK_CEILING_DB / 20)
+    with tempfile.TemporaryDirectory(dir=out_path.parent) as tmp:
+        extra_inputs, music_parts, mixed = music_service.build_music_filter(
+            plan, "[speech]", 1, speech_lufs, Path(tmp))
+        parts = [f"[0:a]{music_service.STEREO}[speech]", *music_parts,
+                 f"{mixed}alimiter=limit={limit:.4f}:level=0[outa]"]
+        cmd = ["ffmpeg", "-y", "-i", str(speech_path), *extra_inputs,
+               "-filter_complex", ";".join(parts)]
+        if not audio_only:
+            cmd += ["-map", "0:v", "-c:v", "copy"]
+        cmd += ["-map", "[outa]", "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart", str(out_path)]
+        _run_ffmpeg(cmd)
+
+
 def render_preview(project: dict, projects_dir) -> dict:
     """
     Render a fast low-quality proxy preview that exactly mirrors the final render:
     - Applies EDL keep/cut decisions
     - Applies word-level cuts and mutes
+    - Mixes in music and sound cues, ducked under speech
     - 960px wide, CRF 42, ultrafast preset (typically 5–20 s for a 10 min clip)
+
+    Audio-only projects get an `.m4a` proxy of the mix instead of a video; they
+    only need one once there is music to hear, since otherwise the editor plays
+    the source file directly.
 
     The file is named `preview_<ms>.mp4` and written via a temp file, so the
     preview the editor is playing is never rewritten underneath it (which stalls
@@ -1264,6 +1366,7 @@ def render_preview(project: dict, projects_dir) -> dict:
 
     edl = project.get("edl")
     word_cuts = project.get("word_cuts") or []
+    audio_only = project.get("project_type") == "podcast"
 
     # ── Build kept segment list ───────────────────────────────────────────────
     if edl and edl.get("segments"):
@@ -1280,37 +1383,41 @@ def render_preview(project: dict, projects_dir) -> dict:
     if not kept:
         raise ValueError("No segments remain after applying cuts")
 
-    # ── Build filter complex (reuse existing helper) ──────────────────────────
-    input_args, filter_complex, _ = _build_concat_filter(kept, speakers_dict, vertical=False,
-                                                         word_mutes=project.get("word_mutes") or [])
+    plan = music_service.plan_music(project, [(s["start"], s["end"]) for s in kept])
 
-    # For preview: skip loudness normalisation (slow) and scale to 960p
-    # [outv] appears exactly once in the concat output; rename it so we can scale
-    filter_complex = filter_complex.replace("[outv]", "[outv_raw]", 1)
-    filter_complex += ";[outv_raw]scale=960:-2[outv]"
+    # ── Build filter complex (reuse existing helpers) ─────────────────────────
+    word_mutes = project.get("word_mutes") or []
+    if audio_only:
+        input_args, filter_complex = _build_audio_concat(kept, speakers_dict, word_mutes)
+        codec_args = ["-map", "[outa]", "-c:a", "aac", "-b:a", "128k"]
+    else:
+        input_args, filter_complex, _ = _build_concat_filter(kept, speakers_dict, vertical=False,
+                                                             word_mutes=word_mutes)
+        # For preview: skip loudness normalisation (slow) and scale to 960p
+        # [outv] appears exactly once in the concat output; rename it so we can scale
+        filter_complex = filter_complex.replace("[outv]", "[outv_raw]", 1)
+        filter_complex += ";[outv_raw]scale=960:-2[outv]"
+        codec_args = ["-map", "[outv]", "-map", "[outa]",
+                      "-c:v", "libx264", "-preset", "ultrafast", "-crf", "42",
+                      "-c:a", "aac", "-b:a", "96k"]
 
-    final = output_dir / f"{_PREVIEW_PREFIX}{time.time_ns() // 1_000_000}.mp4"
-    tmp = output_dir / f"{final.stem}.part.mp4"
-    out = str(tmp)
-    cmd = ["ffmpeg", "-y"]
-    cmd.extend(input_args)
-    cmd.extend([
-        "-filter_complex", filter_complex,
-        "-map", "[outv]",
-        "-map", "[outa]",
-        "-c:v", "libx264",
-        "-preset", "ultrafast",
-        "-crf", "42",
-        "-c:a", "aac",
-        "-b:a", "96k",
-        "-movflags", "+faststart",
-        out,
-    ])
+    suffix = ".m4a" if audio_only else ".mp4"
+    final = output_dir / f"{_PREVIEW_PREFIX}{time.time_ns() // 1_000_000}{suffix}"
+    tmp = output_dir / f"{final.stem}.part{suffix}"
+    # With music the concat lands in its own file first, so its level can be
+    # measured before the cues are placed against it.
+    speech = output_dir / f"{final.stem}.speech{suffix}" if plan else tmp
+
+    cmd = ["ffmpeg", "-y", *input_args, "-filter_complex", filter_complex,
+           *codec_args, "-movflags", "+faststart", str(speech)]
     try:
         _run_ffmpeg(cmd)
+        if plan:
+            _mix_preview_music(speech, tmp, plan, audio_only)
         os.replace(tmp, final)  # atomic: the URL only ever serves a complete file
     finally:
         tmp.unlink(missing_ok=True)
+        speech.unlink(missing_ok=True)
     _prune_previews(output_dir)
 
     return {

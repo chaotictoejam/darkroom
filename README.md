@@ -242,10 +242,11 @@ On macOS the first recording triggers the system microphone prompt. If you decli
 3. **Transcribe**: Whisper runs locally on each file's audio track (for recordings, on each take as it finishes). Silence is skipped (voice activity detection), the model stays loaded between tracks, and it runs in int8 on CPU or float16 on an NVIDIA GPU. The first run downloads the selected model.
 4. **Analyse**: Claude receives the merged transcript (sent to your configured provider; see [What leaves your machine](#what-leaves-your-machine)) and returns an EDL (edit decision list) as JSON with segments and 3–5 suggested Shorts clips.
 5. **Review**: video/audio previews, transcript panel, per-segment controls. Toggle cuts, change camera assignments, edit transcript text inline, mute individual words.
-6. **Shorts Builder**: pick any AI-suggested clip or define a custom range. Choose subtitle style, accent colour, opacity, and camera layout. Preview the clip before rendering.
-7. **Render**: choose export targets (16:9 full edit, 9:16 vertical, or a named Short) and FFmpeg renders them with audio normalised to –16 LUFS.
-8. **Publish to DarkRelay** (optional): export an episode bundle for [DarkRelay](https://github.com/chaotictoejam/darkrelay) and publish it to your own AWS account. See [docs/publishing-darkrelay.md](docs/publishing-darkrelay.md).
-9. **Redo EDL**: re-run the AI analysis on the existing transcript without re-transcribing (sidebar danger zone).
+6. **Music & sound** (optional): add music to your library, then place it as an intro, an outro, a bed under the voices, or a one-shot effect. See [Music & sound](#music--sound) below.
+7. **Shorts Builder**: pick any AI-suggested clip or define a custom range. Choose subtitle style, accent colour, opacity, and camera layout. Preview the clip before rendering.
+8. **Render**: choose export targets (16:9 full edit, 9:16 vertical, or a named Short) and FFmpeg renders them with audio normalised to –16 LUFS.
+9. **Publish to DarkRelay** (optional): export an episode bundle for [DarkRelay](https://github.com/chaotictoejam/darkrelay) and publish it to your own AWS account. See [docs/publishing-darkrelay.md](docs/publishing-darkrelay.md).
+10. **Redo EDL**: re-run the AI analysis on the existing transcript without re-transcribing (sidebar danger zone).
 
 ---
 
@@ -255,7 +256,33 @@ On macOS the first recording triggers the system microphone prompt. If you decli
 Multi-camera interviews, talking heads, or any recording with video. Supports camera switching in the EDL. Renders 16:9 full edit and 9:16 vertical Shorts.
 
 ### Podcast
-Audio-only recordings, uploaded or recorded in the studio. No camera switching. Exports a mixed MP3 or a lossless WAV, with cuts and word mutes applied. The editor adapts automatically: the camera layout toggle is hidden.
+Audio-only recordings, uploaded or recorded in the studio. No camera switching. Exports a mixed MP3 or a lossless WAV, with cuts, word mutes and music applied. The editor adapts automatically: the camera layout toggle is hidden.
+
+---
+
+## Music & sound
+
+The **Music & sound** panel in the editor sidebar has two halves: your library on top, this episode's cues below.
+
+**The library is global.** It lives in `~/.darkroom/library` (override with `DARKROOM_LIBRARY_DIR`), outside the projects folder, so a theme you import once is there in every episode and deleting a project never deletes your music. Importing copies the file in, converts it to stereo 48 kHz FLAC and measures its loudness — all locally; nothing is uploaded, and Darkroom never downloads or bundles music for you, so add only what you have the rights to use.
+
+Pick a track, then place it:
+
+| | |
+|---|---|
+| **Intro** / **Outro** | Starts or ends the episode, fading under the first or last words |
+| **Bed here** | Plays under the voices from the playhead on, looping if it is shorter than the stretch it covers |
+| **Effect here** | A one-shot at the playhead |
+
+**Levels are set in decibels under the voice.** Because each track's loudness is measured on import and your speech is normalised to −16 LUFS, −14 dB is the same balance under a quiet recording as a hot one, and under one track as another. Open a cue to set its level, its fades, whether it loops, and how it ducks.
+
+**Beds duck themselves.** Darkroom reads the transcript, so it knows to the word where people are talking: the music dips a quarter-second *before* a word starts, holds through the gaps inside a sentence, and comes back up afterwards — by exactly the number of decibels you asked for, with no pumping on breaths or keyboard noise. That beats a sidechain compressor, which can only react after the voice arrives.
+
+**Music doesn't have to loop forever.** A bed has an **Ends** choice: the end of the episode (repeating as often as it must), when the track runs out (plays once, then fades where the file ends), or at the playhead — scrub to where you want the music to stop and click. Set an end and the bed repeats only as far as it needs to reach it.
+
+Cues appear as blocks on a music lane along the bottom of the timeline. They are anchored to the recording, not the export, so cutting speech moves them with the words they sit under. Drag a block to move it, or a bed's right edge to change where it stops.
+
+Everything is mixed in when you render: the preview, the 16:9 full edit, the 9:16 vertical edit, MP3/WAV exports and the DarkRelay bundle. (Individual Shorts clips don't take cues yet, the same way they don't take manual word cuts.) An audio-only episode plays its source files directly until it has music; from then on it previews a rendered mix, so what you hear is what exports.
 
 ---
 
@@ -282,11 +309,14 @@ darkroom/
 │   │   ├── api/
 │   │   │   ├── projects.py  # project CRUD routes
 │   │   │   ├── jobs.py      # transcription, analysis, render routes + WebSocket
-│   │   │   └── media.py     # file serving helpers
+│   │   │   ├── media.py     # file serving helpers
+│   │   │   └── music.py     # the global music library + a project's sound cues
 │   │   ├── services/
 │   │   │   ├── transcription.py  # Whisper transcription
 │   │   │   ├── editor.py       # Claude EDL generation (Anthropic API or Bedrock)
-│   │   │   └── renderer.py     # FFmpeg rendering
+│   │   │   ├── renderer.py     # FFmpeg rendering
+│   │   │   ├── library.py      # the global music library (~/.darkroom/library)
+│   │   │   └── music.py        # sound cues: placement, ducking, mix graph
 │   │   └── storage.py       # project JSON persistence
 │   └── bench/               # transcription benchmark (see bench/README.md)
 ├── frontend/

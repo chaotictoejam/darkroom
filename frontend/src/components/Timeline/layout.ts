@@ -6,6 +6,7 @@ export const RULER_H = 18           // px
 export const LANE_TOP = RULER_H + 3 // px — top of the word lane
 export const LANE_H = 22            // px
 export const WAVE_TOP = LANE_TOP + LANE_H + 4
+export const MUSIC_H = 24           // px — height of a sound lane at the bottom
 
 export const SELECTED = 'rgba(59,130,246,0.9)'
 

@@ -162,11 +162,59 @@ export interface Project {
   word_cuts: WordCut[]   // manual word-level cuts, separate from AI EDL cuts
   word_mutes: WordMute[] // audio-only mutes — video kept, sound silenced
   timeline_splits: number[] // source times where timeline chunks are split
+  sound_tracks: SoundTrack[] // music/SFX tracks under the speakers
+  sound_cues: SoundCue[]     // library tracks placed on them
   renders: Record<string, Render>
   progress: Progress
   transcribe_model?: string
   transcribe_language?: string | null
   publish: PublishDetails
+}
+
+// ── Music and sound ───────────────────────────────────────────────────────────
+
+/** A track in the global music library, shared by every project. */
+export interface LibraryTrack {
+  id: string
+  name: string
+  file: string
+  duration: number
+  /** Integrated loudness in LUFS, measured on import; null when the file is silent. */
+  loudness: number | null
+  added_at: string
+}
+
+/** A lane that cues sit on, with its own level and mute. */
+export interface SoundTrack {
+  id: string
+  name: string
+  gain_db: number
+  muted: boolean
+}
+
+export type SoundCueKind = 'bed' | 'intro' | 'outro' | 'sfx'
+
+/**
+ * One placement of a library track. `at`/`until` are **source** seconds, like
+ * chapters, so a cue moves with the content as speech is cut.
+ */
+export interface SoundCue {
+  id: string
+  library_id: string
+  track: string
+  kind: SoundCueKind
+  at: number
+  until: number | null
+  /** Output seconds for intro/outro/sfx; null plays the whole track. */
+  length: number | null
+  /** Level relative to the voice; 0 dB is as loud as the speech. */
+  gain_db: number
+  duck: boolean
+  /** How much further down the music goes while someone is talking. */
+  duck_db: number
+  loop: boolean
+  fade_in: number
+  fade_out: number
 }
 
 // ── DarkRelay publishing ──────────────────────────────────────────────────────
