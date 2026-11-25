@@ -35,12 +35,12 @@ Requires Python 3.11+ (pyproject), Node 20.19+ or 22.12+ (Vite 8), full FFmpeg. 
 - `backend/darkroom/` — FastAPI app
   - `main.py` app + SPA serving; `run()` honours `DARKROOM_PORT`; `__main__.py` lets the desktop app run `python -m darkroom`
   - `storage.py` project JSON persistence + `editing_project()` lock
-  - `api/projects.py` CRUD + PATCH · `api/media.py` upload, word cuts/mutes, transcript edits, waveform · `api/jobs.py` transcribe/analyse/render/preview jobs + WebSocket progress · `api/takes.py` recording studio takes, per-take transcription worker, crash recovery · `api/publish.py` DarkRelay episode details, cover art, bundle export job
+  - `api/projects.py` CRUD + PATCH (including a project's `group`) · `api/groups.py` groups in use, rename, ungroup · `api/media.py` upload, word cuts/mutes, transcript edits, waveform · `api/jobs.py` transcribe/analyse/render/preview jobs + WebSocket progress · `api/takes.py` recording studio takes, per-take transcription worker, crash recovery · `api/publish.py` DarkRelay episode details, cover art, bundle export job
   - `services/transcription.py` faster-whisper (cached model, VAD + batched pipeline, int8 CPU / float16 CUDA, default model by device and language: `small` for English on CPU, else `turbo`) + transcript merge · `services/editor.py` Claude EDL generation (Anthropic API or Bedrock) · `services/renderer.py` FFmpeg rendering (video, and MP3/WAV for audio-only), face-centred crops · `services/takes.py` chunk append, finalise to WAV, join takes, transcript offsets · `services/publish.py` DarkRelay bundles (edited-time transcripts and chapters, `episode.json`)
 - `frontend/src/` — React + TypeScript + Vite
   - `App.tsx` routes between views by `project.source` and `project.status` (no router library)
-  - `views/` Welcome (New Project: Upload or Record), Setup (upload), Studio (recording), Processing, Editor · `components/` TranscriptEditor, VideoPreview, `Timeline/` (`Timeline.tsx` drag/selection state and lanes; `useTimelineView.ts` zoom/pan; pure logic in `chunks.ts`, `zoom.ts`, `ruler.ts`, `waveform.ts`, `timeMap.ts` source ↔ edited time; `SelectionToolbar`, `ZoomControls`, `PauseChip`, `Waveform`), `Editor/` (sidebar panels: EDL, render, publish to DarkRelay, manual analysis, advanced tools; Analyse confirm and episode details dialogs), `Studio/` (mic engine, AudioWorklet, chunk uploader, waveform lanes, meters, takes strip)
-  - `transcriptionOptions.ts` Whisper model and language lists shared by Setup and Studio
+  - `views/` Welcome (project grid, filtered by group; New Project: Upload or Record), Setup (upload), Studio (recording), Processing, Editor · `components/` TranscriptEditor, VideoPreview, `Timeline/` (`Timeline.tsx` drag/selection state and lanes; `useTimelineView.ts` zoom/pan; pure logic in `chunks.ts`, `zoom.ts`, `ruler.ts`, `waveform.ts`, `timeMap.ts` source ↔ edited time; `SelectionToolbar`, `ZoomControls`, `PauseChip`, `Waveform`), `Editor/` (sidebar panels: EDL, render, publish to DarkRelay, manual analysis, advanced tools; Analyse confirm and episode details dialogs), `Studio/` (mic engine, AudioWorklet, chunk uploader, waveform lanes, meters, takes strip), `Projects/` (Welcome grid card, group chips, move/rename/confirm dialogs)
+  - `transcriptionOptions.ts` Whisper model and language lists shared by Setup and Studio · `projectGroups.ts` grouping and filtering for the project grid
   - `api/client.ts` typed API client + `subscribeToProgress` WebSocket · `api/types.ts` shared types
   - `desktop.ts` typed `window.darkroom` bridge (undefined in a plain browser)
 - `desktop/` — Electron shell: `main.cjs` (spawns backend, permissions, CSP, single instance), `preload.cjs` (bridge)
@@ -54,6 +54,8 @@ Requires Python 3.11+ (pyproject), Node 20.19+ or 22.12+ (Vite 8), full FFmpeg. 
 **Projects** are `projects/<8-hex-id>/project.json` plus media and `output/`. `save_project` writes atomically. When adding a field to the project, add it to `new_project()` **and** to `_DEFAULTS` in `storage.py` so old projects backfill.
 
 **Projects have a `source`:** `"upload"` or `"record"` (backfilled to `"upload"`).
+
+**Projects have a `group`:** a free-text label the Welcome grid filters by, `""` when ungrouped (backfilled). There is no group record anywhere — a group exists while a project names it — and names are compared case-insensitively, so renaming or emptying a group PATCHes every project in it (`api/groups.py`).
 
 **Status lifecycle:** upload: `created → uploaded → transcribing → transcribed → analyzing → ready`; record: `recording` (in the studio) `→ transcribed` on Finish & edit, then the same. Plus `rendering` and `error`. Keep `ProjectStatus` in `api/types.ts` and `App.tsx` routing in sync with the backend.
 

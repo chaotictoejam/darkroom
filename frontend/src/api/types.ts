@@ -132,6 +132,8 @@ export interface Project {
   id: string
   name: string
   status: ProjectStatus
+  /** Group the project is filed under; "" when ungrouped. */
+  group: string
   project_type: 'video' | 'podcast'
   /** Whether the media has a video track; null on projects from before the flag. */
   has_video: boolean | null
@@ -216,6 +218,14 @@ export interface ProjectSummary {
   created_at: string
   source: ProjectSource
   project_type: 'video' | 'podcast'
+  /** Group the project is filed under; "" when ungrouped. */
+  group: string
+}
+
+/** A group in use, with how many projects it holds. */
+export interface ProjectGroup {
+  name: string
+  count: number
 }
 
 // ── Render request payloads ───────────────────────────────────────────────────

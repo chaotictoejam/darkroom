@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import jobs, media, projects, publish, takes
+from .api import groups, jobs, media, projects, publish, takes
 from .services.renderer import check_ffmpeg
 from .storage import PROJECTS_DIR
 
@@ -52,6 +52,7 @@ app = FastAPI(
 
 # ── API routers ───────────────────────────────────────────────────────────────
 app.include_router(projects.router, prefix="/api")
+app.include_router(groups.router,   prefix="/api")
 app.include_router(media.router,    prefix="/api")
 app.include_router(jobs.router,     prefix="/api")
 app.include_router(takes.router,    prefix="/api")

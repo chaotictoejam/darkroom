@@ -23,6 +23,8 @@ def project_path(project_id: str) -> Path:
 
 _DEFAULTS = {
     "project_type": "video",
+    # Folder-like label the user organises projects by ("" = ungrouped)
+    "group": "",
     # Whether the media has a video track; None on projects from before the flag
     "has_video": None,
     "source": "upload",
@@ -126,13 +128,14 @@ def list_projects() -> list[dict]:
     return projects
 
 
-def new_project(name: str, source: str = "upload") -> dict:
+def new_project(name: str, source: str = "upload", group: str = "") -> dict:
     return {
         "id": uuid.uuid4().hex[:8],
         "name": name,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "status": "recording" if source == "record" else "created",
         "source": source,
+        "group": group.strip(),
         "speakers": [],
         "transcripts": {},
         "merged_transcript": [],

@@ -16,6 +16,8 @@ class CreateProjectBody(BaseModel):
     name: str = "Untitled Project"
     project_type: Literal["video", "podcast"] = "video"
     source: Literal["upload", "record"] = "upload"
+    # Group to file the project under; "" leaves it ungrouped
+    group: str = ""
 
 
 class PatchProjectBody(BaseModel):
@@ -27,6 +29,8 @@ class PatchProjectBody(BaseModel):
     transcribe_language: Optional[str] = ""
     # Times (source seconds) where the user split timeline chunks
     timeline_splits: Optional[list[float]] = None
+    # Group the project is filed under; "" removes it from its group
+    group: Optional[str] = None
 
 
 def _set_project_type(proj: dict, project_type: str) -> None:
@@ -44,14 +48,14 @@ def _set_project_type(proj: dict, project_type: str) -> None:
 def get_projects():
     return [
         {"id": p["id"], "name": p["name"], "status": p["status"], "created_at": p["created_at"],
-         "source": p["source"], "project_type": p["project_type"]}
+         "source": p["source"], "project_type": p["project_type"], "group": p["group"]}
         for p in list_projects()
     ]
 
 
 @router.post("/projects", status_code=201)
 def create_project(body: CreateProjectBody):
-    project = new_project(body.name.strip() or "Untitled Project", source=body.source)
+    project = new_project(body.name.strip() or "Untitled Project", source=body.source, group=body.group)
     project["project_type"] = body.project_type
     save_project(project)
     return project
@@ -77,6 +81,8 @@ def patch_project(project_id: str, body: PatchProjectBody):
                 proj["transcribe_model"] = body.transcribe_model
             if body.transcribe_language != "":
                 proj["transcribe_language"] = body.transcribe_language or None
+            if body.group is not None:
+                proj["group"] = body.group.strip()
             if body.timeline_splits is not None:
                 proj["timeline_splits"] = sorted({round(t, 3) for t in body.timeline_splits if t >= 0})
     except LookupError:

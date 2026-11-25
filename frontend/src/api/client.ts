@@ -4,7 +4,8 @@
  * FastAPI serves everything from the same port in production.
  */
 import type {
-  AiStatus, EDL, Participant, Project, ProjectSource, ProjectSummary, PublishDetailsInput, RenderShortParams, Take,
+  AiStatus, EDL, Participant, Project, ProjectGroup, ProjectSource, ProjectSummary, PublishDetailsInput,
+  RenderShortParams, Take,
 } from './types'
 
 class ApiError extends Error {
@@ -39,8 +40,8 @@ export const api = {
 
   listProjects: () => request<ProjectSummary[]>('/api/projects'),
 
-  createProject: (name: string, project_type: 'video' | 'podcast', source: ProjectSource) =>
-    request<Project>('/api/projects', { method: 'POST', body: JSON.stringify({ name, project_type, source }) }),
+  createProject: (name: string, project_type: 'video' | 'podcast', source: ProjectSource, group = '') =>
+    request<Project>('/api/projects', { method: 'POST', body: JSON.stringify({ name, project_type, source, group }) }),
 
   getProject: (id: string) => request<Project>(`/api/projects/${id}`),
 
@@ -53,8 +54,24 @@ export const api = {
       transcribe_model?: string
       transcribe_language?: string | null
       timeline_splits?: number[]
+      /** "" removes the project from its group. */
+      group?: string
     },
   ) => request<Project>(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+
+  // ── Project groups ──────────────────────────────────────────────────────────
+
+  /** Moves every project in `old` to `next`; an empty `next` ungroups them. */
+  renameGroup: (old: string, next: string) =>
+    request<{ moved: number; groups: ProjectGroup[] }>('/api/groups/rename', {
+      method: 'POST', body: JSON.stringify({ old, new: next }),
+    }),
+
+  /** Empties the group — its projects stay, just without a group. */
+  ungroupGroup: (name: string) =>
+    request<{ moved: number; groups: ProjectGroup[] }>('/api/groups/ungroup', {
+      method: 'POST', body: JSON.stringify({ name }),
+    }),
 
   // ── Recording studio takes ──────────────────────────────────────────────────
 
