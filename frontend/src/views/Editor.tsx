@@ -67,6 +67,8 @@ export default function Editor({ project, onChange, onBack }: Props) {
     () => new Set(project.edl ? (['edl'] as SidePanel[]) : []),
   )
   const [previewLayout, setPreviewLayout] = useState<PreviewLayout>('multi')
+  const [retranscribing, setRetranscribing] = useState(false)
+  const [retranscribeNote, setRetranscribeNote] = useState<string | null>(null)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [cleanView, setCleanView] = useState(false)
@@ -326,6 +328,44 @@ export default function Editor({ project, onChange, onBack }: Props) {
     [commitEdit, wordCuts],
   )
 
+  /**
+   * Re-run Whisper over a stretch of the recording and splice the result into
+   * the transcript. For speech the full pass dropped or misheard: the window is
+   * decoded on its own, so it chunks differently and is re-aligned within it.
+   *
+   * Only the transcript is replaced — cuts, mutes and splits are the user's, so
+   * recovered speech inside a cut stays cut until they restore it, which the
+   * note says.
+   */
+  const handleRetranscribe = useCallback(
+    async (start: number, end: number) => {
+      setRetranscribing(true)
+      setRetranscribeNote(null)
+      try {
+        const res = await api.retranscribe(latestProject.current.id, start, end)
+        // Merge in only the transcript: local cuts may not have been saved yet
+        onChange({
+          ...latestProject.current,
+          merged_transcript: res.project.merged_transcript,
+          transcripts: res.project.transcripts,
+        })
+        const cut = (latestProject.current.word_cuts ?? []).some((c) => c.start < end && c.end > start)
+        setRetranscribeNote(
+          res.words_after === 0
+            ? 'Re-transcribed: no speech found in that stretch'
+            : res.words_before === 0
+              ? `Recovered ${res.words_after} words that were missing${cut ? ' — Restore the selection to hear them' : ''}`
+              : `Re-transcribed ${res.words_after} words (was ${res.words_before})`,
+        )
+      } catch (err) {
+        setRetranscribeNote(err instanceof Error ? err.message : 'Re-transcription failed')
+      } finally {
+        setRetranscribing(false)
+      }
+    },
+    [onChange],
+  )
+
   /** Step cuts and splits back (or forward) through the history. */
   const stepCutsHistory = useCallback(
     (direction: 'undo' | 'redo') => {
@@ -431,6 +471,15 @@ export default function Editor({ project, onChange, onBack }: Props) {
           {analyzeError && (
             <span style={{ color: '#f55', fontSize: 12, maxWidth: 480 }} title={analyzeError}>
               {analyzeError}
+            </span>
+          )}
+          {retranscribeNote && (
+            <span
+              onClick={() => setRetranscribeNote(null)}
+              title="Dismiss"
+              style={{ color: 'var(--text-muted)', fontSize: 12, maxWidth: 480, cursor: 'pointer' }}
+            >
+              {retranscribeNote}
             </span>
           )}
           {!hasEdl && ai?.configured && !ai.blocked && (
@@ -790,6 +839,8 @@ export default function Editor({ project, onChange, onBack }: Props) {
             onCutsChange={handleCutsChange}
             splits={timelineSplits}
             onSplitsChange={handleSplitsChange}
+            retranscribing={retranscribing}
+            onRetranscribe={handleRetranscribe}
           />
         </div>
       </div>

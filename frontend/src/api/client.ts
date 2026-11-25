@@ -5,7 +5,7 @@
  */
 import type {
   AiStatus, EDL, Participant, Project, ProjectGroup, ProjectSource, ProjectSummary, PublishDetailsInput,
-  RenderShortParams, Take,
+  RenderShortParams, RetranscribeResult, Take,
 } from './types'
 
 class ApiError extends Error {
@@ -153,6 +153,17 @@ export const api = {
       `/api/projects/${id}/transcript/${segIndex}/words`,
       { method: 'PATCH', body: JSON.stringify({ first, last, text }) },
     ),
+
+  /**
+   * Re-run Whisper over `start`–`end` of the recording and splice the result into
+   * the transcript. For a stretch the full pass dropped or misheard; manual cuts
+   * and mutes are left alone.
+   */
+  retranscribe: (id: string, start: number, end: number, opts?: { speakerId?: string; model?: string }) =>
+    request<RetranscribeResult>(`/api/projects/${id}/retranscribe`, {
+      method: 'POST',
+      body: JSON.stringify({ start, end, speaker_id: opts?.speakerId, model: opts?.model }),
+    }),
 
   renameSpeaker: (id: string, speakerId: string, name: string) =>
     request<Project>(`/api/projects/${id}/speakers/${speakerId}`, {

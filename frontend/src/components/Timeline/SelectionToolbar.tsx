@@ -1,13 +1,29 @@
-/** Floating toolbar above the timeline selection: Cut, Restore (when it holds cuts) and close. */
+/**
+ * Floating toolbar above the timeline selection: Cut, Restore (when it holds
+ * cuts), Re-transcribe and close.
+ */
 import type { CSSProperties, ReactNode } from 'react'
 
-function ToolbarButton({ onClick, style, label, children }: { onClick: () => void; style: CSSProperties; label?: string; children: ReactNode }) {
+function ToolbarButton({ onClick, style, label, title, disabled, children }: {
+  onClick: () => void
+  style: CSSProperties
+  label?: string
+  title?: string
+  disabled?: boolean
+  children: ReactNode
+}) {
+  // A disabled button receives no mouse events, so the hover handlers need no guard.
   return (
     <button
       onPointerDown={(e) => e.stopPropagation()}
       onClick={onClick}
       aria-label={label}
-      style={{ background: 'none', border: 'none', borderRadius: 5, cursor: 'pointer', ...style }}
+      title={title}
+      disabled={disabled}
+      style={{
+        background: 'none', border: 'none', borderRadius: 5,
+        cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.5 : 1, ...style,
+      }}
       onMouseEnter={(e) => { e.currentTarget.style.background = '#2e2e2e' }}
       onMouseLeave={(e) => { e.currentTarget.style.background = 'none' }}
     >
@@ -20,8 +36,10 @@ export default function SelectionToolbar({
   center,
   length,
   canRestore,
+  retranscribing,
   onCut,
   onRestore,
+  onRetranscribe,
   onClose,
 }: {
   /** Horizontal centre of the selection, as a percentage of the track. */
@@ -29,8 +47,12 @@ export default function SelectionToolbar({
   /** Selection length in seconds. */
   length: number
   canRestore: boolean
+  /** Whether Whisper is running over this selection right now. */
+  retranscribing: boolean
   onCut: () => void
   onRestore: () => void
+  /** Re-run Whisper over the selection and splice the result into the transcript. */
+  onRetranscribe: () => void
   onClose: () => void
 }) {
   return (
@@ -58,6 +80,15 @@ export default function SelectionToolbar({
           ↺ Restore
         </ToolbarButton>
       )}
+      <div style={{ width: 1, background: '#3a3a3a', alignSelf: 'stretch', margin: '3px 2px' }} />
+      <ToolbarButton
+        onClick={onRetranscribe}
+        disabled={retranscribing}
+        title="Transcribe this stretch again on its own — for speech the first pass dropped or misheard"
+        style={{ color: '#7aa7d9', padding: '3px 10px', fontSize: 12, fontWeight: 600 }}
+      >
+        {retranscribing ? '⟳ Listening…' : '⟳ Re-transcribe'}
+      </ToolbarButton>
       <div style={{ width: 1, background: '#3a3a3a', alignSelf: 'stretch', margin: '3px 2px' }} />
       <ToolbarButton onClick={onClose} label="Clear selection" style={{ color: '#888', padding: '3px 8px', fontSize: 11 }}>
         ✕

@@ -43,6 +43,8 @@ export default function Timeline({
   onCutsChange,
   splits,
   onSplitsChange,
+  retranscribing,
+  onRetranscribe,
 }: {
   /** Panel height in px, including the controls row. */
   height: number
@@ -60,6 +62,10 @@ export default function Timeline({
   /** Source times where the user split chunks. */
   splits: number[]
   onSplitsChange: (splits: number[]) => void
+  /** Whether Whisper is running over a selection right now. */
+  retranscribing: boolean
+  /** Re-run Whisper over a source time range and splice the result in. */
+  onRetranscribe: (start: number, end: number) => void
 }) {
   const [waveform, setWaveform] = useState<number[]>([])
   const [selection, setSelection] = useState<{ start: number; end: number } | null>(null)
@@ -504,8 +510,10 @@ export default function Timeline({
             center={selPct.left + selPct.width / 2}
             length={selection.end - selection.start}
             canRestore={selectionHasCuts}
+            retranscribing={retranscribing}
             onCut={commitCut}
             onRestore={restoreSelection}
+            onRetranscribe={() => onRetranscribe(selection.start, selection.end)}
             onClose={() => setSelection(null)}
           />
         )}
