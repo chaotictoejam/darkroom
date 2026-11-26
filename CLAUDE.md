@@ -109,7 +109,7 @@ Roadmap items have a plan in `docs/` with Goals, design, a phased **TODO** check
 
 ## Known gotchas
 
-- Manual `word_cuts`/`word_mutes` apply to the preview, full edit (EDL or split layout), vertical and MP3/WAV renders (`_apply_word_cuts`, `_mute_filter` in `renderer.py`), but not to shorts/clips. Sound cues follow the same rule.
+- Manual `word_cuts`/`word_mutes` apply to the preview, full edit (EDL or split layout), vertical and MP3/WAV renders (`_apply_word_cuts`, `_mute_filter` in `renderer.py`), but not to shorts/clips (#47). Sound cues follow the same rule.
 - Deleting a library track leaves cues that name it in place; they are skipped at render and shown as missing in the editor.
 - `make desktop` needs a built frontend; `make desktop-dev` needs ports 8000 and 5173 free.
 - Upload currently reads whole files into memory (`await f.read()`); fine for audio, heavy for large video (planned fix in `docs/fast-transcription.md`).

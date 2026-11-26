@@ -305,13 +305,13 @@ One **Studio sound** switch per project (and per speaker track) that turns raw m
 - [x] Editor: an **Ends** choice on a bed (end of episode / track runs out / at the playhead), and a non-looping bed drawn on the lane where it really stops
 - [x] Audio-only projects get an `.m4a` mix proxy once they have cues, so the balance can be heard
 - [x] Tests: import/convert/measure, anchor mapping through cuts (including anchors inside a cut and partly cut beds), duck envelope shape, filter graph, track mute/gain, and renders measured for real ducking depth
-- [ ] Rename a library track from the panel (the endpoint exists)
-- [ ] Drag and drop files onto the panel to import
-- [ ] Several sound tracks (add/rename/delete, solo) and moving a cue between them
-- [ ] Waveform inside a cue block
-- [ ] "Insert sound here" from the transcript
-- [ ] An intro that plays alone before the first word (pushes the speech later; needs edited time to shift for transcripts, chapters and the proxy mapping)
-- [ ] Later: Claude suggests cues from sound names, shown as unconfirmed
+- [ ] Rename a library track from the panel (the endpoint exists) (#41)
+- [ ] Drag and drop files onto the panel to import (#42)
+- [ ] Several sound tracks (add/rename/delete, solo) and moving a cue between them (#43)
+- [ ] Waveform inside a cue block (#44)
+- [ ] "Insert sound here" from the transcript (#45)
+- [ ] An intro that plays alone before the first word (pushes the speech later; needs edited time to shift for transcripts, chapters and the proxy mapping) (#46)
+- [ ] Later: Claude suggests cues from sound names, shown as unconfirmed (#48)
 
 ### Phase 7: Studio sound (voice enhancement)
 - [ ] Project and per-track settings: `studio_sound` (on/off, strength, engine `auto` | `deepfilternet` | `rnnoise`) in `new_project()` + `_DEFAULTS`; off by default
