@@ -266,3 +266,164 @@ def test_defaults_endpoint_and_preload_without_model(monkeypatch):
     client.post("/api/transcription/preload", json={})
     client.post("/api/transcription/preload", json={"language": "es"})
     assert calls == ["small", "turbo"]
+
+
+# ── Repetitive speech vs. hallucinated loops ──────────────────────────────────
+
+def _chunk(text, words):
+    """One decoded chunk: whole-chunk text plus its word timings."""
+    return SimpleNamespace(
+        start=words[0][1], end=words[-1][2], text=text,
+        no_speech_prob=0.1, avg_logprob=-0.2, compression_ratio=9.9,
+        words=[SimpleNamespace(word=" " + w, start=s, end=e) for w, s, e in words],
+    )
+
+
+def _decode_chunks(chunks, monkeypatch, fake_models, duration=40.0):
+    class FakePipeline:
+        def __init__(self, model):
+            pass
+
+        def transcribe(self, audio_np, **kwargs):
+            return iter(chunks), SimpleNamespace(duration=duration)
+
+    monkeypatch.setattr(tr, "BatchedInferencePipeline", FakePipeline)
+    # Silent audio: refine_word_edges leaves word times alone when it finds no sound
+    return tr._decode(np.zeros(int(duration * 16000), dtype=np.float32), "A", "Ana", "small", "en")
+
+
+def test_a_restated_line_is_kept_even_though_the_chunk_looks_repetitive(fake_models, monkeypatch):
+    """A speaker doing a retake used to lose the whole 30 s chunk.
+
+    Without timestamp tokens a chunk is up to 30 s of speech. Someone who says
+    a line, fluffs it, and says it again compresses well as one block, so the
+    per-chunk compression check dropped every word of it. The check belongs on
+    each sentence instead.
+    """
+    # The real line from the recording this was found in, said three times
+    line = ("On Tuesday, November 17th, the chair of that board said on the earnings "
+            "call that the board does not intend to reinstate Jensen as CEO.").split()
+    words, t = [], 1.0
+    for _ in range(3):
+        for w in line:
+            words.append((w, round(t, 2), round(t + 0.4, 2)))
+            t += 0.5
+        t += 0.2
+    chunk_text = " ".join(w for w, _, _ in words)
+    assert tr._compression_ratio(chunk_text) > tr._COMPRESSION_RATIO_MAX
+
+    segments = _decode_chunks([_chunk(chunk_text, words)], monkeypatch, fake_models)
+    assert len(segments) == 3
+    assert all(s["text"] == " ".join(line) for s in segments)
+    # The speech is still covered end to end, not thrown away
+    assert segments[0]["start"] == 1.0 and segments[-1]["end"] == words[-1][2]
+
+
+def test_a_loop_inside_one_sentence_is_still_dropped(fake_models, monkeypatch):
+    words = [("you", round(0.5 * i, 2), round(0.5 * i + 0.3, 2)) for i in range(40)]
+    text = " ".join(w for w, _, _ in words)
+    assert tr._compression_ratio(text) > tr._COMPRESSION_RATIO_MAX
+    assert _decode_chunks([_chunk(text, words)], monkeypatch, fake_models) == []
+
+
+def test_compression_ratio_of_empty_text():
+    assert tr._compression_ratio("") == 0.0
+
+
+# ── Splicing a re-transcribed range in ────────────────────────────────────────
+
+def _seg_words(speaker, *spec):
+    words = [{"word": " " + w, "start": s, "end": e} for w, s, e in spec]
+    return {
+        "speaker_id": speaker, "speaker_name": speaker, "start": words[0]["start"],
+        "end": words[-1]["end"], "text": "".join(w["word"] for w in words).strip(), "words": words,
+    }
+
+
+def test_splice_replaces_only_the_range():
+    before = _seg_words("A", ("Before", 0.0, 1.0))
+    inside = _seg_words("A", ("junk", 5.0, 6.0))
+    after = _seg_words("A", ("After", 20.0, 21.0))
+    fresh = [_seg_words("A", ("Recovered", 5.5, 7.0))]
+
+    out = tr.splice_segments([before, inside, after], fresh, 4.0, 10.0)
+    assert [s["text"] for s in out] == ["Before", "Recovered", "After"]
+
+
+def test_splice_keeps_the_words_of_a_straddling_segment():
+    straddling = _seg_words("A", ("Keep", 1.0, 2.0), ("me", 2.0, 3.0), ("drop", 5.0, 6.0))
+    out = tr.splice_segments([straddling], [_seg_words("A", ("New", 5.1, 5.9))], 4.0, 8.0)
+    assert [s["text"] for s in out] == ["Keep me", "New"]
+    assert out[0]["end"] == 3.0 and len(out[0]["words"]) == 2
+
+
+def test_splice_drops_a_segment_swallowed_by_the_range():
+    out = tr.splice_segments([_seg_words("A", ("gone", 5.0, 6.0))], [], 4.0, 8.0)
+    assert out == []
+
+
+def test_splice_leaves_other_speakers_alone():
+    mine = _seg_words("A", ("mine", 5.0, 6.0))
+    theirs = _seg_words("B", ("theirs", 5.0, 6.0))
+    out = tr.splice_segments([mine, theirs], [_seg_words("A", ("new", 5.2, 5.8))], 4.0, 8.0, speaker_id="A")
+    # In time order; the other speaker's words in the range are untouched
+    assert [s["text"] for s in out] == ["theirs", "new"]
+
+
+def test_splice_drops_a_wordless_segment_in_the_range():
+    wordless = {"speaker_id": "A", "speaker_name": "A", "start": 5.0, "end": 6.0, "text": "hm", "words": []}
+    assert tr.splice_segments([wordless], [], 4.0, 8.0) == []
+
+
+def test_transcribe_range_returns_empty_for_an_inverted_range():
+    assert tr.transcribe_range("nofile.wav", "A", "Ana", 10.0, 10.0) == []
+
+
+# ── Extracting one window of a track ──────────────────────────────────────────
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_a_window_is_extracted_at_the_sample(tmp_path):
+    """Real ffmpeg: a window starts exactly where asked and is the length asked for.
+
+    A tone that changes pitch at 2 s, so the window's contents prove where it
+    actually starts — not just that ffmpeg exited cleanly.
+    """
+    track = tmp_path / "track.wav"
+    subprocess.run(
+        ["ffmpeg", "-v", "quiet", "-y",
+         "-f", "lavfi", "-i", "sine=frequency=200:duration=2",
+         "-f", "lavfi", "-i", "sine=frequency=2000:duration=3",
+         "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1", str(track)],
+        check=True,
+    )
+
+    whole = tr._load_window(str(track))
+    assert len(whole) == pytest.approx(5 * tr._SAMPLE_RATE, abs=tr._SAMPLE_RATE // 10)
+
+    window = tr._load_window(str(track), 2.0, 1.0)
+    assert len(window) == pytest.approx(tr._SAMPLE_RATE, abs=tr._SAMPLE_RATE // 50)
+    # The window holds the high tone that starts at 2 s, not the low one before it
+    spectrum = np.abs(np.fft.rfft(window))
+    freqs = np.fft.rfftfreq(len(window), 1 / tr._SAMPLE_RATE)
+    assert freqs[int(np.argmax(spectrum))] == pytest.approx(2000, abs=50)
+
+
+def test_splice_keeps_a_word_the_range_edge_lands_inside():
+    """A range that ends part-way through a word keeps that word.
+
+    Re-transcribing 63.5–96.0 to recover a gap should not delete the "Six" of
+    "Six days later" just because the edge fell inside it.
+    """
+    after = _seg_words("A", ("Six", 95.83, 96.21), ("days", 96.21, 96.6), ("later", 96.6, 97.0))
+    out = tr.splice_segments([after], [_seg_words("A", ("recovered", 90.0, 95.6))], 63.5, 96.0)
+    assert [s["text"] for s in out] == ["recovered", "Six days later"]
+
+
+def test_count_words_in_range_uses_the_same_edge_rule_as_the_splice():
+    seg = _seg_words("A", ("out", 1.0, 2.0), ("edge", 2.0, 4.0), ("in", 5.0, 6.0))
+    other = _seg_words("B", ("theirs", 5.0, 6.0))
+    # "edge" straddles 3.0 and sits mostly after it, so it counts as inside
+    assert tr.count_words_in_range([seg, other], 3.0, 10.0) == 3
+    assert tr.count_words_in_range([seg, other], 3.0, 10.0, speaker_id="A") == 2
+    assert tr.count_words_in_range([seg], 4.5, 10.0) == 1
+    assert tr.count_words_in_range([], 0.0, 10.0) == 0

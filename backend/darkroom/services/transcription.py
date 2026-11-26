@@ -14,6 +14,7 @@ import sys
 import tempfile
 import threading
 import wave
+import zlib
 from collections import Counter
 
 import ctranslate2
@@ -30,6 +31,19 @@ DEFAULT_MODEL_FAST = "small"
 DEFAULT_MODEL_ACCURATE = "turbo"
 
 _SAMPLE_RATE = 16000
+
+
+# Compression ratio above which text is a hallucinated loop. 2.4 is Whisper's
+# own threshold, meant for one short segment at a time.
+_COMPRESSION_RATIO_MAX = 2.4
+
+
+def _compression_ratio(text: str) -> float:
+    """How well ``text`` zlib-compresses — Whisper's measure of repetitiveness."""
+    data = text.encode("utf-8")
+    if not data:
+        return 0.0
+    return len(data) / len(zlib.compress(data))
 
 
 # ── Model cache ───────────────────────────────────────────────────────────────
@@ -176,10 +190,16 @@ def _batch_size(device: str, model_name: str) -> int:
     return 4 if model_name in _SMALL_MODELS else 1
 
 
-def _extract_audio(video_path: str) -> str:
+def _extract_audio(video_path: str, start: float | None = None, duration: float | None = None) -> str:
     """
     Extract mono 16 kHz WAV from a video file using ffmpeg.
     Returns path to a temp WAV file (caller must delete it).
+
+    ``start``/``duration`` extract only that window. ``-ss`` goes after ``-i``
+    (output seeking), which decodes and discards the lead-in instead of seeking
+    to the nearest packet, so the window starts exactly where asked — to the
+    sample, whatever the container — and the word times it produces line up with
+    the rest of the track.
     """
     if not shutil.which("ffmpeg"):
         raise RuntimeError(
@@ -191,8 +211,12 @@ def _extract_audio(video_path: str) -> str:
         )
 
     tmp = tempfile.mktemp(suffix=".wav")
-    cmd = ["ffmpeg", "-y", "-nostdin", "-i", video_path,
-           "-ac", "1", "-ar", "16000", "-f", "wav", tmp]
+    cmd = ["ffmpeg", "-y", "-nostdin", "-i", video_path]
+    if start is not None:
+        cmd += ["-ss", f"{start:.3f}"]
+    if duration is not None:
+        cmd += ["-t", f"{duration:.3f}"]
+    cmd += ["-ac", "1", "-ar", "16000", "-f", "wav", tmp]
     result = subprocess.run(cmd, capture_output=True)
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg audio extraction failed:\n{result.stderr.decode(errors='replace')}")
@@ -206,29 +230,19 @@ def _wav_to_numpy(wav_path: str) -> np.ndarray:
     return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
 
 
-def transcribe_file(
-    file_path: str,
+def _decode(
+    audio_np: np.ndarray,
     speaker_id: str,
     speaker_name: str,
     model_name: str | None = None,
     language: str | None = None,
     progress_callback=None,
 ) -> list[dict]:
-    """Transcribe a single video/audio file using Whisper. Returns list of segment dicts.
+    """Decode one mono 16 kHz track into segments, timed from the array's start.
 
-    progress_callback(frac: float) is called as segments are decoded, with the
-    fraction (0.0–1.0) of this speaker's audio covered so far. The caller maps
-    this onto the overall job percentage.
+    Shared by ``transcribe_file`` (a whole track) and ``transcribe_range`` (a
+    window of one), so both get the same decoding options and filters.
     """
-    audio_path = _extract_audio(file_path)
-    try:
-        audio_np = _wav_to_numpy(audio_path)
-    finally:
-        try:
-            os.unlink(audio_path)
-        except OSError:
-            pass
-
     audio_duration = len(audio_np) / _SAMPLE_RATE
     model_name = model_name or default_model(language)
     model = get_model(model_name)
@@ -253,7 +267,7 @@ def transcribe_file(
         # Whisper's own thresholds for dropping likely-silence segments
         no_speech_threshold=0.5,
         log_prob_threshold=-1.0,
-        compression_ratio_threshold=2.4,
+        compression_ratio_threshold=_COMPRESSION_RATIO_MAX,
     )
 
     # transcribe() returns a lazy generator; progress comes from how far into the
@@ -271,22 +285,144 @@ def transcribe_file(
         # used on its own without dropping real speech next to a pause.
         if seg.no_speech_prob > 0.5 and seg.avg_logprob < -1.0:
             continue
-        # Skip segments with suspiciously high compression ratio (repetitive text)
-        if seg.compression_ratio > 2.4:
-            continue
         words = [{"word": w.word, "start": round(float(w.start), 3), "end": round(float(w.end), 3)}
                  for w in (seg.words or [])]
         for part in _split_sentences(words) if words else [None]:
+            text = "".join(w["word"] for w in part).strip() if part else seg.text.strip()
+            # Repetitive text is a hallucinated loop. Checked per sentence, not
+            # per decoded chunk: without timestamp tokens a chunk is up to 30 s
+            # of speech, and a speaker who restates a line (a retake, or "on
+            # Tuesday… on Tuesday…") pushes the whole chunk over the threshold,
+            # which used to drop every word in it.
+            if _compression_ratio(text) > _COMPRESSION_RATIO_MAX:
+                continue
             segments.append({
                 "speaker_id": speaker_id,
                 "speaker_name": speaker_name,
                 "start": part[0]["start"] if part else round(float(seg.start), 3),
                 "end": part[-1]["end"] if part else round(float(seg.end), 3),
-                "text": "".join(w["word"] for w in part).strip() if part else seg.text.strip(),
+                "text": text,
                 "words": part or [],
             })
 
     return refine_word_edges(_filter_hallucinations(segments), audio_np, _SAMPLE_RATE)
+
+
+def transcribe_file(
+    file_path: str,
+    speaker_id: str,
+    speaker_name: str,
+    model_name: str | None = None,
+    language: str | None = None,
+    progress_callback=None,
+) -> list[dict]:
+    """Transcribe a single video/audio file using Whisper. Returns list of segment dicts.
+
+    progress_callback(frac: float) is called as segments are decoded, with the
+    fraction (0.0–1.0) of this speaker's audio covered so far. The caller maps
+    this onto the overall job percentage.
+    """
+    audio_np = _load_window(file_path)
+    return _decode(audio_np, speaker_id, speaker_name, model_name, language, progress_callback)
+
+
+def transcribe_range(
+    file_path: str,
+    speaker_id: str,
+    speaker_name: str,
+    start: float,
+    end: float,
+    model_name: str | None = None,
+    language: str | None = None,
+) -> list[dict]:
+    """Transcribe only ``start``–``end`` of a track, timed in the track's own time.
+
+    Used to recover speech a full-track pass dropped, or to retry a stretch the
+    model got wrong: the window is decoded on its own, so VAD chunks it
+    differently from the full pass and its words are re-aligned within it.
+    Returned segments hold absolute source times, ready to splice into a
+    transcript with ``splice_segments``.
+    """
+    if end <= start:
+        return []
+    audio_np = _load_window(file_path, start, end - start)
+    segments = _decode(audio_np, speaker_id, speaker_name, model_name, language)
+    for seg in segments:
+        seg["start"] = round(seg["start"] + start, 3)
+        seg["end"] = round(seg["end"] + start, 3)
+        for w in seg["words"]:
+            w["start"] = round(w["start"] + start, 3)
+            w["end"] = round(w["end"] + start, 3)
+    return segments
+
+
+def _load_window(file_path: str, start: float | None = None, duration: float | None = None) -> np.ndarray:
+    """Mono 16 kHz float32 audio for a file, or for one window of it."""
+    audio_path = _extract_audio(file_path, start, duration)
+    try:
+        return _wav_to_numpy(audio_path)
+    finally:
+        try:
+            os.unlink(audio_path)
+        except OSError:
+            pass
+
+
+def _word_in_range(word: dict, start: float, end: float) -> bool:
+    """Whether a word belongs to ``start``–``end``, by where its middle falls.
+
+    Using the middle rather than any overlap means a range edge part-way through
+    a word keeps the word on the side it mostly sits on, instead of dropping it.
+    """
+    return start <= (word["start"] + word["end"]) / 2 < end
+
+
+def count_words_in_range(segments: list[dict], start: float, end: float,
+                         speaker_id: str | None = None) -> int:
+    """How many transcribed words sit in ``start``–``end``."""
+    return sum(
+        1
+        for seg in segments
+        if speaker_id is None or seg.get("speaker_id") == speaker_id
+        for w in (seg.get("words") or [])
+        if _word_in_range(w, start, end)
+    )
+
+
+def splice_segments(segments: list[dict], new: list[dict], start: float, end: float,
+                    speaker_id: str | None = None) -> list[dict]:
+    """Replace the transcript of ``start``–``end`` with ``new``, in time order.
+
+    Words inside the window are dropped and the freshly decoded segments put in
+    their place. A segment that straddles an edge keeps the words outside the
+    window — only the overlapping part is replaced — so re-transcribing a gap
+    never disturbs the sentences around it. A word is inside the window when its
+    middle is, which means an edge landing part-way through a word keeps that
+    word rather than deleting it. With ``speaker_id``, only that speaker's
+    segments are touched; other speakers' tracks are left alone.
+    """
+    kept = []
+    for seg in segments:
+        if speaker_id is not None and seg.get("speaker_id") != speaker_id:
+            kept.append(seg)
+            continue
+        if seg["end"] <= start or seg["start"] >= end:
+            kept.append(seg)
+            continue
+        words = seg.get("words") or []
+        if not words:
+            continue  # a wordless segment inside the window is replaced wholesale
+        outside = [w for w in words if not _word_in_range(w, start, end)]
+        if not outside:
+            continue
+        kept.append({
+            **seg,
+            "start": outside[0]["start"],
+            "end": outside[-1]["end"],
+            "text": "".join(w["word"] for w in outside).strip(),
+            "words": outside,
+        })
+    return sorted(kept + list(new), key=lambda s: s["start"])
 
 
 # Whisper's word edges miss the audio both ways: it ends words early (median

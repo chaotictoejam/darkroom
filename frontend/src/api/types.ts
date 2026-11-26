@@ -92,6 +92,18 @@ export interface WordCut {
   end: number
 }
 
+/** What re-transcribing a range of the recording replaced. */
+export interface RetranscribeResult {
+  project: Project
+  /** Segments decoded in the range. */
+  segments: number
+  /** Words the range held before, and after — 0 before means speech had been dropped. */
+  words_before: number
+  words_after: number
+  /** The Whisper model the retry ran with. */
+  model: string
+}
+
 /** A muted time range — video is kept but audio is silenced. */
 export interface WordMute {
   start: number

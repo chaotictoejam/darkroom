@@ -25,10 +25,13 @@ from ..services.renderer import (
     render_short_custom,
 )
 from ..services.transcription import (
+    count_words_in_range,
     default_model,
     merge_transcripts,
     preload_model,
+    splice_segments,
     transcribe_all,
+    transcribe_range,
     transcription_defaults,
 )
 from ..storage import PROJECTS_DIR, editing_project, get_project, save_project
@@ -273,6 +276,91 @@ def skip_analysis(project_id: str):
     proj["progress"] = {"step": "done", "percent": 100, "message": "Skipped analysis — all segments kept"}
     save_project(proj)
     return proj
+
+
+# ── Re-transcribe a range ─────────────────────────────────────────────────────
+
+# A whole-track pass can mis-hear or drop a stretch of speech — VAD chunks the
+# audio one way, and a chunk-wide filter can take real words with it. Decoding
+# just that window on its own, and splicing the result in, fixes it without
+# re-transcribing the episode.
+
+_RETRANSCRIBE_MAX_SECONDS = 600
+
+
+class RetranscribeBody(BaseModel):
+    start: float
+    end: float
+    # Default: every speaker, since the range may hold speech on any track.
+    speaker_id: Optional[str] = None
+    # Default: the model the project was transcribed with.
+    model: Optional[str] = None
+
+
+@router.post("/projects/{project_id}/retranscribe")
+async def retranscribe_range(project_id: str, body: RetranscribeBody):
+    """Re-decode start–end of each speaker's track and splice it into the transcript.
+
+    Runs inline rather than as a background job: a window is seconds of audio,
+    and the project keeps its status, so the editor stays where it is. Manual
+    cuts and mutes are left alone — recovered speech inside a cut stays cut
+    until the user restores it.
+    """
+    proj = get_project(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    start, end = round(max(0.0, body.start), 3), round(body.end, 3)
+    if end - start < 0.05:
+        raise HTTPException(400, "Range is too short to transcribe")
+    if end - start > _RETRANSCRIBE_MAX_SECONDS:
+        raise HTTPException(
+            400, f"Range is longer than {_RETRANSCRIBE_MAX_SECONDS // 60} minutes — re-transcribe the project instead"
+        )
+
+    speakers = proj["speakers"]
+    if body.speaker_id:
+        speakers = [sp for sp in speakers if sp["id"] == body.speaker_id]
+        if not speakers:
+            raise HTTPException(404, "Speaker not found")
+
+    language = proj.get("transcribe_language") or None
+    model_name = body.model or proj.get("transcribe_model") or default_model(language)
+
+    def _decode_all() -> dict[str, list]:
+        return {
+            sp["id"]: transcribe_range(
+                sp["file_path"], sp["id"], sp["name"], start, end, model_name, language=language
+            )
+            for sp in speakers
+        }
+
+    try:
+        fresh = await asyncio.to_thread(_decode_all)
+    except Exception as exc:
+        raise HTTPException(500, f"Re-transcription failed: {exc}") from exc
+
+    try:
+        with editing_project(project_id) as proj:
+            merged = proj.get("merged_transcript") or []
+            before = count_words_in_range(merged, start, end, body.speaker_id)
+            transcripts = proj.get("transcripts") or {}
+            for sid, segs in fresh.items():
+                merged = splice_segments(merged, segs, start, end, speaker_id=sid)
+                transcripts[sid] = splice_segments(transcripts.get(sid) or [], segs, start, end)
+            proj["merged_transcript"] = merged
+            proj["transcripts"] = transcripts
+            after = sum(len(sg.get("words") or []) for segs in fresh.values() for sg in segs)
+            result = dict(proj)
+    except LookupError:
+        raise HTTPException(404, "Project not found")
+
+    return {
+        "project": result,
+        "segments": sum(len(segs) for segs in fresh.values()),
+        "words_before": before,
+        "words_after": after,
+        "model": model_name,
+    }
 
 
 class ImportEdlBody(BaseModel):

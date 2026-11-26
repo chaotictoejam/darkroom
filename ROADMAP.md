@@ -39,6 +39,8 @@ New Project asks **Upload** (already-synced files; video or audio-only is detect
 
 A transcription benchmark (solo, 2-mic and 4-mic recordings with real crosstalk) measured speed and word error rate on CPU and an NVIDIA T4, then guided a round of quick wins: VAD skips silence, the model stays loaded between tracks and is preloaded when a project opens or the studio is armed, int8 on CPU and float16 on CUDA, batched decoding, threads set to physical cores, and a default model by device and language (`small` for English on CPU, `turbo` otherwise). A 1-hour, 2-person podcast on CPU went from about 61 minutes to 7 with `small`, under 2 minutes on a T4, with half the error rate. The Apple Silicon baseline is still to do (with the Phase 5 Mac engine).
 
+A later fix: the repetitiveness check that drops hallucinated loops ran on a whole decoded chunk, so a host restating a line lost the entire 30 s as "silence". It now runs per sentence, and the editor can **re-transcribe a selection** on its own to recover or correct a stretch without re-running the episode.
+
 - Benchmark in `backend/bench/` (results in `bench/results/`); GPU runs via `infra/bench/run-gpu-benchmark.sh`
 - Transcription settings in `backend/darkroom/services/transcription.py`; results and decisions in [docs/fast-transcription.md](docs/fast-transcription.md)
 
