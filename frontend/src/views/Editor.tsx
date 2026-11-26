@@ -14,7 +14,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, subscribeToProgress } from '../api/client'
-import type { AiStatus, Project, WordCut, WordMute } from '../api/types'
+import type { AiStatus, LibraryTrack, Project, SoundCue, SoundTrack, WordCut, WordMute } from '../api/types'
 import VideoPreview, { type VideoPreviewHandle } from '../components/VideoPreview/VideoPreview'
 import TranscriptEditor from '../components/TranscriptEditor/TranscriptEditor'
 import SidebarSection from '../components/Editor/SidebarSection'
@@ -25,6 +25,7 @@ import PublishPanel from '../components/Editor/PublishPanel'
 import SpeakersPanel from '../components/Editor/SpeakersPanel'
 import ProjectName from '../components/Editor/ProjectName'
 import ManualAnalysis from '../components/Editor/ManualAnalysis'
+import MusicPanel from '../components/Editor/MusicPanel'
 import AnalyzeConfirm from '../components/Editor/AnalyzeConfirm'
 import Timeline from '../components/Timeline/Timeline'
 import ResizeHandle, { useStoredSize } from '../components/ResizeHandle'
@@ -34,6 +35,7 @@ import {
   sourceToOutputTime,
   type TimeRange,
 } from '../components/Timeline/timeMap'
+import { cueBlocks, replaceCue } from '../components/Timeline/musicCues'
 
 interface Props {
   project: Project
@@ -53,7 +55,7 @@ const PREVIEW_W = 380
 const PREVIEW_MIN = 240
 const TRANSCRIPT_MIN = 300
 
-type SidePanel = 'edl' | 'shorts' | 'speakers' | 'render' | 'publish' | 'manual' | 'advanced'
+type SidePanel = 'edl' | 'shorts' | 'speakers' | 'music' | 'render' | 'publish' | 'manual' | 'advanced'
 type PreviewLayout = 'multi' | 'solo'
 
 export default function Editor({ project, onChange, onBack }: Props) {
@@ -71,6 +73,19 @@ export default function Editor({ project, onChange, onBack }: Props) {
   const [retranscribeNote, setRetranscribeNote] = useState<string | null>(null)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
+  const [library, setLibrary] = useState<LibraryTrack[]>([])
+  const [libraryLoading, setLibraryLoading] = useState(true)
+  const [selectedCueId, setSelectedCueId] = useState<string | null>(null)
+  const soundCues: SoundCue[] = project.sound_cues ?? []
+  const soundTracks: SoundTrack[] = project.sound_tracks ?? []
+  /**
+   * Whether playback goes through a rendered proxy. Video projects always do.
+   * An audio-only project plays its source files directly and applies cuts as it
+   * goes — until it has music, which only exists in the mix, so from then on the
+   * proxy is the only way to hear the balance.
+   */
+  const audioProxy = project.project_type === 'podcast'
+  const usesProxy = !audioProxy || soundCues.length > 0
   const [cleanView, setCleanView] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useStoredSize('darkroom.sidebarWidth', SIDEBAR_W)
   const [timelineHeight, setTimelineHeight] = useStoredSize('darkroom.timelineHeight', TIMELINE_H)
@@ -84,9 +99,10 @@ export default function Editor({ project, onChange, onBack }: Props) {
   // ── Proxy preview state ──────────────────────────────────────────────────────
   const [proxyUrl, setProxyUrl] = useState<string | null>(null)
   const [proxyGenerating, setProxyGenerating] = useState(false)
-  const proxyRef = useRef<HTMLVideoElement>(null)
+  const proxyRef = useRef<HTMLMediaElement | null>(null)
   const previewUnsubRef = useRef<(() => void) | null>(null)
   const previewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const cuesSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const keptRangesRef = useRef<TimeRange[]>([])
   const [outputDuration, setOutputDuration] = useState(0)
   /** Kept ranges the loaded proxy was rendered from — behind keptRangesRef while a render runs. */
@@ -109,6 +125,15 @@ export default function Editor({ project, onChange, onBack }: Props) {
     setOutputDuration(ranges.reduce((sum, r) => sum + r.end - r.start, 0))
   }, [project.edl, project.word_cuts, duration])
 
+  // The music library is global; the editor holds it so the timeline can label
+  // cues and the Music panel can add to it.
+  useEffect(() => {
+    api.listMusic()
+      .then(({ tracks }) => setLibrary(tracks))
+      .catch(() => {})
+      .finally(() => setLibraryLoading(false))
+  }, [])
+
   useEffect(() => {
     api.status().then((s) => {
       setAi(s.ai)
@@ -122,6 +147,8 @@ export default function Editor({ project, onChange, onBack }: Props) {
       previewUnsubRef.current?.()
       analyzeUnsubRef.current?.()
       if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current)
+      // The pending cue save is deliberately left to fire: cancelling it on the
+      // way out of the editor would drop the last change, like the word-cut save.
     }
   }, [])
 
@@ -174,7 +201,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
   // per render lost the preview_ready of the render already in flight, leaving
   // the editor on a proxy that no longer matches the cuts.
   useEffect(() => {
-    if (project.project_type === 'podcast') return
+    if (!usesProxy) return
     let stopped = false
     let retry: ReturnType<typeof setTimeout> | null = null
 
@@ -218,22 +245,61 @@ export default function Editor({ project, onChange, onBack }: Props) {
       previewUnsubRef.current?.()
       previewUnsubRef.current = null
     }
-  }, [project.id, project.project_type])
+  }, [project.id, usesProxy])
 
-  // Audio-only mode has no proxy: drop it so the audio player drives playback
+  // Without a proxy (audio-only and no music) the source player drives playback
   useEffect(() => {
-    if (project.project_type === 'podcast') {
+    if (!usesProxy) {
       proxyUrlRef.current = null
       setProxyUrl(null)
       setProxyGenerating(false)
     }
-  }, [project.project_type])
+  }, [usesProxy])
 
   /** Ask the backend for a proxy render of the current edit. */
-  function triggerPreview() {
-    if (project.project_type === 'podcast') return
+  function requestPreview() {
     setProxyGenerating(true)
     api.generatePreview(project.id).catch(() => setProxyGenerating(false))
+  }
+
+  function triggerPreview() {
+    if (!usesProxy) return
+    requestPreview()
+  }
+
+  const setProxyEl = useCallback((el: HTMLMediaElement | null) => {
+    proxyRef.current = el
+  }, [])
+
+  /** Follow the proxy's playhead in source time, and honour word mutes. */
+  function onProxyTime() {
+    const proxy = proxyRef.current
+    if (!proxy || resumeRef.current) return
+    const srcTime = outputToSourceTime(proxy.currentTime, proxyRangesRef.current)
+    setCurrentTime(srcTime)
+    const shouldMute = wordMutes.some((m) => srcTime >= m.start && srcTime < m.end)
+    if (proxy.muted !== shouldMute) proxy.muted = shouldMute
+  }
+
+  /** Pick playback back up where the previous proxy left off. */
+  function onProxyLoaded() {
+    const proxy = proxyRef.current
+    const resume = resumeRef.current
+    resumeRef.current = null
+    if (!proxy || !resume) return
+    proxy.currentTime = sourceToOutputTime(resume.sourceTime, proxyRangesRef.current)
+    if (resume.playing) void proxy.play()
+  }
+
+  /** The file went away or never finished — fall back to the source player and
+   *  ask for a fresh render, once. */
+  function onProxyError() {
+    if (recoveredUrlRef.current === proxyUrl) return
+    recoveredUrlRef.current = proxyUrl
+    resumeRef.current = null
+    proxyUrlRef.current = null
+    setProxyUrl(null)
+    triggerPreview()
   }
 
   /** Unified seek: uses proxy when available, falls back to raw VideoPreview. */
@@ -298,12 +364,36 @@ export default function Editor({ project, onChange, onBack }: Props) {
       }, 600)
       // Debounce proxy re-render — wait for the user to stop cutting
       if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current)
-      if (project.project_type !== 'podcast') {
+      if (usesProxy) {
         setProxyGenerating(true)
         previewDebounceRef.current = setTimeout(triggerPreview, 3000)
       }
     },
     [project, onChange, wordCuts, timelineSplits], // eslint-disable-line react-hooks/exhaustive-deps
+  )
+
+  /**
+   * Save the project's cues (and sound tracks) and rebuild the preview mix.
+   *
+   * Both are debounced: dragging a level slider fires a change per pixel, and
+   * each one would otherwise be a PUT and a proxy render.
+   */
+  const handleCuesChange = useCallback(
+    (cues: SoundCue[], tracks?: SoundTrack[]) => {
+      onChange({ ...project, sound_cues: cues, ...(tracks ? { sound_tracks: tracks } : {}) })
+      if (cuesSaveTimer.current) clearTimeout(cuesSaveTimer.current)
+      cuesSaveTimer.current = setTimeout(() => {
+        api.saveSoundCues(project.id, cues, tracks).catch(() => {})
+      }, 500)
+      // The first cue on an audio-only project is what gives it a proxy at all,
+      // so decide from the cues being saved, not from the render we were called in.
+      if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current)
+      if (!audioProxy || cues.length > 0) {
+        setProxyGenerating(true)
+        previewDebounceRef.current = setTimeout(requestPreview, 2000)
+      }
+    },
+    [project, onChange, audioProxy], // eslint-disable-line react-hooks/exhaustive-deps
   )
 
   /** Record the current cuts and splits for undo, then apply the new ones. */
@@ -415,7 +505,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
       api.updateEdl(project.id, edl)
     }, 600)
     if (previewDebounceRef.current) clearTimeout(previewDebounceRef.current)
-    if (project.project_type !== 'podcast') {
+    if (usesProxy) {
       setProxyGenerating(true)
       previewDebounceRef.current = setTimeout(triggerPreview, 3000)
     }
@@ -568,6 +658,25 @@ export default function Editor({ project, onChange, onBack }: Props) {
             onToggle={() => togglePanel('speakers')}
           >
             <SpeakersPanel project={project} onChange={onChange} />
+          </SidebarSection>
+
+          <SidebarSection
+            label={`Music & sound${soundCues.length > 0 ? ` · ${soundCues.length}` : ''}`}
+            open={openPanels.has('music')}
+            onToggle={() => togglePanel('music')}
+          >
+            <MusicPanel
+              project={project}
+              currentTime={currentTime}
+              duration={duration}
+              keptRanges={keptRangesRef.current}
+              library={library}
+              loading={libraryLoading}
+              onLibraryChange={setLibrary}
+              selectedCueId={selectedCueId}
+              onSelectCue={setSelectedCueId}
+              onCuesChange={handleCuesChange}
+            />
           </SidebarSection>
 
           <SidebarSection
@@ -734,38 +843,29 @@ export default function Editor({ project, onChange, onBack }: Props) {
                             UPDATING…
                           </div>
                         )}
-                        <video
-                          ref={proxyRef}
-                          src={proxyUrl}
-                          controls
-                          onTimeUpdate={() => {
-                            const proxy = proxyRef.current
-                            if (!proxy || resumeRef.current) return
-                            const srcTime = outputToSourceTime(proxy.currentTime, proxyRangesRef.current)
-                            setCurrentTime(srcTime)
-                            const shouldMute = wordMutes.some((m) => srcTime >= m.start && srcTime < m.end)
-                            if (proxy.muted !== shouldMute) proxy.muted = shouldMute
-                          }}
-                          onLoadedMetadata={() => {
-                            const proxy = proxyRef.current
-                            const resume = resumeRef.current
-                            resumeRef.current = null
-                            if (!proxy || !resume) return
-                            proxy.currentTime = sourceToOutputTime(resume.sourceTime, proxyRangesRef.current)
-                            if (resume.playing) void proxy.play()
-                          }}
-                          onError={() => {
-                            // The file went away or never finished — fall back to the
-                            // source player and ask for a fresh render, once.
-                            if (recoveredUrlRef.current === proxyUrl) return
-                            recoveredUrlRef.current = proxyUrl
-                            resumeRef.current = null
-                            proxyUrlRef.current = null
-                            setProxyUrl(null)
-                            triggerPreview()
-                          }}
-                          style={{ width: '100%', display: 'block', maxHeight: '40vh' }}
-                        />
+                        {/* An audio-only mix plays through <audio> — same
+                            handlers, since both are media elements. */}
+                        {audioProxy ? (
+                          <audio
+                            ref={setProxyEl}
+                            src={proxyUrl}
+                            controls
+                            onTimeUpdate={onProxyTime}
+                            onLoadedMetadata={onProxyLoaded}
+                            onError={onProxyError}
+                            style={{ width: '100%', display: 'block' }}
+                          />
+                        ) : (
+                          <video
+                            ref={setProxyEl}
+                            src={proxyUrl}
+                            controls
+                            onTimeUpdate={onProxyTime}
+                            onLoadedMetadata={onProxyLoaded}
+                            onError={onProxyError}
+                            style={{ width: '100%', display: 'block', maxHeight: '40vh' }}
+                          />
+                        )}
                       </div>
                     )}
 
@@ -792,7 +892,7 @@ export default function Editor({ project, onChange, onBack }: Props) {
                         onDurationChange={(d) => {
                           setDuration(d)
                           // Auto-generate proxy once we know the source duration
-                          if (d > 0 && project.project_type !== 'podcast') {
+                          if (d > 0 && usesProxy) {
                             triggerPreview()
                           }
                         }}
@@ -841,6 +941,14 @@ export default function Editor({ project, onChange, onBack }: Props) {
             onSplitsChange={handleSplitsChange}
             retranscribing={retranscribing}
             onRetranscribe={handleRetranscribe}
+            cueBlocks={cueBlocks(soundCues, library, keptRangesRef.current, duration)}
+            soundTrack={soundTracks[0]}
+            selectedCueId={selectedCueId}
+            onSelectCue={(id) => {
+              setSelectedCueId(id)
+              if (id) setOpenPanels((prev) => new Set([...prev, 'music']))
+            }}
+            onCueChange={(cue) => handleCuesChange(replaceCue(soundCues, cue))}
           />
         </div>
       </div>

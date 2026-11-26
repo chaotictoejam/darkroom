@@ -4,8 +4,8 @@
  * FastAPI serves everything from the same port in production.
  */
 import type {
-  AiStatus, EDL, Participant, Project, ProjectGroup, ProjectSource, ProjectSummary, PublishDetailsInput,
-  RenderShortParams, RetranscribeResult, Take,
+  AiStatus, EDL, LibraryTrack, Participant, Project, ProjectGroup, ProjectSource, ProjectSummary,
+  PublishDetailsInput, RenderShortParams, RetranscribeResult, SoundCue, SoundTrack, Take,
 } from './types'
 
 class ApiError extends Error {
@@ -227,6 +227,47 @@ export const api = {
 
   exportBundle: (id: string) =>
     request<{ message: string }>(`/api/projects/${id}/publish/bundle`, { method: 'POST' }),
+
+  // ── Music library (global, shared by every project) ─────────────────────────
+
+  listMusic: () => request<{ tracks: LibraryTrack[] }>('/api/library/music'),
+
+  /** Import audio into the library; each file is transcoded and measured locally. */
+  importMusic: async (files: File[]) => {
+    const form = new FormData()
+    for (const file of files) form.append('files', file)
+    // No JSON Content-Type: the browser sets the multipart boundary
+    const res = await fetch('/api/library/music', { method: 'POST', body: form })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ detail: res.statusText }))
+      throw new ApiError(res.status, body.detail ?? `HTTP ${res.status}`)
+    }
+    return (await res.json()) as {
+      added: LibraryTrack[]
+      errors: { name: string; error: string }[]
+      tracks: LibraryTrack[]
+    }
+  },
+
+  renameMusic: (trackId: string, name: string) =>
+    request<LibraryTrack>(`/api/library/music/${trackId}`, {
+      method: 'PATCH', body: JSON.stringify({ name }),
+    }),
+
+  /** Removes it from the library everywhere; cues naming it show as missing. */
+  deleteMusic: (trackId: string) =>
+    request<{ ok: boolean }>(`/api/library/music/${trackId}`, { method: 'DELETE' }),
+
+  musicFileUrl: (trackId: string) => `/api/library/music/${trackId}/file`,
+
+  getMusicWaveform: (trackId: string, buckets = 400) =>
+    request<{ waveform: number[] }>(`/api/library/music/${trackId}/waveform?buckets=${buckets}`),
+
+  /** Replace a project's cues, and its sound tracks when given. */
+  saveSoundCues: (id: string, cues: SoundCue[], tracks?: SoundTrack[]) =>
+    request<Project>(`/api/projects/${id}/sound-cues`, {
+      method: 'PUT', body: JSON.stringify({ cues, tracks }),
+    }),
 
   getWaveform: (id: string, speaker: string, buckets = 400) =>
     request<{ waveform: number[] }>(

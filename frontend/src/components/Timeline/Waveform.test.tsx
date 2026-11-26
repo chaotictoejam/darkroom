@@ -31,6 +31,11 @@ describe('Waveform', () => {
     expect(rects[19].getAttribute('y')).toBe('3')
   })
 
+  it('leaves room at the bottom for a music lane', () => {
+    const { container } = renderWaveform(Array(20).fill(0.5), { bottomInset: 26 })
+    expect(container.querySelector('svg')!.style.height).toBe('calc(100% - 73px)')
+  })
+
   it('places the visible slice by its buckets\' own times', () => {
     // 20 buckets over 10 s; the view 2.5–7.5 s starts at bucket 5
     const { container } = renderWaveform(Array(20).fill(0.5), { viewStart: 2.5, visibleDuration: 5 })

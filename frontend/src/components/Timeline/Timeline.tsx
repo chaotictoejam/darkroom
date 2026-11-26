@@ -5,14 +5,17 @@
  * several), then Delete or Cut removes it. Split (or S) breaks the chip under
  * the playhead in two, for custom chunks; click a split's ruler marker to remove it. Pause chips can be dragged shorter
  * (or back out to their recorded length), which writes a manual cut inside the
- * gap. Times are in source seconds.
+ * gap. A music lane along the bottom shows the sound cues; drag a block to move
+ * it, or a bed's right edge to change where it stops. Times are in source seconds.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../api/client'
-import type { EDLSegment, TranscriptSegment, WordCut } from '../../api/types'
+import type { EDLSegment, SoundCue, SoundTrack, TranscriptSegment, WordCut } from '../../api/types'
 import { formatTimecode } from '../../formatTime'
 import { buildChunks, chunkAt, pauseCuts, splitTarget, type Chunk, type Pause } from './chunks'
-import { chipBase, LANE_TOP, RULER_H, SCROLLBAR_H, selectedChip, unselectedChip, WAVE_TOP } from './layout'
+import { chipBase, LANE_TOP, MUSIC_H, RULER_H, SCROLLBAR_H, selectedChip, unselectedChip, WAVE_TOP } from './layout'
+import MusicLane from './MusicLane'
+import { blockFor, moveCue, trimCue, type CueBlock } from './musicCues'
 import PauseChip from './PauseChip'
 import { formatTick, rulerTicks } from './ruler'
 import SelectionToolbar from './SelectionToolbar'
@@ -26,7 +29,8 @@ const WAVEFORM_RATE = 40     // waveform values per second of audio
 const CHIP_MIN_PX = 6        // narrower chips are hidden
 const DRAG_PX_THRESHOLD = 4  // pixels — less than this is a click, not a drag
 
-type DragMode = 'none' | 'selecting' | 'chunks' | 'left-handle' | 'right-handle' | 'scrollbar' | 'pause'
+type DragMode = 'none' | 'selecting' | 'chunks' | 'left-handle' | 'right-handle' | 'scrollbar'
+  | 'pause' | 'cue-move' | 'cue-trim'
 
 export default function Timeline({
   height,
@@ -45,6 +49,11 @@ export default function Timeline({
   onSplitsChange,
   retranscribing,
   onRetranscribe,
+  cueBlocks,
+  soundTrack,
+  selectedCueId,
+  onSelectCue,
+  onCueChange,
 }: {
   /** Panel height in px, including the controls row. */
   height: number
@@ -66,15 +75,24 @@ export default function Timeline({
   retranscribing: boolean
   /** Re-run Whisper over a source time range and splice the result in. */
   onRetranscribe: (start: number, end: number) => void
+  /** Music and sound cues, already placed on the source timeline. */
+  cueBlocks: CueBlock[]
+  /** The sound track the lane shows; the lane is hidden without one. */
+  soundTrack: SoundTrack | undefined
+  selectedCueId: string | null
+  onSelectCue: (cueId: string | null) => void
+  onCueChange: (cue: SoundCue) => void
 }) {
   const [waveform, setWaveform] = useState<number[]>([])
   const [selection, setSelection] = useState<{ start: number; end: number } | null>(null)
   const [pauseDrag, setPauseDrag] = useState<{ pause: Pause; kept: number } | null>(null)
+  const [cueDrag, setCueDrag] = useState<{ block: CueBlock; cue: SoundCue } | null>(null)
   const trackRef = useRef<HTMLDivElement>(null)
   const dragMode = useRef<DragMode>('none')
   const dragAnchorTime = useRef(0)
   const dragStartX = useRef(0)
   const chunkAnchorEnd = useRef(0) // end of the chunk a chunk drag started on
+  const cueGrabOffset = useRef(0)  // seconds between a cue's start and where it was grabbed
   const {
     zoom, viewStart, trackWidth, visibleDuration, pxPerSec,
     maxZoom, zoomPercent, labelTarget,
@@ -198,6 +216,10 @@ export default function Timeline({
     if (dragMode.current === 'chunks') {
       const c = chunkAt(chunks, t)
       if (c) setSelection({ start: Math.min(dragAnchorTime.current, c.start), end: Math.max(chunkAnchorEnd.current, c.end) })
+    } else if (dragMode.current === 'cue-move' && cueDrag) {
+      setCueDrag({ block: cueDrag.block, cue: moveCue(cueDrag.cue, t - cueGrabOffset.current, duration) })
+    } else if (dragMode.current === 'cue-trim' && cueDrag) {
+      setCueDrag({ block: cueDrag.block, cue: trimCue(cueDrag.cue, t, duration) })
     } else if (dragMode.current === 'pause' && pauseDrag) {
       const { pause } = pauseDrag
       const kept = Math.round((t - pause.start) / PAUSE_SNAP) * PAUSE_SNAP
@@ -214,7 +236,13 @@ export default function Timeline({
   function onTrackPointerUp(e: React.PointerEvent<HTMLDivElement>) {
     if (dragMode.current === 'none') return
     const wasDrag = Math.abs(e.clientX - dragStartX.current) >= DRAG_PX_THRESHOLD
-    if (dragMode.current === 'pause') {
+    if (dragMode.current === 'cue-move' || dragMode.current === 'cue-trim') {
+      if (cueDrag) {
+        onSelectCue(cueDrag.cue.id)
+        if (wasDrag) onCueChange(cueDrag.cue)
+      }
+      setCueDrag(null)
+    } else if (dragMode.current === 'pause') {
       if (pauseDrag && Math.abs(pauseDrag.kept - pauseDrag.pause.kept) > 0.01) {
         onCutsChange(pauseCuts(wordCuts, pauseDrag.pause, pauseDrag.kept))
       }
@@ -255,6 +283,31 @@ export default function Timeline({
     trackRef.current?.setPointerCapture(e.pointerId)
   }
 
+  /** Grab a cue block: beds and effects move, an intro or outro only selects. */
+  function onCuePointerDown(e: React.PointerEvent<HTMLDivElement>, block: CueBlock) {
+    e.stopPropagation()
+    e.preventDefault()
+    setSelection(null)
+    onSelectCue(block.cue.id)
+    if (block.cue.kind === 'intro' || block.cue.kind === 'outro') return
+    dragMode.current = 'cue-move'
+    dragStartX.current = e.clientX
+    cueGrabOffset.current = pxToTime(e.clientX) - block.start
+    setCueDrag({ block, cue: block.cue })
+    trackRef.current?.setPointerCapture(e.pointerId)
+  }
+
+  function onCueTrimPointerDown(e: React.PointerEvent<HTMLDivElement>, block: CueBlock) {
+    e.stopPropagation()
+    e.preventDefault()
+    setSelection(null)
+    onSelectCue(block.cue.id)
+    dragMode.current = 'cue-trim'
+    dragStartX.current = e.clientX
+    setCueDrag({ block, cue: block.cue })
+    trackRef.current?.setPointerCapture(e.pointerId)
+  }
+
   function onPauseHandlePointerDown(e: React.PointerEvent<HTMLDivElement>, pause: Pause) {
     e.stopPropagation()
     e.preventDefault()
@@ -279,6 +332,14 @@ export default function Timeline({
 
   // Whether the selection includes anything already cut, so it can be restored
   const selectionHasCuts = !!selection && wordCuts.some((c) => c.start < selection.end && c.end > selection.start)
+
+  // The music lane takes space off the bottom of the waveform, and only appears
+  // once there is something on it.
+  const showMusic = !!soundTrack && cueBlocks.length > 0
+  const musicH = showMusic ? MUSIC_H + 2 : 0
+  const blocks = cueDrag
+    ? cueBlocks.map((b) => (b.cue.id === cueDrag.cue.id ? blockFor(b, cueDrag.cue) : b))
+    : cueBlocks
 
   return (
     <div style={{
@@ -360,14 +421,14 @@ export default function Timeline({
               </div>
 
               {/* Waveform lane background */}
-              <div style={{ position: 'absolute', top: WAVE_TOP, left: 0, right: 0, bottom: 0, background: 'var(--bg-card)', borderRadius: 4 }} />
+              <div style={{ position: 'absolute', top: WAVE_TOP, left: 0, right: 0, bottom: musicH, background: 'var(--bg-card)', borderRadius: 4 }} />
 
               {/* EDL segment shading */}
               {edlSegments.filter((s) => inView(s.start, s.end)).map((seg) => (
                 <div
                   key={seg.id}
                   style={{
-                    position: 'absolute', top: WAVE_TOP, bottom: 0,
+                    position: 'absolute', top: WAVE_TOP, bottom: musicH,
                     left: toLeft(seg.start), width: toWidth(seg.end - seg.start),
                     background: seg.keep ? 'rgba(50,180,100,0.08)' : 'rgba(200,50,50,0.16)',
                   }}
@@ -377,7 +438,7 @@ export default function Timeline({
               <Waveform
                 waveform={waveform} duration={duration} viewStart={viewStart}
                 visibleDuration={visibleDuration} trackWidth={trackWidth}
-                toLeft={toLeft} toWidth={toWidth}
+                toLeft={toLeft} toWidth={toWidth} bottomInset={musicH}
               />
 
               {/* Phrase chips */}
@@ -425,7 +486,7 @@ export default function Timeline({
                 <div
                   key={i}
                   style={{
-                    position: 'absolute', top: WAVE_TOP, bottom: 0,
+                    position: 'absolute', top: WAVE_TOP, bottom: musicH,
                     left: toLeft(cut.start),
                     width: toWidth(Math.max(0.033, cut.end - cut.start)),
                     background: 'repeating-linear-gradient(135deg, rgba(229,51,51,0.45) 0 4px, rgba(229,51,51,0.2) 4px 8px)',
@@ -438,7 +499,7 @@ export default function Timeline({
               {/* Split markers — dashed line through the lanes, ruler tab removes the split */}
               {splits.filter((t) => inView(t, t)).map((t) => (
                 <div key={`s${t}`}>
-                  <div style={{ position: 'absolute', top: LANE_TOP, bottom: 0, left: toLeft(t), width: 0, borderLeft: '1px dashed rgba(250,204,21,0.8)', pointerEvents: 'none', zIndex: 2 }} />
+                  <div style={{ position: 'absolute', top: LANE_TOP, bottom: musicH, left: toLeft(t), width: 0, borderLeft: '1px dashed rgba(250,204,21,0.8)', pointerEvents: 'none', zIndex: 2 }} />
                   <div
                     data-handle="split"
                     onPointerDown={(e) => e.stopPropagation()}
@@ -452,6 +513,25 @@ export default function Timeline({
                   />
                 </div>
               ))}
+
+              {/* Music and sound cues */}
+              {showMusic && (
+                <MusicLane
+                  blocks={blocks}
+                  bottom={0}
+                  height={MUSIC_H}
+                  name={soundTrack!.name}
+                  muted={soundTrack!.muted}
+                  pxPerSec={pxPerSec}
+                  toLeft={toLeft}
+                  toWidth={toWidth}
+                  inView={inView}
+                  selectedId={selectedCueId}
+                  onSelect={onSelectCue}
+                  onMovePointerDown={onCuePointerDown}
+                  onTrimPointerDown={onCueTrimPointerDown}
+                />
+              )}
 
               {/* Playhead */}
               {inView(currentTime - 0.1, currentTime + 0.1) && (
@@ -471,9 +551,9 @@ export default function Timeline({
               {/* Active selection overlay */}
               {selPct && selPct.width > 0 && (
                 <>
-                  <div style={{ position: 'absolute', top: LANE_TOP, bottom: 0, left: `${selPct.left}%`, width: `${selPct.width}%`, background: 'rgba(59,130,246,0.28)', pointerEvents: 'none' }} />
-                  <div data-handle="left" onPointerDown={(e) => onHandlePointerDown(e, 'left')} style={{ position: 'absolute', top: LANE_TOP, bottom: 0, width: 6, left: `${selPct.left}%`, transform: 'translateX(-50%)', background: 'rgba(59,130,246,0.9)', cursor: 'ew-resize', zIndex: 5, borderRadius: '2px 0 0 2px' }} />
-                  <div data-handle="right" onPointerDown={(e) => onHandlePointerDown(e, 'right')} style={{ position: 'absolute', top: LANE_TOP, bottom: 0, width: 6, left: `${selPct.left + selPct.width}%`, transform: 'translateX(-50%)', background: 'rgba(59,130,246,0.9)', cursor: 'ew-resize', zIndex: 5, borderRadius: '0 2px 2px 0' }} />
+                  <div style={{ position: 'absolute', top: LANE_TOP, bottom: musicH, left: `${selPct.left}%`, width: `${selPct.width}%`, background: 'rgba(59,130,246,0.28)', pointerEvents: 'none' }} />
+                  <div data-handle="left" onPointerDown={(e) => onHandlePointerDown(e, 'left')} style={{ position: 'absolute', top: LANE_TOP, bottom: musicH, width: 6, left: `${selPct.left}%`, transform: 'translateX(-50%)', background: 'rgba(59,130,246,0.9)', cursor: 'ew-resize', zIndex: 5, borderRadius: '2px 0 0 2px' }} />
+                  <div data-handle="right" onPointerDown={(e) => onHandlePointerDown(e, 'right')} style={{ position: 'absolute', top: LANE_TOP, bottom: musicH, width: 6, left: `${selPct.left + selPct.width}%`, transform: 'translateX(-50%)', background: 'rgba(59,130,246,0.9)', cursor: 'ew-resize', zIndex: 5, borderRadius: '0 2px 2px 0' }} />
                 </>
               )}
             </>

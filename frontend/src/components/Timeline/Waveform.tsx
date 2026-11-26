@@ -14,6 +14,7 @@ export default function Waveform({
   trackWidth,
   toLeft,
   toWidth,
+  bottomInset = 0,
 }: {
   /** Peak amplitude per bucket, evenly spread over the recording. */
   waveform: number[]
@@ -23,6 +24,8 @@ export default function Waveform({
   trackWidth: number
   toLeft: (time: number) => string
   toWidth: (dt: number) => string
+  /** Px kept free at the bottom of the track, e.g. for a music lane. */
+  bottomInset?: number
 }) {
   const heights = useMemo(() => barHeightsFor(waveform), [waveform])
   if (waveform.length === 0) return null
@@ -31,7 +34,7 @@ export default function Waveform({
   return (
     <svg
       aria-hidden
-      style={{ position: 'absolute', top: WAVE_TOP, left: toLeft(startIdx * bucketDur), width: toWidth(bars.length * per * bucketDur), height: `calc(100% - ${WAVE_TOP}px)`, pointerEvents: 'none', fill: 'var(--text)', fillOpacity: 0.6 }}
+      style={{ position: 'absolute', top: WAVE_TOP, left: toLeft(startIdx * bucketDur), width: toWidth(bars.length * per * bucketDur), height: `calc(100% - ${WAVE_TOP + bottomInset}px)`, pointerEvents: 'none', fill: 'var(--text)', fillOpacity: 0.6 }}
       viewBox={`0 0 ${bars.length} 100`}
       preserveAspectRatio="none"
     >

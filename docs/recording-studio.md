@@ -1,6 +1,6 @@
 # Recording Studio and New Project Flow: Plan
 
-Status: **Phase 1 done** (new project flow and audio-only studio); Phases 2–7 planned, studio soundboard to be planned later. Tracked in [ROADMAP.md](../ROADMAP.md).
+Status: **Phase 1 done** (new project flow and audio-only studio) and **Phase 6 done** (music and sound effects: a global library, cues, levels and ducking); Phases 2–5 and 7 planned, studio soundboard to be planned later. Tracked in [ROADMAP.md](../ROADMAP.md).
 
 Turn recording from a tab on the podcast setup screen into a first-class way to start a project: a dedicated studio where you see exactly what is being captured (live waveforms for audio, live previews for cameras and screens), record a take, stop, have it transcribed straight away, and keep recording more takes until you're ready to edit.
 
@@ -172,34 +172,39 @@ projects/a1b2c3d4/
 
 Sounds are kept **separate from the mic tracks** and mixed in at render time, so they never bleed into transcription, can be moved or removed after recording, and get the same loudness treatment as the rest of the mix.
 
-**Library.** Sounds are audio files the user adds (drag and drop or file picker). They are copied into the project (`projects/<id>/sounds/`) and converted to stereo 48 kHz WAV on import, so render never depends on a file elsewhere on disk. A user-level library (in the app's data folder) makes favourite intros and stingers reusable across projects. Darkroom never downloads or bundles third-party music; the UI reminds the user they need the rights to what they add.
+**Library.** The library is **global**: it lives outside `projects/` (`~/.darkroom/library`, or `DARKROOM_LIBRARY_DIR`), so an intro or a bed is imported once and reused in every project, and deleting a project never takes the music with it. Imports are audio files the user adds (file picker today, drag and drop later); each is transcoded to stereo 48 kHz **FLAC** and copied in, so a render never depends on a file elsewhere on disk, and **its integrated loudness is measured once and stored**. Darkroom never downloads or bundles third-party music; the panel reminds the user they need the rights to what they add.
+
+**Levels are relative to the voice.** Because every library track's loudness is known and the speech mix is normalised to a known target (−16 LUFS), a cue's `gain_db` means "this far under the voice": −14 dB sounds the same under a quiet recording and a hot one, and under a different track entirely. This is why music is mixed in the **second** pass of `_encode_normalized`, after the speech has been brought to the target, rather than before `loudnorm` as first planned — measuring a 20-second music intro together with the speech would otherwise drag the whole episode's level around. The limiter still runs last, so a loud stinger can't push the mix over the ceiling.
 
 **Cues.** Each use of a sound is a cue:
 
 | Kind | Example | Placement |
 |---|---|---|
-| **Intro / outro** | theme music | Pinned to the start or end of the edited output, optionally overlapping the first/last words with a fade |
+| **Intro / outro** | theme music | Pinned to the start or end of the edited output, fading out (or in) under the first or last words |
 | **Bed** | quiet music under a segment | Spans from one point to another, loops if the sound is shorter, **ducks under speech** |
 | **Stinger / SFX** | transition whoosh, applause, laugh | One-shot at a point |
 
-Cues inside the episode are anchored to the **source timeline** (a time on the joined tracks, usually snapped to a word boundary) rather than the output, so they move with the content when segments are cut or reordered. A cue whose anchor falls inside a cut snaps to the next kept moment; a bed whose span is partly cut plays only over what is kept.
+Cues inside the episode are anchored to the **source timeline** (a time on the joined tracks) rather than the output, so they move with the content when segments are cut or reordered. A cue whose anchor falls inside a cut snaps to the next kept moment; a bed whose span is partly cut plays only over what is kept. No cue extends the episode: a cue is clamped to the end of the speech, so the audio never outlasts the video it goes with. (Pushing the speech later to make room for an intro to play alone is a follow-up — it would shift edited time for the transcript, chapters and the proxy mapping too.)
 
 ```json
-"sounds": [{"id": "s1", "name": "Intro theme", "file": "sounds/s1.wav", "duration": 12.4}],
-"sound_tracks": [{"id": "music", "name": "Music", "gain_db": 0, "muted": false},
-                 {"id": "sfx", "name": "SFX", "gain_db": 0, "muted": false}],
+"sound_tracks": [{"id": "music", "name": "Music", "gain_db": 0.0, "muted": false}],
 "sound_cues": [
-  {"id": "c1", "sound_id": "s1", "track": "music", "kind": "intro", "gain_db": -3, "fade_out": 2.0, "overlap": 4.0},
-  {"id": "c2", "sound_id": "s2", "track": "sfx", "kind": "sfx", "at": 812.35, "gain_db": -6},
-  {"id": "c3", "sound_id": "s3", "track": "music", "kind": "bed", "at": 900.0, "until": 1140.0, "gain_db": -18, "duck": true, "loop": true}
+  {"id": "c1", "library_id": "8c9be78f", "track": "music", "kind": "intro",
+   "gain_db": 0.0, "duck": true, "duck_db": -14.0, "fade_in": 1.0, "fade_out": 2.0},
+  {"id": "c2", "library_id": "4ab1d0e2", "track": "music", "kind": "sfx", "at": 812.35,
+   "gain_db": 0.0, "duck": false},
+  {"id": "c3", "library_id": "1f77ac21", "track": "music", "kind": "bed", "at": 900.0,
+   "until": 1140.0, "gain_db": -14.0, "duck": true, "duck_db": -9.0, "loop": true}
 ]
 ```
 
-**In the editor: sound tracks.** Sounds appear as **their own tracks** under the speaker tracks, so music and effects are visually separate from speech. Each track has a name, mute/solo and a track gain; cues sit on a track as blocks with their waveform. Drag to move (or to another track), drag edges to trim beds, click for gain, fades, ducking and loop. A new project starts with a **Music** and an **SFX** track; more can be added. Cues can also be added at the cursor in the transcript ("insert sound here"), onto the selected track. Because cues are anchored to the recording, cutting speech moves the blocks on the sound tracks with it. The preview proxy includes cues so what you hear is what renders.
+**Ducking comes from the transcript, not from a compressor.** Darkroom knows to the word where speech is, so instead of keying a `sidechaincompress` off the speech mix it builds the dip itself: word spans are mapped into edited time, widened by a 0.25 s look-ahead and a 0.6 s hold, merged across the gaps inside a sentence, and turned into a gain envelope that ramps down in 0.12 s and back up in 0.5 s. The envelope is written out as raw floats (1 kHz, plenty for ramps that slow) and multiplied into the music with `amultiply`. That buys three things a compressor can't give: the music dips **before** the word rather than after it, the depth is **exactly** the dB the user asked for, and breaths, keyboard noise and room tone never make it pump. Cues that duck by the same amount share one envelope.
+
+**In the editor.** The **Music & sound** panel in the sidebar holds the library on top (import, listen, rename, delete) and this episode's cues below. A cue opens to a level slider ("level under the voice"), a duck switch and depth, loop, and fades; one button mutes every cue without removing them. A bed also has an **Ends** choice — end of the episode, when the track runs out, or at the playhead — so music needn't be an endless loop; the three are read back from `until` and `loop` rather than stored separately. The timeline grows a **music lane** along the bottom showing each cue as a block: click it to open it in the panel, drag it to move it, or drag a bed's right edge to change where it stops. Because cues are anchored to the recording, cutting speech moves the blocks with it.
+
+**Hearing it.** Video projects already play a rendered proxy, so cues are simply in it. An audio-only project plays its source files directly and applies cuts as it goes — until it has music, which exists only in the mix, so from then on it gets its own `.m4a` proxy and the editor plays that. The proxy skips loudness normalisation, so it measures its own speech level (first ten minutes) and places cues relative to that, which keeps the balance the editor plays the same as the balance that exports.
 
 **Later: studio soundboard.** Firing sounds live while recording is a future phase that needs its own plan (see Open questions). Whatever its design, sounds stay **separate**: they play to the host's headphones and are logged as cues, never played into the mics or baked into the recording.
-
-**Rendering.** After the speech is cut and concatenated, each cue's anchor is mapped through the EDL (and `word_cuts`) to an output time. Cues are positioned with `adelay`, shaped with `afade`/`volume`, beds are ducked with `sidechaincompress` keyed from the speech mix, track gain and mute are applied, and everything is mixed with `amix` **before** the existing `loudnorm`, so the −16 LUFS target covers the whole mix. The same path serves MP3/WAV export, the full video edit and the preview.
 
 **Claude.** Later, the Analyse step can suggest cues (e.g. a stinger at topic changes) using sound **names** only; audio never leaves the machine. Suggestions appear as unconfirmed cues the user accepts or rejects.
 
@@ -289,15 +294,24 @@ One **Studio sound** switch per project (and per speaker track) that turns raw m
 - [ ] Shorts: vertical layouts that include a screen
 
 ### Phase 6: Music and sound effects
-- [ ] Data model: `sounds`, `sound_tracks` and `sound_cues` on the project (`new_project()` + `_DEFAULTS`); import endpoint copies and converts to stereo 48 kHz WAV in `sounds/`
-- [ ] Sound library panel: add, rename, preview, delete; rights reminder on import
-- [ ] Render: map cue anchors through the EDL and word cuts; mix cues (delay, gain, fades, loop, track gain/mute) before `loudnorm` in audio export, full video edit and preview
-- [ ] Intro/outro cues pinned to output start/end with overlap and fade
-- [ ] Beds with ducking under speech (`sidechaincompress`)
-- [ ] Editor: sound tracks under the speaker tracks (default Music + SFX, add/rename/delete, mute/solo, track gain); cue blocks with waveform, drag to move or change track, trim, gain/fade/duck/loop controls; "insert sound here" from the transcript
-- [ ] User-level sound library shared across projects
-- [ ] Tests: import/convert, anchor mapping through cuts (including anchors inside a cut and partly cut beds), mix filter graph, track mute/gain
-- [ ] Later: Claude suggests cues from sound names, shown as unconfirmed
+- [x] Data model: `sound_tracks` and `sound_cues` on the project (`new_project()` + `_DEFAULTS`)
+- [x] **Global** library in the app's data folder, shared across projects (`services/library.py`); import transcodes to stereo 48 kHz FLAC and measures integrated loudness
+- [x] Library panel: add, listen, delete; rights and "stays on this computer" reminder on import
+- [x] Render: map cue anchors through the EDL and word cuts; mix cues (delay, gain, fades, loop, track gain/mute) in audio export, full video edit, vertical and preview
+- [x] Cue levels relative to the voice, using the track's measured loudness and the −16 LUFS speech target
+- [x] Intro/outro cues pinned to output start/end, fading under the first/last words
+- [x] Beds with ducking under speech, from the transcript (gain envelope × `amultiply`)
+- [x] Editor: a music lane under the speaker waveform with cue blocks, drag to move, drag a bed's edge to trim; level/duck/loop/fade controls and a track mute in the Music panel
+- [x] Editor: an **Ends** choice on a bed (end of episode / track runs out / at the playhead), and a non-looping bed drawn on the lane where it really stops
+- [x] Audio-only projects get an `.m4a` mix proxy once they have cues, so the balance can be heard
+- [x] Tests: import/convert/measure, anchor mapping through cuts (including anchors inside a cut and partly cut beds), duck envelope shape, filter graph, track mute/gain, and renders measured for real ducking depth
+- [ ] Rename a library track from the panel (the endpoint exists) (#41)
+- [ ] Drag and drop files onto the panel to import (#42)
+- [ ] Several sound tracks (add/rename/delete, solo) and moving a cue between them (#43)
+- [ ] Waveform inside a cue block (#44)
+- [ ] "Insert sound here" from the transcript (#45)
+- [ ] An intro that plays alone before the first word (pushes the speech later; needs edited time to shift for transcripts, chapters and the proxy mapping) (#46)
+- [ ] Later: Claude suggests cues from sound names, shown as unconfirmed (#48)
 
 ### Phase 7: Studio sound (voice enhancement)
 - [ ] Project and per-track settings: `studio_sound` (on/off, strength, engine `auto` | `deepfilternet` | `rnnoise`) in `new_project()` + `_DEFAULTS`; off by default
@@ -331,7 +345,15 @@ One **Studio sound** switch per project (and per speaker track) that turns raw m
 | Music and sounds: editor or studio first? | **Editor first** (Phase 6). A studio soundboard is a later phase that needs its own planning |
 | Can sounds play into the mics so guests hear them? | **No.** Sounds always stay separate from the mic recordings and are mixed in at render |
 | What are sound cues anchored to? | **The recording** (source timeline), so they move with the content when speech is cut or reordered |
-| How are sounds shown in the editor? | As **separate sound tracks** (default Music and SFX) under the speaker tracks |
+| How are sounds shown in the editor? | As a **sound lane** under the speaker waveform (one **Music** track today; more tracks and solo are a follow-up) |
+| Where does the sound library live? | **Globally**, outside `projects/` (`~/.darkroom/library`, or `DARKROOM_LIBRARY_DIR`), so a track is imported once and reused everywhere and deleting a project keeps the music. Deleting a library track leaves cues that name it in place, shown as missing |
+| Library format? | **Stereo 48 kHz FLAC** (the plan said WAV): lossless, about half the size, and playable in the editor — the library is permanent and shared, so size matters more than for a per-project copy |
+| What does a cue's level mean? | **Decibels under the voice.** Each library track's integrated loudness is measured on import and the speech is normalised to −16 LUFS, so −14 dB is the same balance under every episode |
+| Where is music mixed in? | In the **second pass** of `_encode_normalized`, after the speech is at −16 LUFS, not before `loudnorm` as first planned: cue levels are relative to the voice, so the speech level has to be known rather than measured together with the music. The limiter still runs last |
+| How is ducking done? | From the **transcript**, not `sidechaincompress`: word spans become a gain envelope (0.25 s look-ahead, 0.6 s hold, 0.12 s down, 0.5 s up) multiplied into the music with `amultiply`. The music dips before the word, by exactly the dB asked for, and never pumps on breaths or room noise |
+| Can a cue make the episode longer? | **No.** Cues are clamped to the end of the speech, so audio never outlasts the video. An intro that plays alone first would have to shift edited time for transcripts, chapters and the proxy, and is a follow-up |
+| Where does a bed stop? | **One of three**, chosen in the panel: the end of the episode (repeating), when the file runs out, or an end the user sets. All three are the existing `until` + `loop` fields read back as a mode, so there is no fourth field to keep in step. Choosing an explicit end turns looping on, or the mix would stop at the end of the file and ignore the end just chosen |
+| How do audio-only projects hear music? | They get an **`.m4a` mix proxy**, but only once they have cues; without music they keep playing the source files directly, which is instant |
 | Studio sound on by default? | **Off.** The studio offers to turn it on once, after the first take |
 | Transcribe from enhanced audio? | **No, original** for now. Revisit after comparing transcript accuracy on noisy samples |
 | Studio sound live while recording? | **No.** Processing runs only after recording; the monitor and takes stay raw |
