@@ -540,6 +540,40 @@ The Lambda adds effectively zero overhead on top of the Bedrock model cost.
 
 ## Troubleshooting
 
+**Vite fails on an older Node version**: check `node -v` in the terminal
+where you run `make dev` or `make desktop-dev`. On Node 18, Vite can fail with
+`SyntaxError: The requested module 'node:util' does not provide an export named 'styleText'`.
+The frontend needs Node 20.19+ on the 20.x line, or Node 22.12+.
+If you use nvm, run `nvm install 22` and `nvm use 22`, then run `make install`
+again from the repository root and restart.
+
+**Port 8000 or 5173 is already in use**: the backend may log `address already in use`
+for port 8000. Vite normally tries the next port if 5173 is occupied, so open the
+`Local:` URL it prints instead of assuming 5173. In strict-port mode, Vite
+stops with `Error: Port 5173 is already in use`. To identify the listeners on
+macOS or Linux, run:
+
+```sh
+lsof -nP -iTCP:8000 -sTCP:LISTEN
+lsof -nP -iTCP:5173 -sTCP:LISTEN
+```
+
+On Windows, use PowerShell:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8000,5173 -State Listen |
+  Select-Object LocalPort,OwningProcess
+```
+
+Stop a previous Darkroom development run with Ctrl+C in its own terminal.
+For another application, quit or reconfigure it only after identifying it.
+The Vite proxy expects the Darkroom backend on port 8000.
+
+**TypeScript reports TS1149 on macOS**: if the error names `Waveform.tsx`
+and `waveform.ts`, build from a checkout on a case-sensitive volume. Those
+are different frontend modules, even though their names share the same
+stem apart from case.
+
 **"FFmpeg not found"**: make sure `ffmpeg` is on your `PATH`. Run `ffmpeg -version` to test.
 
 **Whisper produces wrong language / hallucinations**: set the language explicitly in the upload form rather than using Auto-detect. English recordings should use `English`.
@@ -559,8 +593,6 @@ The Lambda adds effectively zero overhead on top of the Bedrock model cost.
 **Recording: "Microphone access was denied"**: on macOS, allow Darkroom in **System Settings → Privacy & Security → Microphone**, then click **Enable microphones** again. In the browser, recording only works on `localhost` (or HTTPS).
 
 **Recording: a mic is missing from the list**: plug it in before clicking **Enable microphones**; the list refreshes on hot-plug, but some USB interfaces only show up after the OS has finished setting them up.
-
-**macOS port 5000 conflict**: not applicable; Darkroom uses ports 8000 and 5173.
 
 ---
 
