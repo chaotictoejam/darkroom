@@ -101,6 +101,58 @@ def test_cuda_load_failure_falls_back_to_cpu(fake_models, monkeypatch):
     assert fake_models.loads == [("turbo", "cpu", "int8")]
 
 
+def test_broken_cuda_probe_reports_cpu_fallback(monkeypatch):
+    def broken_probe():
+        raise RuntimeError("driver internal detail")
+
+    monkeypatch.setattr(tr.ctranslate2, "get_cuda_device_count", broken_probe)
+    warnings = []
+    assert tr._pick_device(warnings.append) == ("cpu", "int8")
+    assert warnings == ["CUDA could not be checked"]
+    monkeypatch.setattr(tr.ctranslate2, "get_cuda_device_count", lambda: 0)
+    warnings.clear()
+    assert tr._pick_device(warnings.append) == ("cpu", "int8")
+    assert not warnings
+
+
+def test_transcription_job_reports_cuda_load_failure_in_progress(fake_models, monkeypatch):
+    fake_models.fail_cuda = True
+    monkeypatch.setattr(tr, "_pick_device", lambda warning_callback=None: ("cuda", "float16"))
+    monkeypatch.setattr(tr, "_load_window", lambda *_: np.zeros(16000, dtype=np.float32))
+
+    class FakePipeline:
+        def __init__(self, model):
+            assert model.model.device == "cpu"
+
+        def transcribe(self, *_args, **_kwargs):
+            return iter([_seg(0.0, 1.0, "Hello")]), None
+
+    class InlineThread:
+        def __init__(self, *, target, daemon):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(tr, "BatchedInferencePipeline", FakePipeline)
+    monkeypatch.setattr(jobs_api.threading, "Thread", InlineThread)
+    project = {
+        "transcribe_model": "turbo",
+        "speakers": [{"id": "speaker", "name": "Speaker", "file_path": "ignored.wav"}],
+    }
+    updates = []
+    monkeypatch.setattr(jobs_api, "get_project", lambda _: project)
+    monkeypatch.setattr(jobs_api, "_update_progress", lambda _, **update: updates.append(update))
+    jobs_api.start_transcription("test-project")
+
+    progress = [update["progress"] for update in updates]
+    cpu_messages = [item for item in progress if "transcribing on CPU" in item["message"]]
+    assert [item["percent"] for item in cpu_messages] == [10, 65]
+    assert all("CUDA model could not be loaded" in item["message"] for item in cpu_messages)
+    assert all("libcublas" not in item["message"] for item in progress)
+    assert updates[-1]["status"] == "transcribed"
+
+
 def test_preload_endpoint(monkeypatch):
     calls = []
     monkeypatch.setattr(jobs_api, "preload_model", lambda name, download=False: calls.append((name, download)))
