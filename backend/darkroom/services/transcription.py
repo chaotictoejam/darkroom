@@ -16,6 +16,7 @@ import threading
 import wave
 import zlib
 from collections import Counter
+from typing import Callable
 
 import ctranslate2
 import numpy as np
@@ -55,16 +56,21 @@ _model_cache: dict[tuple[str, str, str], WhisperModel] = {}
 _model_lock = threading.Lock()
 
 
-def _pick_device() -> tuple[str, str]:
+def _pick_device(warning_callback: Callable[[str], None] | None = None) -> tuple[str, str]:
     """(device, compute_type): float16 on an NVIDIA GPU, int8 on CPU."""
+    warning = None
     try:
         if ctranslate2.get_cuda_device_count() > 0:
             supported = ctranslate2.get_supported_compute_types("cuda")
             for compute_type in ("float16", "int8_float16", "float32"):
                 if compute_type in supported:
                     return "cuda", compute_type
+            warning = "CUDA has no supported compute type"
     except Exception:  # broken CUDA install: fall through to CPU
         logger.exception("CUDA check failed; using CPU")
+        warning = "CUDA could not be checked"
+    if warning and warning_callback:
+        warning_callback(warning)
     return "cpu", "int8"
 
 
@@ -114,15 +120,19 @@ def transcription_defaults(language: str | None = "en") -> dict:
     return {"device": device, "compute_type": compute_type, "default_model": default_model(language)}
 
 
-def get_model(model_name: str, *, download: bool = True) -> WhisperModel | None:
+def get_model(
+    model_name: str, *, download: bool = True, warning_callback: Callable[[str], None] | None = None
+) -> WhisperModel | None:
     """Return a cached WhisperModel, loading it on first use.
 
     With ``download=False`` a model that isn't on disk yet returns None instead
     of being downloaded (used for preloading, so browsing the model picker
-    never starts a multi-GB download).
+    never starts a multi-GB download). A warning callback receives a short
+    reason if an unusable CUDA device forces a CPU fallback.
     """
-    device, compute_type = _pick_device()
+    device, compute_type = _pick_device(warning_callback) if warning_callback else _pick_device()
     key = (model_name, device, compute_type)
+    warning = None
     with _model_lock:
         model = _model_cache.get(key)
         if model is not None:
@@ -140,10 +150,13 @@ def get_model(model_name: str, *, download: bool = True) -> WhisperModel | None:
             # e.g. CUDA driver present but cuBLAS/cuDNN missing
             logger.exception("Could not load %s on %s; falling back to CPU", model_name, device)
             key = (model_name, "cpu", "int8")
+            warning = "CUDA model could not be loaded"
             model = _load(model_name, "cpu", "int8")
         _model_cache.clear()
         _model_cache[key] = model
-        return model
+    if warning and warning_callback:
+        warning_callback(warning)
+    return model
 
 
 def preload_model(model_name: str, *, download: bool = False) -> None:
@@ -237,6 +250,8 @@ def _decode(
     model_name: str | None = None,
     language: str | None = None,
     progress_callback=None,
+    *,
+    warning_callback: Callable[[str], None] | None = None,
 ) -> list[dict]:
     """Decode one mono 16 kHz track into segments, timed from the array's start.
 
@@ -245,7 +260,7 @@ def _decode(
     """
     audio_duration = len(audio_np) / _SAMPLE_RATE
     model_name = model_name or default_model(language)
-    model = get_model(model_name)
+    model = get_model(model_name, warning_callback=warning_callback) if warning_callback else get_model(model_name)
     pipeline = BatchedInferencePipeline(model)
     segments_iter, _info = pipeline.transcribe(
         audio_np,
@@ -315,15 +330,19 @@ def transcribe_file(
     model_name: str | None = None,
     language: str | None = None,
     progress_callback=None,
+    *,
+    warning_callback: Callable[[str], None] | None = None,
 ) -> list[dict]:
     """Transcribe a single video/audio file using Whisper. Returns list of segment dicts.
 
     progress_callback(frac: float) is called as segments are decoded, with the
     fraction (0.0–1.0) of this speaker's audio covered so far. The caller maps
-    this onto the overall job percentage.
+    this onto the overall job percentage. warning_callback(reason: str) is
+    called if this track falls back to CPU because CUDA was unusable.
     """
     audio_np = _load_window(file_path)
-    return _decode(audio_np, speaker_id, speaker_name, model_name, language, progress_callback)
+    return _decode(audio_np, speaker_id, speaker_name, model_name, language, progress_callback,
+                   warning_callback=warning_callback)
 
 
 def transcribe_range(
@@ -530,12 +549,16 @@ def _split_sentences(words: list[dict]) -> list[list[dict]]:
     return [p for p in parts if p]
 
 
-def transcribe_all(speakers: list[dict], model_name: str | None = None, progress_callback=None, language: str | None = None) -> dict[str, list]:
+def transcribe_all(
+    speakers: list[dict], model_name: str | None = None, progress_callback=None, language: str | None = None, *,
+    warning_callback: Callable[[str], None] | None = None,
+) -> dict[str, list]:
     """Transcribe all speaker files. Returns {speaker_id: [segments]}.
 
     progress_callback(overall_frac: float, name: str, index: int, total: int)
     is called at the start of each speaker and then every ~1.5 s during
-    transcription, with overall_frac in [0, 1).
+    transcription, with overall_frac in [0, 1). warning_callback(reason: str)
+    receives any CUDA fallback applied while loading a track's model.
     """
     transcripts = {}
     total = len(speakers)
@@ -558,6 +581,7 @@ def transcribe_all(speakers: list[dict], model_name: str | None = None, progress
             model_name,
             language=language,
             progress_callback=_inner,
+            warning_callback=warning_callback,
         )
         transcripts[speaker["id"]] = segments
 

@@ -164,16 +164,31 @@ def start_transcription(project_id: str):
             p = get_project(project_id)
             language = p.get("transcribe_language") or None
             model_name = p.get("transcribe_model") or default_model(language)
-            total = len(p["speakers"])
+            percent = 5
+            progress_message = "Loading Whisper model…"
+            warning = None
 
-            def _progress(overall_frac: float, name: str, i: int, total: int) -> None:
-                pct = int(10 + overall_frac * 55)  # 10 % → 65 %
+            def _publish_progress() -> None:
+                message = f"{warning}; transcribing on CPU. {progress_message}" if warning else progress_message
                 _update_progress(
                     project_id,
-                    progress={"step": "transcribing", "percent": pct, "message": f"Transcribing {name} ({i + 1}/{total})…"},
+                    progress={"step": "transcribing", "percent": percent, "message": message},
                 )
 
-            transcripts = transcribe_all(p["speakers"], model_name, _progress, language=language)
+            def _progress(overall_frac: float, name: str, i: int, total: int) -> None:
+                nonlocal percent, progress_message
+                percent = int(10 + overall_frac * 55)  # 10 % → 65 %
+                progress_message = f"Transcribing {name} ({i + 1}/{total})…"
+                _publish_progress()
+
+            def _warning(reason: str) -> None:
+                nonlocal warning
+                if warning != reason:
+                    warning = reason
+                    _publish_progress()
+
+            transcripts = transcribe_all(p["speakers"], model_name, _progress, language=language,
+                                         warning_callback=_warning)
 
             _update_progress(
                 project_id,

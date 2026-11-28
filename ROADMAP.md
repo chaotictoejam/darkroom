@@ -52,6 +52,12 @@ A later fix: the repetitiveness check that drops hallucinated loops ran on a who
 - Benchmark in `backend/bench/` (results in `bench/results/`); GPU runs via `infra/bench/run-gpu-benchmark.sh`
 - Transcription settings in `backend/darkroom/services/transcription.py`; results and decisions in [docs/fast-transcription.md](docs/fast-transcription.md)
 
+### Clear CPU fallback during local transcription
+
+When CUDA cannot be checked or cannot load the model, Processing explains why
+the job is running on CPU instead. Detailed driver errors stay in the local
+backend log. A machine with no CUDA device still uses CPU normally.
+
 ### Publishing to DarkRelay, Phase 1: bundle export
 
 The editor's **Publish to DarkRelay** panel exports an episode bundle for [DarkRelay](https://github.com/chaotictoejam/darkrelay), self-hosted podcast hosting in the user's own AWS account: the MP3, VTT/SRT/JSON transcripts and chapters re-timed to the edit, cover art, the full-edit video for video projects, and `episode.json`. The bundle is written locally; the DarkRelay CLI publishes it. Re-exporting keeps the episode's GUID, so DarkRelay updates the same episode.
